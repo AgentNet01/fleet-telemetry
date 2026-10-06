@@ -20,10 +20,14 @@ cd "$(dirname "$0")/../.."
 REPO="$PWD"
 RX="${TMPDIR:-/tmp}/muse-vm-receiver"
 
-feed() {   # write the fake activity feed (newest first)
+feed() {   # write the fake activity feed (newest first). Like the real one, an
+           # item keeps its message_id from start to finish while its timestamp
+           # moves to the finish time; `work` starts a new item, `idle` ends it.
+  [ "$1" = pending ] && docker exec muse-vm sh -c 'echo "activity_thread:$(cat /proc/sys/kernel/random/uuid)" > /home/hatch/feed.id'
   docker exec -i muse-vm sh -c 'cat > /home/hatch/feed.json' <<EOF
 [{"timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)", "activity_type": "goal", "status": "$1",
-  "title": "$2", "status_title": "$2", "subtitle": "simulated by test/muse-vm/run.sh"}]
+  "title": "$2", "status_title": "$2", "subtitle": "simulated by test/muse-vm/run.sh",
+  "task_label": null, "message_id": "$(docker exec muse-vm cat /home/hatch/feed.id 2>/dev/null)"}]
 EOF
 }
 

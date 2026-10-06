@@ -145,15 +145,17 @@ def history_point(now, payload):
 def merge_feed(rec, entries):
     """Keep every activity-feed item ever seen. Agents send only their latest
     few each heartbeat; an item that changes later (pending -> success) is
-    updated in place, keyed by when it started, its type and its title."""
+    updated in place. Keyed by message_id, which stays put when the item
+    finishes; its timestamp doesn't (it is finish-or-created time). Daemons
+    before v9 don't send message_id, so those fall back to time|type|title."""
     if not isinstance(entries, list):
         return
     feed = rec.setdefault("feed", {})
     for e in entries:
         if isinstance(e, dict) and e.get("timestamp"):
-            key = "%s|%s|%s" % (e.get("timestamp"), e.get("activity_type"), e.get("title"))
-            feed[key] = {k: e.get(k) for k in ("timestamp", "activity_type", "status",
-                                               "title", "status_title", "subtitle")}
+            key = e.get("message_id") or "%s|%s|%s" % (e.get("timestamp"), e.get("activity_type"), e.get("title"))
+            feed[key] = {k: e.get(k) for k in ("timestamp", "activity_type", "status", "title",
+                                               "status_title", "subtitle", "task_label", "message_id")}
     if len(feed) > MAX_FEED:
         for k in sorted(feed, key=lambda k: feed[k]["timestamp"])[:-MAX_FEED]:
             del feed[k]

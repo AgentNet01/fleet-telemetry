@@ -399,7 +399,8 @@ def activity():
                 current = e.get("status_title") or e.get("title")
                 break
         slim = [{k: e.get(k) for k in ("timestamp", "activity_type", "status",
-                                      "title", "status_title", "subtitle")}
+                                      "title", "status_title", "subtitle",
+                                      "task_label", "message_id")}
                 for e in entries]
         return {"current": current, "entries": slim}
     except Exception as e:
@@ -483,7 +484,7 @@ def build_payload(token_note_replaced=False):
     now = time.time()
     return {
         "agent": AGENT,
-        "daemon": 8,              # payload version; dashboard flags older ones
+        "daemon": 9,              # payload version; dashboard flags older ones
         "ts": now,
         "boot_id": bid,
         "vm_replaced": vm_replaced,
