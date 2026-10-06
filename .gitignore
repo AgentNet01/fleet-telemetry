@@ -7,3 +7,6 @@ fleet_telemetry.json
 # python bytecode
 __pycache__/
 *.pyc
+
+# files opened from the dashboard (cleared on receiver start)
+file_cache/

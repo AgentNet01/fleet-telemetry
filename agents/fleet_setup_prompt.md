@@ -7,7 +7,7 @@
 
 You are one of Jack Wilber's fleet of personal AI agents (Boboe 1-6). Jack is
 building a telemetry dashboard on his Mac that shows every agent's live status
-(CPU/RAM/disk, current task, files, cron health). Your job: install a small
+(CPU/RAM/disk, current task, files, cron health, OS and network). Your job: install a small
 telemetry daemon on your VM that pushes a JSON payload to his receiver every
 30 seconds over his Tailscale network. The daemon also supports "live tail":
 when Jack clicks the Live tail button on your dashboard card, the receiver asks
@@ -57,7 +57,9 @@ Config lives in ~/workspace/telemetry/:
 
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import time
 import urllib.request
@@ -204,6 +206,141 @@ def boot_id():
         return None
 
 
+# ---- machine info (read-only) ----
+_prev_net = None          # (rx_bytes, tx_bytes, wall) at the previous sample
+_ts_ip = (0.0, None)      # (checked_at, tailscale ipv4) -- refreshed every 5 min
+
+
+def first_match(path, pattern):
+    try:
+        with open(path) as f:
+            m = re.search(pattern, f.read(), re.M)
+        return m.group(1).strip().strip('"') if m else None
+    except OSError:
+        return None
+
+
+def read_cgroup_mb(name):
+    try:
+        with open("/sys/fs/cgroup/" + name) as f:
+            v = f.read().strip()
+        return None if v == "max" else round(int(v) / 1048576)
+    except (OSError, ValueError):
+        return None
+
+
+def net_bytes():
+    """Total (rx, tx) bytes over every interface except loopback."""
+    rx = tx = 0
+    with open("/proc/net/dev") as f:
+        for line in f.readlines()[2:]:
+            name, data = line.split(":", 1)
+            if name.strip() != "lo":
+                cols = data.split()
+                rx, tx = rx + int(cols[0]), tx + int(cols[8])
+    return rx, tx
+
+
+def system(now):
+    """What this computer is. Memory figures from /proc/meminfo are the SHARED
+    HOST's (every agent container on it draws from the same pool); limit_mb is
+    this container's own cap, if one is set."""
+    global _prev_net, _ts_ip
+    u = os.uname()
+    info = {"hostname": u.nodename, "kernel": u.release, "cores": os.cpu_count(),
+            "os": first_match("/etc/os-release", r"^PRETTY_NAME=(.*)$"),
+            "cpu_model": first_match("/proc/cpuinfo", r"^model name\s*:\s*(.*)$"),
+            "host_mem_total_mb": None, "host_mem_available_mb": None,
+            "limit_mb": read_cgroup_mb("memory.max"),
+            "net_rx_bps": None, "net_tx_bps": None, "tailscale_ip": _ts_ip[1]}
+    total = first_match("/proc/meminfo", r"^MemTotal:\s*(\d+)")
+    avail = first_match("/proc/meminfo", r"^MemAvailable:\s*(\d+)")
+    if total:
+        info["host_mem_total_mb"] = round(int(total) / 1024)
+    if avail:
+        info["host_mem_available_mb"] = round(int(avail) / 1024)
+    try:
+        rx, tx = net_bytes()
+        if _prev_net and now > _prev_net[2]:
+            dt = now - _prev_net[2]
+            info["net_rx_bps"] = round(max(0, rx - _prev_net[0]) / dt)
+            info["net_tx_bps"] = round(max(0, tx - _prev_net[1]) / dt)
+        _prev_net = (rx, tx, now)
+    except (OSError, ValueError, IndexError):
+        pass
+    if now - _ts_ip[0] > 300:
+        ip = None
+        try:
+            out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True,
+                                 text=True, timeout=3).stdout.split()
+            ip = out[0] if out else None
+        except Exception:
+            pass
+        _ts_ip = (now, ip)
+        info["tailscale_ip"] = ip
+    return info
+
+
+# ---- file viewing: Jack clicks a file, the receiver asks for it here ----
+FETCH_MAX = 10 * 1024 * 1024
+SECRETISH = re.compile(r"token|secret|credential|passw|private|\.env$|\.pem$|"
+                       r"\.key$|\.p12$|id_rsa|id_ed25519", re.I)
+
+
+def resolve_fetch(rel):
+    """Map a requested workspace-relative path to a real file, or raise
+    ValueError(reason). Pure apart from the filesystem, unit-testable.
+
+    Only regular files under ~/workspace, at most 10 MB, never hidden files or
+    secret-looking names -- checked on the path *after* symlinks resolve, so a
+    link can't smuggle out something the rules would refuse."""
+    root = os.path.realpath(os.path.join(HOME, "workspace"))
+    if not isinstance(rel, str) or not rel or rel.startswith("/") or "\x00" in rel:
+        raise ValueError("not a workspace path")
+    full = os.path.realpath(os.path.join(root, rel))
+    if not full.startswith(root + os.sep):
+        raise ValueError("outside the workspace")
+    parts = os.path.relpath(full, root).split(os.sep)
+    if any(p.startswith(".") for p in parts):
+        raise ValueError("hidden files aren't shared")
+    if SECRETISH.search(parts[-1]):
+        raise ValueError("the name looks like a secret, so it isn't shared")
+    if not os.path.isfile(full):
+        raise ValueError("the file no longer exists")
+    if os.path.getsize(full) > FETCH_MAX:
+        raise ValueError("it's larger than 10 MB")
+    return full
+
+
+def send_fetches(op, token, reqs):
+    """Upload each requested file (or the reason it was refused)."""
+    if not isinstance(reqs, list):
+        return
+    for r in reqs[:3]:
+        if not isinstance(r, dict):
+            continue
+        body, err = b"", ""
+        try:
+            with open(resolve_fetch(r.get("path")), "rb") as f:
+                body = f.read(FETCH_MAX + 1)[:FETCH_MAX]
+        except ValueError as e:
+            err = str(e)
+        except OSError:
+            err = "the file couldn't be read"
+        headers = {"X-Agent-Token": token, "X-Agent": AGENT,
+                   "X-Fetch-Id": str(r.get("id", ""))[:64],
+                   "Content-Type": "application/octet-stream"}
+        if err:
+            headers["X-Fetch-Error"] = err
+        req = urllib.request.Request(RECEIVER_URL.rsplit("/ingest", 1)[0] + "/upload",
+                                     data=body, headers=headers, method="POST")
+        try:
+            op.open(req, timeout=60).read()
+            log("file request %s: %s" % (r.get("path"), err or "%d bytes sent" % len(body)))
+        except Exception as e:
+            log("file upload failed: %s" % e)
+
+
 def walk_workspace():
     """[(relpath, size_bytes, mtime)] for every file under ~/workspace."""
     root = os.path.join(HOME, "workspace")
@@ -342,7 +479,7 @@ def build_payload(token_note_replaced=False):
     now = time.time()
     return {
         "agent": AGENT,
-        "daemon": 2,              # payload version; dashboard flags older ones
+        "daemon": 3,              # payload version; dashboard flags older ones
         "ts": now,
         "boot_id": bid,
         "vm_replaced": vm_replaced,
@@ -356,6 +493,7 @@ def build_payload(token_note_replaced=False):
         # heuristic working detection (local evidence)
         "observed": observed(walked, mem["all"], now, os.getpid()),
         "crons": crons(),
+        "system": system(now),    # OS, CPU, shared-host memory, network, IP
     }
 
 
@@ -480,6 +618,7 @@ def main():
                 ok, cmd = post(op, token, payload)
                 if ok:
                     handle_cmd(cmd, time.time())
+                    send_fetches(op, token, cmd.get("fetch") if isinstance(cmd, dict) else None)
                     flush_spool(op, token)
                 else:
                     spool(payload)
@@ -653,4 +792,8 @@ reports it as your "current task". Keep it truthful:
 - Never print, log, or paste the token anywhere except the two places it
   belongs (the install command and the `.token` file, which is chmod 600).
 - The daemon is push-only and reports stats, filenames, and task labels --
-  never file contents, credentials, or message bodies. Keep it that way.
+  never credentials or message bodies. The one exception is file viewing:
+  when Jack clicks a file on his dashboard, the daemon sends that single file.
+  It only sends regular files under ~/workspace, at most 10 MB, and refuses
+  hidden files and secret-looking names (token, secret, credential, .env,
+  .pem, .key ...). Keep secrets out of ~/workspace or behind those names.

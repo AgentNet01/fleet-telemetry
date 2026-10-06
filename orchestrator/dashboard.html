@@ -274,6 +274,32 @@ a.fx-row:hover{background:var(--raised-2);color:var(--ink)}
 .fx .r{text-align:right}
 .fx-meta{font-size:12px;color:var(--ink-3)}
 .fx-row.flash{background:var(--live-bg)}
+button.fx-row{width:100%;margin:0;font:inherit;text-align:left;background:none;border:0;border-top:1px solid var(--line);cursor:pointer}
+button.fx-row:hover,.fx-row.is-open{background:var(--raised-2);color:var(--ink)}
+.viewer{margin-bottom:12px;padding:0;overflow:hidden}
+.vw-head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.vw-head .ic{color:var(--ink-3)}
+.vw-title{display:flex;flex-direction:column;min-width:0;margin-right:auto}
+.vw-title b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vw-msg{padding:16px;color:var(--ink-3)}
+.vw-msg.err{color:var(--down)}
+.viewer>.btn{margin:0 16px 16px}
+.vw-img{display:grid;place-items:center;padding:16px;background:var(--fill-0)}
+.vw-img img{max-width:100%;max-height:60vh;border-radius:6px;box-shadow:0 0 0 1px var(--line)}
+.vw-text{margin:0;padding:16px;max-height:60vh;overflow:auto;font:12px/1.6 var(--mono);color:var(--ink-2);white-space:pre-wrap;overflow-wrap:anywhere;tab-size:4}
+.mc{margin:0}
+.mc-row{display:grid;grid-template-columns:180px minmax(0,1fr);gap:16px;padding:10px 0;border-top:1px solid var(--line)}
+.mc-row:first-child{border-top:0;padding-top:0}
+.mc-row:last-child{padding-bottom:0}
+.mc dt{color:var(--ink-3)}
+.mc dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
+.mc-sub{margin-left:8px;color:var(--ink-3);font-size:12px}
+.mc-gap{display:inline-block;width:16px}
+.mc-mem dd{display:flex;flex-direction:column;gap:8px}
+.mc-mem .bar{max-width:420px}
+.mc-mem b{font-weight:600}
+.tip{display:flex;align-items:flex-start;gap:8px;max-width:560px;padding:8px 10px;border-radius:8px;background:var(--live-bg);color:var(--ink-2);font-size:12px}
+.tip .ic{width:14px;height:14px;margin-top:1px;color:var(--live)}
 .fx-foot{margin-top:12px;font-size:12px;color:var(--ink-3)}
 
 .state{max-width:520px;margin:96px auto;text-align:center}
@@ -302,6 +328,7 @@ a.fx-row:hover{background:var(--raised-2);color:var(--ink)}
   .fx-size .bar{display:none}
   .fx-bar .search{width:100%;margin-left:0}
   .pt .c-pid,.pt .c-trend{display:none}
+  .mc-row{grid-template-columns:minmax(0,1fr);gap:4px}
   .run{grid-template-columns:auto 1fr auto}
   .run-what{grid-column:1/-1}
 }
@@ -360,7 +387,7 @@ const I = {
 const S = {
   fleet: {}, order: [], detail: null, ok: null, lastOk: 0, skew: 0,
   q: "", fq: "", procSort: "mem", fileSort: { key: "name", dir: 1 },
-  tailBusy: false, tailErr: null, flash: null, route: parseRoute(), key: "",
+  tailBusy: false, tailErr: null, flash: null, viewer: null, route: parseRoute(), key: "",
 };
 const $ = s => document.querySelector(s);
 const nowS = () => Date.now() / 1000 + S.skew;   // receiver clock
@@ -677,7 +704,29 @@ function overviewTab(a) {
         <div class="panel list">${recentFiles(a)}</div></section>
       <section class="sec"><div class="sec-head"><h2>Recent activity</h2><a class="lnk" href="${hrefM(a.name, "activity")}">All activity</a></div>
         <div class="panel list">${act.length ? actList(act.slice(0, 5)) : html`<p class="empty">${actEmpty(p)}</p>`}</div></section>
-    </div>`;
+    </div>
+    <section class="sec"><div class="sec-head"><h2>Machine</h2></div>${machinePanel(a)}</section>`;
+}
+const fmtRate = b => b == null ? "—" : b >= 1048576 ? (b / 1048576).toFixed(1) + " MB/s" : b >= 1024 ? Math.round(b / 1024) + " KB/s" : Math.round(b) + " B/s";
+function machinePanel(a) {
+  const p = a.latest || {}, sys = p.system;
+  if (!sys) return html`<div class="panel"><p class="empty">Computer details (OS, CPU, memory, network) arrive with telemetry daemon v3 on this machine.</p></div>`;
+  const total = sys.host_mem_total_mb, availMb = sys.host_mem_available_mb, used = total != null && availMb != null ? total - availMb : null;
+  const mine = lastVal((a.history || []).map(h => [h.ts, h.mem]));
+  const row = (k, v) => html`<div class="mc-row"><dt>${k}</dt><dd>${v}</dd></div>`;
+  return html`<div class="panel"><dl class="mc">
+    ${row("Operating system", html`${sys.os || "—"}<span class="mc-sub">kernel ${sys.kernel || "—"}</span>`)}
+    ${row("Processor", html`${sys.cpu_model || "—"}<span class="mc-sub">${plural(sys.cores || 0, "core")}</span>`)}
+    <div class="mc-row mc-mem"><dt>Host memory</dt><dd>
+      ${total ? html`<div class="bar"><i style="width:${(used / total * 100).toFixed(1)}%"></i></div>
+        <span><b>${fmtMB(availMb)} free</b> of ${fmtMB(total)} · ${fmtMB(used)} in use</span>` : "—"}
+      <p class="tip"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 7.25v4M8 5v.01"/></svg>
+        Shared host. Every agent on this computer draws from this same memory, so it isn’t ${a.name}’s alone.</p></dd></div>
+    ${row(`${a.name}’s memory`, html`${fmtMB(mine)}<span class="mc-sub">${sys.limit_mb ? `of its ${fmtMB(sys.limit_mb)} limit` : "used by its own processes · no separate limit"}</span>`)}
+    ${row("Network", html`↓ ${fmtRate(sys.net_rx_bps)} <span class="mc-gap"></span> ↑ ${fmtRate(sys.net_tx_bps)}`)}
+    ${row("Tailscale IP", sys.tailscale_ip || "—")}
+    ${row("Hostname", sys.hostname || "—")}
+  </dl></div>`;
 }
 function diskPanel(d) {
   const pct = d.total_gb ? d.used_gb / d.total_gb * 100 : null;
@@ -775,9 +824,11 @@ function filesTab(a, r) {
   const bar = html`<div class="fx-bar">${crumbs}<label class="search">
       <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25"/><path d="m10.25 10.25 3 3"/></svg>
       <input id="fq" type="search" placeholder="Search all files" aria-label="Search all files on this machine" value="${S.fq}" autocomplete="off" spellcheck="false"></label></div>`;
+  const canView = (p.daemon || 0) >= 3;
+  const viewer = S.viewer && S.viewer.name === a.name ? viewerPanel(a) : "";
   const truncated = files.count > entries.length;
-  const foot = html`<p class="fx-foot">${plural(files.count || 0, "file")} · ${files.mb ?? 0} MB in ~/workspace${truncated ? ` · showing the ${entries.length} largest` : ""}${entries.length && entries[0].length < 3 ? " · modified times arrive with the updated daemon" : ""}</p>`;
-  if (!entries.length) return html`${bar}<div class="fx"><p class="empty">No files in ~/workspace yet.</p></div>`;
+  const foot = html`<p class="fx-foot">${plural(files.count || 0, "file")} · ${files.mb ?? 0} MB in ~/workspace${truncated ? ` · showing the ${entries.length} largest` : ""}${entries.length && entries[0].length < 3 ? " · modified times arrive with the updated daemon" : ""}${canView ? " · click a file to open it" : " · opening files needs telemetry daemon v3 on this machine"}</p>`;
+  if (!entries.length) return html`${bar}${viewer}<div class="fx"><p class="empty">No files in ~/workspace yet.</p></div>`;
 
   const sk = S.fileSort, sorter = (x, y) => sk.key === "size" ? (x.kb - y.kb) * sk.dir || natural(x.name, y.name)
     : sk.key === "mod" ? (x.mt - y.mt) * sk.dir || natural(x.name, y.name) : natural(x.name, y.name) * sk.dir;
@@ -789,20 +840,69 @@ function filesTab(a, r) {
     const hits = entries.filter(e => String(e[0]).toLowerCase().includes(q)).slice(0, 200)
       .map(e => ({ name: base(e[0]), path: e[0], kb: e[1], mt: e[2] || 0 })).sort(sorter);
     const max = Math.max(1, ...hits.map(h => h.kb));
-    return html`${bar}<div class="fx" role="list">${headRow}${hits.length ? hits.map(h => html`<a class="fx-row" role="listitem" href="${hrefM(a.name, "files", h.path.split("/").slice(0, -1))}" data-flash="${h.name}">
+    return html`${bar}${viewer}<div class="fx" role="list">${headRow}${hits.length ? hits.map(h => html`<a class="fx-row" role="listitem" href="${hrefM(a.name, "files", h.path.split("/").slice(0, -1))}" data-flash="${h.name}">
         <span class="fx-name">${I.file}<span><span>${h.name}</span><span class="fx-path">${h.path}</span></span></span>${sizeCell(h.kb, max)}<span class="r fx-meta">Open folder</span><span class="r fx-meta">${h.mt ? agoEl(h.mt) : "—"}</span></a>`)
       : html`<p class="empty">No file paths contain “${S.fq}”.</p>`}</div>${foot}`;
   }
-  if (!node) return html`${bar}<div class="fx"><p class="empty">This folder isn’t in the latest heartbeat. <a class="lnk" href="${hrefM(a.name, "files")}">Back to workspace</a></p></div>`;
+  if (!node) return html`${bar}${viewer}<div class="fx"><p class="empty">This folder isn’t in the latest heartbeat. <a class="lnk" href="${hrefM(a.name, "files")}">Back to workspace</a></p></div>`;
   const dirs = [...node.dirs.values()].map(d => ({ ...d, kind: "dir" })).sort(sorter);
   const fls = node.files.map(f => ({ ...f, kind: "file" })).sort(sorter);
   const max = Math.max(1, ...dirs.map(d => d.kb), ...fls.map(f => f.kb));
-  return html`${bar}<div class="fx" role="list">${headRow}
+  return html`${bar}${viewer}<div class="fx" role="list">${headRow}
     ${r.path.length ? html`<a class="fx-row" role="listitem" href="${hrefM(a.name, "files", r.path.slice(0, -1))}"><span class="fx-name">${I.up}<span>Up to ${r.path.length > 1 ? r.path[r.path.length - 2] : "workspace"}</span></span><span></span><span></span><span></span></a>` : ""}
     ${dirs.map(d => html`<a class="fx-row fx-dir" role="listitem" href="${hrefM(a.name, "files", [...r.path, d.name])}"><span class="fx-name">${I.folder}<span>${d.name}</span></span>${sizeCell(d.kb, max)}<span class="r fx-meta">${plural(d.n, "file")}</span><span class="r fx-meta">${d.mt ? agoEl(d.mt) : "—"}</span></a>`)}
-    ${fls.map(f => html`<div class="fx-row${S.flash === f.name ? " flash" : ""}" role="listitem"><span class="fx-name">${I.file}<span title="${f.path}">${f.name}</span></span>${sizeCell(f.kb, max)}<span class="r fx-meta">${(f.name.includes(".") ? f.name.split(".").pop() : "file").toUpperCase()}</span><span class="r fx-meta">${f.mt ? agoEl(f.mt) : "—"}</span></div>`)}
+    ${fls.map(f => {
+      const cells = html`<span class="fx-name">${I.file}<span>${f.name}</span></span>${sizeCell(f.kb, max)}<span class="r fx-meta">${(f.name.includes(".") ? f.name.split(".").pop() : "file").toUpperCase()}</span><span class="r fx-meta">${f.mt ? agoEl(f.mt) : "—"}</span>`;
+      const cls = `fx-row${S.flash === f.name ? " flash" : ""}${S.viewer && S.viewer.path === f.path ? " is-open" : ""}`;
+      return canView ? html`<button class="${cls} fx-file" role="listitem" data-view="${f.path}" title="Open ${f.name}">${cells}</button>`
+                     : html`<div class="${cls}" role="listitem" title="Opening files needs telemetry daemon v3 on this machine">${cells}</div>`;
+    })}
     ${!dirs.length && !fls.length ? html`<p class="empty">This folder is empty.</p>` : ""}
   </div>${foot}`;
+}
+// ---------- file viewer: the machine sends one file on Jack's click ----------
+const IMG = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i;
+const TEXT = /\.(txt|md|markdown|json|jsonl|csv|tsv|log|py|js|mjs|ts|tsx|jsx|sh|bash|zsh|ya?ml|toml|ini|cfg|conf|html?|css|xml|sql|rs|go|rb|java|c|h|cpp|swift|kt|env\.example)$/i;
+const TEXT_MAX = 200000;
+function viewerPanel(a) {
+  const v = S.viewer, name = base(v.path), url = v.id ? "/api/file/" + encodeURIComponent(v.id) : null;
+  let body;
+  if (v.status === "error") body = html`<p class="vw-msg err">${a.name} didn’t send it: ${v.error}. Nothing on the machine changed.</p>
+      <button class="btn" data-view="${v.path}">Try again</button>`;
+  else if (v.status !== "done") body = html`<p class="vw-msg">Asking ${a.name} for this file… it arrives with the machine’s next heartbeat, usually within 30 seconds${isLive(a) ? " (live tail is on, so a few seconds)" : ""}. Requested ${agoEl(v.started)}.</p>`;
+  else if (IMG.test(name)) body = html`<div class="vw-img"><img src="${url}" alt="${name}"></div>`;
+  else if (v.text != null) body = html`<pre class="vw-text">${v.text}</pre>${v.truncated ? html`<p class="vw-msg">Showing the first ${fmtKB(TEXT_MAX / 1024)}. Download it to see the rest.</p>` : ""}`;
+  else body = html`<p class="vw-msg">No preview for this kind of file. Download it to open it on your Mac.</p>`;
+  return html`<section class="panel viewer" aria-label="File preview">
+    <div class="vw-head">${I.file}<div class="vw-title"><b>${name}</b><span class="fx-path">${v.path}${v.size != null ? ` · ${fmtKB(v.size / 1024)}` : ""}</span></div>
+      ${v.status === "done" ? html`<a class="btn" href="${url}?download=1" download="${name}">Download</a>` : ""}
+      <button class="btn" data-act="close-view">Close</button></div>
+    ${body}</section>`;
+}
+async function openFile(path) {
+  const name = S.route.name, v = { name, path, status: "requesting", started: nowS() };
+  S.viewer = v; render();
+  try {
+    const r = await fetch("/api/fetch", { method: "POST", headers: { "Content-Type": "application/json", "X-Token": TOKEN }, body: JSON.stringify({ agent: name, path }) });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    v.id = (await r.json()).id; v.status = "pending";
+  } catch (e) { v.status = "error"; v.error = "the receiver couldn’t send the request"; }
+  render();
+  if (v.id) pollFile(v);
+}
+async function pollFile(v) {
+  if (S.viewer !== v) return;
+  try {
+    const j = await getJSON("/api/fetch/" + encodeURIComponent(v.id));
+    if (j.status === "done") {
+      v.size = j.size;
+      if (TEXT.test(base(v.path))) { const t = await (await fetch("/api/file/" + encodeURIComponent(v.id))).text(); v.text = t.slice(0, TEXT_MAX); v.truncated = t.length > TEXT_MAX; }
+      v.status = "done"; render(); return;
+    }
+    if (j.status === "error") { v.status = "error"; v.error = j.error; render(); return; }
+  } catch (e) {}
+  if (nowS() - v.started > 120) { v.status = "error"; v.error = "no answer after 2 minutes, so the machine may be offline"; render(); return; }
+  setTimeout(() => pollFile(v), 1000);
 }
 const sizeCell = (kb, max) => html`<span class="fx-size"><span class="bar"><i style="width:${(kb / max * 100).toFixed(1)}%"></i></span><span class="r">${fmtKB(kb)}</span></span>`;
 
@@ -818,7 +918,7 @@ function cronsTab(a) {
 
 // ---------- render loop ----------
 function renderKey() {
-  return JSON.stringify([S.route, S.q, S.fq, S.procSort, S.fileSort, S.tailBusy, S.tailErr, S.ok === null, S.ok || S.order.length > 0, S.flash,
+  return JSON.stringify([S.route, S.q, S.fq, S.procSort, S.fileSort, S.tailBusy, S.tailErr, S.viewer && [S.viewer.path, S.viewer.status], S.ok === null, S.ok || S.order.length > 0, S.flash,
     S.order.map(n => { const a = S.fleet[n]; return [n, a.last_seen, a.burst_until, detect(a).state, isLive(a)]; }),
     S.detail && [S.detail.name, S.detail.missing, S.detail.last_seen, S.detail.burst_until]]);
 }
@@ -888,6 +988,7 @@ window.addEventListener("hashchange", () => {
   const prev = S.route; S.route = parseRoute();
   if (prev.name !== S.route.name) S.tailErr = null;
   if (prev.name !== S.route.name || S.route.tab !== "files") S.fq = "";
+  if (prev.name !== S.route.name || S.route.tab !== "files" || String(prev.path) !== String(S.route.path)) S.viewer = null;
   if (prev.view !== S.route.view || prev.name !== S.route.name || prev.tab !== S.route.tab || String(prev.path) !== String(S.route.path)) window.scrollTo(0, 0);
   render(true);
   if (S.route.view === "detail" && (!S.detail || S.detail.name !== S.route.name)) poll();
@@ -906,9 +1007,11 @@ syncThemeButton();
 document.addEventListener("click", e => {
   const fl = e.target.closest("[data-flash]");
   if (fl) { S.flash = fl.dataset.flash; S.fq = ""; setTimeout(() => { S.flash = null; render(); }, 2400); }
-  const b = e.target.closest("[data-act],[data-sort],[data-fsort]");
+  const b = e.target.closest("[data-act],[data-sort],[data-fsort],[data-view]");
   if (!b) return;
   const act = b.dataset.act;
+  if (b.dataset.view) { openFile(b.dataset.view); window.scrollTo({ top: 0 }); return; }
+  if (act === "close-view") { S.viewer = null; render(); return; }
   if (act === "tail-on") tail(true);
   else if (act === "tail-off") tail(false);
   else if (act === "clear-q") { S.q = ""; $("#q").value = ""; render(); }
@@ -924,6 +1027,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "/" && !inInput) { e.preventDefault(); $("#q").focus(); return; }
   if (e.key === "Escape") {
     if (inInput) { e.target.value = ""; e.target.dispatchEvent(new Event("input", { bubbles: true })); e.target.blur(); }
+    else if (S.viewer) { S.viewer = null; render(); }
     else if (S.route.view === "detail") location.hash = "#/";
   }
 });

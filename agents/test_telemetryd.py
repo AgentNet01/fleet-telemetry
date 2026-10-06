@@ -37,6 +37,33 @@ assert o["signals"] == ["2 files changed in last 5m", "node at 37% cpu"], o
 f = t.files([("a", 2048, 5.5), ("b", 4096, 6.0)])
 assert f["entries"] == [["b", 4.0, 6], ["a", 2.0, 5]] and f["count"] == 2, f
 
+# file viewing: only plain workspace files reach Jack -- never secrets, hidden
+# files, symlink escapes or anything outside ~/workspace
+import tempfile
+with tempfile.TemporaryDirectory() as home:
+    ws = os.path.join(home, "workspace")
+    os.makedirs(os.path.join(ws, "notes"))
+    os.makedirs(os.path.join(ws, "telemetry"))
+    for rel, data in [("notes/plan.md", b"hi"), ("telemetry/.token", b"s3cret"),
+                      ("api_token.txt", b"x"), ("big.bin", b"0" * (t.FETCH_MAX + 1))]:
+        with open(os.path.join(ws, rel), "wb") as f:
+            f.write(data)
+    with open(os.path.join(home, "outside.txt"), "w") as f:
+        f.write("nope")
+    os.symlink(os.path.join(home, "outside.txt"), os.path.join(ws, "escape.txt"))
+    os.symlink(os.path.join(ws, "telemetry", ".token"), os.path.join(ws, "innocent.txt"))
+    t.HOME = home
+    assert t.resolve_fetch("notes/plan.md").endswith("notes/plan.md")
+    refused = {}
+    for rel in ["telemetry/.token", "api_token.txt", "big.bin", "../outside.txt",
+                "/etc/passwd", "escape.txt", "innocent.txt", "notes/gone.md", None]:
+        try:
+            t.resolve_fetch(rel)
+        except ValueError as e:
+            refused[rel] = str(e)
+    assert len(refused) == 9, refused
+    assert refused["innocent.txt"] == "hidden files aren't shared", refused
+
 # burst caps still hold against hostile input
 assert t.handle_cmd({"burst": True, "interval": 0, "until": 1e12}, 100.0) == (2, 400.0)
 print("ok")

@@ -127,6 +127,14 @@ pulsing "live" badge and countdown while a tail is active.
 ## Security notes
 
 - `token.txt` (orchestrator) and agent `~/.token` files are never committed.
-- The dashboard is read-only: no remote controls, no command channel back to
-  agents except the burst-frequency hint described above.
+- The dashboard has no remote controls. Its only requests back to agents
+  ride the heartbeat reply: the live-tail hint, and file viewing — clicking a
+  file asks that agent to upload that one file (regular files under
+  ~/workspace only, ≤10 MB, never hidden or secret-named files; enforced in
+  the daemon). Files are cached in `orchestrator/file_cache/` (gitignored,
+  cleared on restart) and served sandboxed so an agent's HTML/SVG can't run
+  script in the dashboard.
+- Daemon v3 adds a `system` block: OS, CPU, network rate, Tailscale IP and
+  the **shared host's** memory (every agent container on a host sees the same
+  pool; the dashboard labels it that way).
 - Agents push outbound only; the VMs accept no inbound connections.

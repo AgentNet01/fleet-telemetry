@@ -19,6 +19,9 @@ Endpoints:
   POST /api/burst           dashboard asks an agent for live tail (X-Token)
   GET  /api/agents          fleet summary (light; polled by the wall view)
   GET  /api/agents/<name>   one machine in full (detail view)
+  POST /api/fetch           dashboard asks a machine for one file (X-Token)
+  POST /upload              agent sends that file back (X-Agent-Token)
+  GET  /api/fetch/<id>      request status;  GET /api/file/<id>  the file
 
 Payload schema each agent sends (daemon v2; v1 lacks the marked fields):
   {"agent": "boboe2", "daemon": 2*, "ts": 1728..., "boot_id": "...",
@@ -41,11 +44,14 @@ Payload schema each agent sends (daemon v2; v1 lacks the marked fields):
 
 import hmac
 import json
+import mimetypes
 import os
+import secrets
+import shutil
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -73,9 +79,13 @@ MAX_HISTORY = 360      # heartbeats kept per agent (~3h at 30s; less in live tai
 SUMMARY_HISTORY = 60   # points per agent in the fleet summary (sparklines)
 MAX_CRON_HISTORY = 100
 SAVE_EVERY = 10        # seconds; caps disk writes as the fleet grows
+FILE_CACHE = os.path.join(HERE, "file_cache")   # files Jack opened (cleared on start)
+UPLOAD_MAX = 10 * 1024 * 1024
+MAX_FETCHES = 50       # older viewed files are deleted from the cache
 
 store = {}   # agent -> {"latest","history","cron_history","first_seen","last_seen"}
 bursts = {}  # agent -> epoch until which fast pushes were requested (live tail)
+fetches = {}  # id -> {"agent","path","ts","status","error","size"} (file viewing)
 lock = threading.Lock()
 _last_save = 0.0
 
@@ -152,12 +162,14 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass  # quiet
 
-    def _send(self, code, body, ctype="application/json"):
+    def _send(self, code, body, ctype="application/json", headers=None):
         raw = body.encode() if isinstance(body, str) else body
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(raw)))
         self.send_header("Cache-Control", "no-store")
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(raw)
 
@@ -167,6 +179,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/api/burst":
             return self.do_POST_burst()
+        if self.path == "/api/fetch":
+            return self.do_POST_fetch()
+        if self.path == "/upload":
+            return self.do_POST_upload()
         if self.path != "/ingest":
             return self._send(404, '{"error":"not found"}')
         if not hmac.compare_digest(self.headers.get("X-Agent-Token", ""), TOKEN):
@@ -196,8 +212,13 @@ class Handler(BaseHTTPRequestHandler):
             # it via the ingest response (the only channel the agent listens
             # on). The agent enforces its own caps (>=2s interval, <=5min).
             until = bursts.get(agent, 0)
+            # file viewing rides the same reply: re-sent until the agent answers
+            want = [{"id": i, "path": f["path"]} for i, f in fetches.items()
+                    if f["agent"] == agent and f["status"] == "pending"][:3]
         cmd = ({"burst": True, "interval": 2, "until": until}
                if until > time.time() else {})
+        if want:
+            cmd["fetch"] = want
         self._send(200, json.dumps({"ok": True, "cmd": cmd}))
 
     def do_POST_burst(self):
@@ -220,6 +241,47 @@ class Handler(BaseHTTPRequestHandler):
             until = bursts.get(agent, 0)
         self._send(200, json.dumps({"ok": True, "burst_until": until}))
 
+    def do_POST_fetch(self):
+        if not hmac.compare_digest(self.headers.get("X-Token", ""), TOKEN):
+            return self._send(403, '{"error":"bad token"}')
+        try:
+            body = self._json_body()
+            agent, path = str(body["agent"]), str(body["path"])
+        except Exception:
+            return self._send(400, '{"error":"bad request"}')
+        fid = secrets.token_hex(8)
+        with lock:
+            fetches[fid] = {"agent": agent, "path": path, "ts": time.time(),
+                            "status": "pending", "error": None, "size": None}
+            for old in sorted(fetches, key=lambda k: fetches[k]["ts"])[:-MAX_FETCHES]:
+                fetches.pop(old)
+                try:
+                    os.remove(os.path.join(FILE_CACHE, old))
+                except OSError:
+                    pass
+        self._send(200, json.dumps({"id": fid}))
+
+    def do_POST_upload(self):
+        if not hmac.compare_digest(self.headers.get("X-Agent-Token", ""), TOKEN):
+            return self._send(403, '{"error":"bad token"}')
+        fid = self.headers.get("X-Fetch-Id", "")
+        size = int(self.headers.get("Content-Length", 0) or 0)
+        with lock:
+            f = fetches.get(fid)
+        if not f or f["agent"] != self.headers.get("X-Agent"):
+            return self._send(404, '{"error":"no such request"}')
+        if size > UPLOAD_MAX:
+            return self._send(413, '{"error":"too large"}')
+        data = self.rfile.read(size)
+        err = self.headers.get("X-Fetch-Error")
+        if not err:
+            # the cache name is our random id, never anything the agent chose
+            with open(os.path.join(FILE_CACHE, fid), "wb") as out:
+                out.write(data)
+        with lock:
+            f.update(status="error" if err else "done", error=err, size=len(data))
+        self._send(200, '{"ok":true}')
+
     def do_GET(self):
         path = urlsplit(self.path).path
         if path == "/api/agents":
@@ -238,6 +300,29 @@ class Handler(BaseHTTPRequestHandler):
                              "cron_history": r.get("cron_history", [])}
                 body = json.dumps({"now": time.time(), "agent": out})
             return self._send(200 if out else 404, body)
+        if path.startswith("/api/fetch/"):
+            with lock:
+                f = fetches.get(path[len("/api/fetch/"):])
+                out = f and {k: f[k] for k in ("path", "status", "error", "size")}
+            return self._send(200 if out else 404, json.dumps(out or {"error": "not found"}))
+        if path.startswith("/api/file/"):
+            fid = path[len("/api/file/"):]
+            with lock:
+                f = fetches.get(fid)
+            if not f or f["status"] != "done":
+                return self._send(404, "not found", "text/plain")
+            with open(os.path.join(FILE_CACHE, fid), "rb") as fh:
+                data = fh.read()
+            name = os.path.basename(f["path"])
+            plain = "".join(c for c in name if 32 <= ord(c) < 127 and c not in '"\\') or "file"
+            mode = "attachment" if "download" in urlsplit(self.path).query else "inline"
+            # agent files are untrusted: sandbox them so an HTML/SVG file can't
+            # run script on the dashboard's origin
+            return self._send(200, data, mimetypes.guess_type(name)[0] or "application/octet-stream",
+                              {"Content-Security-Policy": "sandbox",
+                               "X-Content-Type-Options": "nosniff",
+                               "Content-Disposition": "%s; filename=\"%s\"; filename*=UTF-8''%s"
+                                                      % (mode, plain, quote(name))})
         if path in ("/", "/index.html"):
             with open(DASHBOARD_FILE) as f:
                 page = f.read().replace("%%TOKEN%%", TOKEN)
@@ -247,6 +332,8 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     load()
+    shutil.rmtree(FILE_CACHE, ignore_errors=True)
+    os.makedirs(FILE_CACHE)
     srv = ThreadingHTTPServer((BIND_IP, PORT), Handler)
     print("fleet receiver listening on http://%s:%d  (dashboard + ingest)" % (BIND_IP, PORT))
     print("waiting for agents... (Ctrl-C to stop)")
