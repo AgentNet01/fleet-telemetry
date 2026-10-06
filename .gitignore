@@ -1,0 +1,9 @@
+# secrets - never commit
+token.txt
+
+# receiver runtime data
+fleet_telemetry.json
+
+# python bytecode
+__pycache__/
+*.pyc
