@@ -906,17 +906,18 @@ async function pollFile(v) {
 const sizeCell = (kb, max) => html`<span class="fx-size"><span class="bar"><i style="width:${(kb / max * 100).toFixed(1)}%"></i></span><span class="r">${fmtKB(kb)}</span></span>`;
 
 // ---------- crons: passive evidence only ----------
-// No agent writes reports for the dashboard. The Slack watch's own checkpoint
-// file changes every time it runs, so its modified time says when it last ran.
+// No agent writes reports for the dashboard. The Slack watch rewrites its
+// checkpoint only when a run finds new messages (quiet runs leave it alone), so
+// its modified time says when new messages last arrived -- not the last run.
 const slackSeen = p => { const e = ((p.files || {}).entries || []).find(x => x[0] === "slack-watch/seen.json"); return p.slack_seen || (e && e[2]) || null; };
-const cronFoot = p => { const t = slackSeen(p); return t ? html`<span title="When slack-watch/seen.json last changed">Slack ${agoEl(t)}</span>` : ""; };
+const cronFoot = p => { const t = slackSeen(p); return t ? html`<span title="When the Slack watch last found new messages (slack-watch/seen.json changed)">Slack msgs ${agoEl(t)}</span>` : ""; };
 function cronsTab(a) {
   const t = slackSeen(a.latest || {});
   return html`<section class="sec" style="margin-top:0"><div class="sec-head"><h2>Slack watch</h2></div>
-    <div class="panel">${t ? html`<p>Last ran <b>${agoEl(t)}</b> <span class="mut">· ${stamp(t)}</span></p>
-      <p class="note">Read from when <code>slack-watch/seen.json</code> last changed: the watch updates that checkpoint on every run.</p>`
+    <div class="panel">${t ? html`<p>Last found new messages <b>${agoEl(t)}</b> <span class="mut">· ${stamp(t)}</span></p>
+      <p class="note">Read from when <code>slack-watch/seen.json</code> last changed. The watch updates that checkpoint only when a run finds new messages, so quiet runs don’t show here.</p>`
       : html`<p class="empty">No Slack watch checkpoint (<code>slack-watch/seen.json</code>) on this machine.</p>`}</div></section>
-    <p class="note">A full list of this machine’s crons and their runs needs a passive source, one the agent doesn’t have to write. That’s still being looked into.</p>`;
+    <p class="note">Every run, this machine’s other crons, and what each run did need a passive source the agent doesn’t have to write. That’s still being looked into.</p>`;
 }
 
 // ---------- render loop ----------
