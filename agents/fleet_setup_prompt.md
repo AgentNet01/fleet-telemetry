@@ -61,7 +61,9 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
+import urllib.parse
 import urllib.request
 
 # ---- config: loaded from ~/workspace/telemetry/config.json (written by install.sh) ----
@@ -520,7 +522,7 @@ def build_payload(token_note_replaced=False):
     now = time.time()
     return {
         "agent": AGENT,
-        "daemon": 9,              # payload version; dashboard flags older ones
+        "daemon": 10,              # payload version; dashboard flags older ones
         "ts": now,
         "boot_id": bid,
         "vm_replaced": vm_replaced,
@@ -637,6 +639,53 @@ def read_config():
         return json.load(f)
 
 
+# ---- mailbox: things Jack's Mac sends this machine (v10) ----
+# The VM can't accept connections, so it keeps one open to the receiver: the
+# receiver answers as soon as something is queued for this agent, or after
+# ~25s with nothing, and the daemon asks again. Slack messages for this agent
+# land in INBOX, where the slack hook (agents/slack_hook.sh) picks them up.
+INBOX = os.path.join(HOME, "inbox", "slack")
+CURSOR_FILE = os.path.join(TDIR, ".mailbox_cursor")
+
+
+def write_atomic(path, text):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def mailbox_loop(token):
+    op = opener()
+    base = RECEIVER_URL.rsplit("/ingest", 1)[0]
+    try:
+        with open(CURSOR_FILE) as f:
+            after = int(f.read().strip() or 0)
+    except (OSError, ValueError):
+        after = 0
+    backoff = 1
+    while True:
+        try:
+            url = "%s/api/wait?%s" % (base, urllib.parse.urlencode({"agent": AGENT, "after": after}))
+            req = urllib.request.Request(url, headers={"X-Agent-Token": token})
+            with op.open(req, timeout=60) as r:
+                reply = json.loads(r.read())
+            items = reply.get("items") or []
+            after = int(reply.get("after", after))   # receiver may reset a stale cursor
+            for it in items:
+                if it.get("kind") == "slack":
+                    os.makedirs(INBOX, exist_ok=True)
+                    write_atomic(os.path.join(INBOX, "%010d.json" % int(it["id"])), json.dumps(it))
+                after = max(after, int(it["id"]))
+            # saved only after the files are written: a crash re-fetches, never skips
+            write_atomic(CURSOR_FILE, str(after))
+            backoff = 1
+        except Exception as e:
+            log("mailbox: %s" % e)
+            time.sleep(backoff)
+            backoff = min(30, backoff * 2)
+
+
 def main():
     global AGENT, RECEIVER_URL
     os.makedirs(TDIR, exist_ok=True)
@@ -645,6 +694,7 @@ def main():
     token = read_token()
     op = opener()
     log("telemetryd starting for %s -> %s" % (AGENT, RECEIVER_URL))
+    threading.Thread(target=mailbox_loop, args=(token,), daemon=True).start()
     last_push = 0.0
     last_activity = None
     while True:

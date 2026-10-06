@@ -67,8 +67,13 @@ Keep the daemon light: a heartbeat currently costs ~26 ms to build and
 
 1. Put the shared secret in `token.txt` next to `fleet_receiver.py`
    (same secret every agent uses; **never commit this file**).
-2. Run: `python3 orchestrator/fleet_receiver.py`
-3. Open `http://<mac-tailscale-ip>:8787`
+2. Optional, for Slack: put `SLACK_BOT_TOKEN=xoxb-...` (the read-only
+   "Fleet Reader" app) in `orchestrator/.env` (also never committed) and
+   `/invite @Fleet Reader` to each channel the agents use. The receiver then
+   keeps every message from those channels (`slack_reader.py`) and shows them
+   on each machine's Activity tab next to what the AI did.
+3. Run: `python3 orchestrator/fleet_receiver.py`
+4. Open `http://<mac-tailscale-ip>:8787`
 
 The dashboard refreshes itself every 5s (every 2s during a live tail) and is
 built to sit on a wall screen untouched. Click a machine for its detail page:
@@ -119,6 +124,23 @@ Then register it with `hooks.add` (id `telemetry-watchdog`, that script, 60s
 interval, prompt as in the script header), `dry_run` it, and `enable` it. Once
 it has been running fine, remove the old 15-minute watchdog cron, which spends
 an AI turn on every tick.
+
+## Slack hook
+
+Jack's receiver reads Slack (see Orchestrator setup) and picks out the messages
+meant for each agent: it's named ("Boboe 2" or @mention), it's @channel/@here,
+or it's a thread the agent has posted in. The daemon (v10+) keeps a line open
+to the receiver, so those land in `~/inbox/slack/` within a second. A hook wakes
+the agent with them; with nothing new it stays silent and costs no AI turn.
+
+```bash
+mkdir -p ~/hooks/scripts
+cp ~/fleet-telemetry/agents/slack_hook.sh ~/hooks/scripts/slack-inbox.sh
+```
+
+Then `hooks.add` (id `slack-inbox`, that script, 15s interval, prompt as in the
+script header), `dry_run`, `enable`. Once it works, turn off the old Slack-watch
+cron.
 
 ## Live tail
 
