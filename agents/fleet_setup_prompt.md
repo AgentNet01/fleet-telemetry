@@ -7,7 +7,7 @@
 
 You are one of Jack Wilber's fleet of personal AI agents (Boboe 1-6). Jack is
 building a telemetry dashboard on his Mac that shows every agent's live status
-(CPU/RAM/disk, current task, files, cron health, OS and network). Your job: install a small
+(CPU/RAM/disk, current task, files, cron health). Your job: install a small
 telemetry daemon on your VM that pushes a JSON payload to his receiver every
 30 seconds over his Tailscale network. The daemon also supports "live tail":
 when Jack clicks the Live tail button on your dashboard card, the receiver asks
@@ -66,7 +66,9 @@ import urllib.request
 
 # ---- config: loaded from ~/workspace/telemetry/config.json (written by install.sh) ----
 # {"agent": "boboe2", "receiver_url": "http://RECEIVER_IP:8787/ingest"}
-INTERVAL = 30             # seconds between pushes
+INTERVAL = 15             # seconds between routine pushes (base cadence)
+POLL_TICK = 2          # seconds between cheap activity checks
+CHANGE_DEBOUNCE = 5    # min seconds between change-triggered pushes
 # ----------------------------------------------------------------------------------
 
 HOME = os.path.expanduser("~")
@@ -396,6 +398,48 @@ def crons():
         return []
 
 
+def _fetch_entries():
+    """Raw entries from the agent activity feed socket (read-only).
+
+    Same feed behind the app's sidebar and status indicators. Documented,
+    sanctioned read path: ~/subscriptions/activity_feed/subscription.md.
+    Raises on failure; callers handle it.
+    """
+    sock_path = os.environ.get("JARVIS_SANDBOX_API_SOCK",
+                               "/run/hatch/sandbox-api/api.sock")
+    import socket as _socket
+    s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    s.settimeout(5)
+    s.connect(sock_path)
+    s.sendall(b"GET /activity/recent?limit=8 HTTP/1.0\r\n"
+              b"Host: localhost\r\n\r\n")
+    raw = b""
+    while True:
+        chunk = s.recv(65536)
+        if not chunk:
+            break
+        raw += chunk
+    s.close()
+    body = raw.split(b"\r\n\r\n", 1)[1]
+    return json.loads(body).get("result", {}).get("entries", [])
+
+
+def peek_activity():
+    """Cheap check: current activity status string only, for change detection.
+
+    Same socket as activity() but minimal parse -- safe to call every few
+    seconds. Returns None when idle or on any failure (failures never count
+    as a "change", to avoid churn).
+    """
+    try:
+        for e in _fetch_entries():
+            if e.get("status") == "pending":
+                return e.get("status_title") or e.get("title")
+    except Exception:
+        pass
+    return None
+
+
 def activity():
     """Read the agent activity feed from the daemon sandbox API (read-only).
 
@@ -404,24 +448,8 @@ def activity():
     ~/subscriptions/activity_feed/subscription.md. No auth needed -- the socket
     is world-accessible by design for sandboxed agents.
     """
-    sock_path = os.environ.get("JARVIS_SANDBOX_API_SOCK",
-                               "/run/hatch/sandbox-api/api.sock")
     try:
-        import socket as _socket
-        s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-        s.settimeout(5)
-        s.connect(sock_path)
-        s.sendall(b"GET /activity/recent?limit=8 HTTP/1.0\r\n"
-                  b"Host: localhost\r\n\r\n")
-        raw = b""
-        while True:
-            chunk = s.recv(65536)
-            if not chunk:
-                break
-            raw += chunk
-        s.close()
-        body = raw.split(b"\r\n\r\n", 1)[1]
-        entries = json.loads(body).get("result", {}).get("entries", [])
+        entries = _fetch_entries()
         current = None
         for e in entries:
             if e.get("status") == "pending":
@@ -464,6 +492,54 @@ def observed(walked, plist, now, self_pid):
             "recent": [[rel, int(mt)] for rel, _, mt in changed[:8]]}
 
 
+# ---- capabilities + active work (for the dashboard's "what can it do" view) ----
+# CAPABILITIES is the condensed, machine-readable version of
+# docs/systems-overview.md. Bump the payload "daemon" version when it changes
+# meaningfully so the dashboard can flag stale ones.
+CAPABILITIES = {
+    "execution": [
+        "main chat (conversation with Jack)",
+        "side chats (separate persistent conversations)",
+        "subagents (background child agents, parallel, one nesting level)",
+        "browser tasks (live Chromium: logins, forms, JS)",
+        "crons (scheduled agent runs)", "hooks (event-driven)",
+        "systemd services (e.g. this daemon)"],
+    "compute": [
+        "bash shell", "file read/write/edit", "code: write/run/test/debug",
+        "artifacts: docs, web apps, PDFs, decks, spreadsheets",
+        "media: image/video generation, TTS, podcast audio",
+        "reusable skills (playbooks)"],
+    "web": ["search + page fetch", "live browser automation",
+            "deep research delegation"],
+    "accounts": ["gmail", "slack (agentnet swarm)", "google drive/docs/sheets/slides/forms",
+                 "github (Boboe2 user)", "instagram DMs", "spotify", "healthkit"],
+    "coordination": ["group chats", "swarm autonomy inside Jack's boundaries",
+                     "goals + tracked commitments"],
+    "memory": ["long-term memory", "daily logs", "people/groups maps",
+               "feed + ideas"],
+    "limits": ["no inbound network (push-only)", "no GPU",
+               "write actions need approval",
+               "money / data deletion / outside contact / credential changes need Jack",
+               "one app status line; concurrent work is in active_work"],
+}
+
+ACTIVE_WORK_FILE = os.path.join(TDIR, "active_work.json")
+
+
+def read_active_work():
+    """Snapshot of what the agent is doing right now, written by a cron job
+    (the daemon itself can't call agent tools). Marked stale if older than
+    10 minutes."""
+    try:
+        with open(ACTIVE_WORK_FILE) as f:
+            snap = json.load(f)
+        snap["stale"] = (time.time() - snap.get("ts", 0)) > 600
+        return snap
+    except (OSError, ValueError):
+        return {"ts": 0, "stale": True, "subagents": [], "crons": [],
+                "note": "no snapshot yet"}
+
+
 def build_payload(token_note_replaced=False):
     bid = boot_id()
     vm_replaced = False
@@ -481,7 +557,7 @@ def build_payload(token_note_replaced=False):
     now = time.time()
     return {
         "agent": AGENT,
-        "daemon": 3,              # payload version; dashboard flags older ones
+        "daemon": 5,              # payload version; dashboard flags older ones
         "ts": now,
         "boot_id": bid,
         "vm_replaced": vm_replaced,
@@ -496,6 +572,8 @@ def build_payload(token_note_replaced=False):
         "observed": observed(walked, mem["all"], now, os.getpid()),
         "crons": crons(),
         "system": system(now),    # OS, CPU, shared-host memory, network, IP
+        "capabilities": CAPABILITIES,   # static: what this agent can do
+        "active_work": read_active_work(),  # dynamic: subagents, jobs (cron-written)
     }
 
 
@@ -611,26 +689,42 @@ def main():
     if not os.path.exists(STATUS_FILE):
         with open(STATUS_FILE, "w") as f:
             json.dump({"state": "idle", "task": "", "since": time.time()}, f)
+    last_push = 0.0
+    last_activity = None
     while True:
         try:
-            interval, bursting = burst_state(time.time())
-            payload = build_payload()
-            payload["burst"] = bursting
-            try:
-                ok, cmd = post(op, token, payload)
-                if ok:
-                    handle_cmd(cmd, time.time())
-                    send_fetches(op, token, cmd.get("fetch") if isinstance(cmd, dict) else None)
-                    flush_spool(op, token)
-                else:
+            now = time.time()
+            interval, bursting = burst_state(now)
+            # Cheap 2s tick: only the activity string. A full (expensive)
+            # payload goes out on schedule, in burst mode, or immediately
+            # when the activity changes (debounced) -- so the dashboard's
+            # live status reacts in seconds, not on the next heartbeat.
+            # Commands from the receiver still ride the next push's reply:
+            # worst-case latency is now one 15s interval, not 30s.
+            cur = peek_activity()
+            changed = cur is not None and cur != last_activity
+            if cur is not None:
+                last_activity = cur
+            due = (now - last_push) >= interval
+            fresh_change = changed and (now - last_push) >= CHANGE_DEBOUNCE
+            if due or fresh_change:
+                payload = build_payload()
+                payload["burst"] = bursting
+                try:
+                    ok, cmd = post(op, token, payload)
+                    if ok:
+                        handle_cmd(cmd, time.time())
+                        send_fetches(op, token, cmd.get("fetch") if isinstance(cmd, dict) else None)
+                        flush_spool(op, token)
+                    else:
+                        spool(payload)
+                except Exception as e:
+                    log("post failed: %s" % e)
                     spool(payload)
-            except Exception as e:
-                log("post failed: %s" % e)
-                spool(payload)
+                last_push = time.time()
         except Exception as e:
             log("cycle failed: %s" % e)
-        interval, _ = burst_state(time.time())
-        time.sleep(interval)
+        time.sleep(POLL_TICK)
 
 
 if __name__ == "__main__":
@@ -725,7 +819,7 @@ else
 fi
 
 echo "Watch the log: tail -f $TDIR/telemetryd.log"
-echo "Verify on Jack's dashboard: $(python3 -c "import json; print(json.load(open('$TDIR/config.json'))['receiver_url'].replace('/ingest',''))")"
+echo "Verify on Jack's dashboard: $(python3 -c "import json; print(json.load(open('$TDIR/config.json'))['receiver_url'])".replace('/ingest',''))"
 ```
 
 Make it executable: `chmod +x ~/workspace/telemetry/install.sh`
@@ -794,8 +888,4 @@ reports it as your "current task". Keep it truthful:
 - Never print, log, or paste the token anywhere except the two places it
   belongs (the install command and the `.token` file, which is chmod 600).
 - The daemon is push-only and reports stats, filenames, and task labels --
-  never credentials or message bodies. The one exception is file viewing:
-  when Jack clicks a file on his dashboard, the daemon sends that single file.
-  It only sends regular files under ~/workspace, at most 10 MB, and refuses
-  hidden files and secret-looking names (token, secret, credential, .env,
-  .pem, .key ...). Keep secrets out of ~/workspace or behind those names.
+  never file contents, credentials, or message bodies. Keep it that way.
