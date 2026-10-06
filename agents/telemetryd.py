@@ -428,6 +428,54 @@ def observed(walked, plist, now, self_pid):
             "recent": [[rel, int(mt)] for rel, _, mt in changed[:8]]}
 
 
+# ---- capabilities + active work (for the dashboard's "what can it do" view) ----
+# CAPABILITIES is the condensed, machine-readable version of
+# docs/systems-overview.md. Bump the payload "daemon" version when it changes
+# meaningfully so the dashboard can flag stale ones.
+CAPABILITIES = {
+    "execution": [
+        "main chat (conversation with Jack)",
+        "side chats (separate persistent conversations)",
+        "subagents (background child agents, parallel, one nesting level)",
+        "browser tasks (live Chromium: logins, forms, JS)",
+        "crons (scheduled agent runs)", "hooks (event-driven)",
+        "systemd services (e.g. this daemon)"],
+    "compute": [
+        "bash shell", "file read/write/edit", "code: write/run/test/debug",
+        "artifacts: docs, web apps, PDFs, decks, spreadsheets",
+        "media: image/video generation, TTS, podcast audio",
+        "reusable skills (playbooks)"],
+    "web": ["search + page fetch", "live browser automation",
+            "deep research delegation"],
+    "accounts": ["gmail", "slack (agentnet swarm)", "google drive/docs/sheets/slides/forms",
+                 "github (Boboe2 user)", "instagram DMs", "spotify", "healthkit"],
+    "coordination": ["group chats", "swarm autonomy inside Jack's boundaries",
+                     "goals + tracked commitments"],
+    "memory": ["long-term memory", "daily logs", "people/groups maps",
+               "feed + ideas"],
+    "limits": ["no inbound network (push-only)", "no GPU",
+               "write actions need approval",
+               "money / data deletion / outside contact / credential changes need Jack",
+               "one app status line; concurrent work is in active_work"],
+}
+
+ACTIVE_WORK_FILE = os.path.join(TDIR, "active_work.json")
+
+
+def read_active_work():
+    """Snapshot of what the agent is doing right now, written by a cron job
+    (the daemon itself can't call agent tools). Marked stale if older than
+    10 minutes."""
+    try:
+        with open(ACTIVE_WORK_FILE) as f:
+            snap = json.load(f)
+        snap["stale"] = (time.time() - snap.get("ts", 0)) > 600
+        return snap
+    except (OSError, ValueError):
+        return {"ts": 0, "stale": True, "subagents": [], "crons": [],
+                "note": "no snapshot yet"}
+
+
 def build_payload(token_note_replaced=False):
     bid = boot_id()
     vm_replaced = False
@@ -445,7 +493,7 @@ def build_payload(token_note_replaced=False):
     now = time.time()
     return {
         "agent": AGENT,
-        "daemon": 3,              # payload version; dashboard flags older ones
+        "daemon": 4,              # payload version; dashboard flags older ones
         "ts": now,
         "boot_id": bid,
         "vm_replaced": vm_replaced,
@@ -460,6 +508,8 @@ def build_payload(token_note_replaced=False):
         "observed": observed(walked, mem["all"], now, os.getpid()),
         "crons": crons(),
         "system": system(now),    # OS, CPU, shared-host memory, network, IP
+        "capabilities": CAPABILITIES,   # static: what this agent can do
+        "active_work": read_active_work(),  # dynamic: subagents, jobs (cron-written)
     }
 
 
