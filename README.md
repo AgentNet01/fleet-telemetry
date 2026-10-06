@@ -105,6 +105,21 @@ The daemon reports:
 
 Failed pushes spool to disk locally and flush on recovery.
 
+## Watchdog hook
+
+Reboots wipe `/etc`, which removes the daemon's systemd unit. A Muse hook brings
+it back within a minute, with no AI turn unless the reinstall fails:
+
+```bash
+mkdir -p ~/hooks/scripts
+cp ~/fleet-telemetry/agents/watchdog_hook.sh ~/hooks/scripts/telemetry-watchdog.sh
+```
+
+Then register it with `hooks.add` (id `telemetry-watchdog`, that script, 60s
+interval, prompt as in the script header), `dry_run` it, and `enable` it. Once
+it has been running fine, remove the old 15-minute watchdog cron, which spends
+an AI turn on every tick.
+
 ## Live tail
 
 The detail view has a "▶ Live tail" button for on-demand high-frequency
