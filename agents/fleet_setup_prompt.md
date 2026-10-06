@@ -271,9 +271,11 @@ def system(now):
     if now - _ts_ip[0] > 300:
         ip = None
         try:
-            out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True,
+            # note: some wrappers (e.g. this container's) don't accept "-4",
+            # so take the first IPv4-looking line instead.
+            out = subprocess.run(["tailscale", "ip"], capture_output=True,
                                  text=True, timeout=3).stdout.split()
-            ip = out[0] if out else None
+            ip = next((l for l in out if "." in l and ":" not in l), None)
         except Exception:
             pass
         _ts_ip = (now, ip)
@@ -723,7 +725,7 @@ else
 fi
 
 echo "Watch the log: tail -f $TDIR/telemetryd.log"
-echo "Verify on Jack's dashboard: $(python3 -c "import json; print(json.load(open('$TDIR/config.json'))['receiver_url'])".replace('/ingest',''))"
+echo "Verify on Jack's dashboard: $(python3 -c "import json; print(json.load(open('$TDIR/config.json'))['receiver_url'].replace('/ingest',''))")"
 ```
 
 Make it executable: `chmod +x ~/workspace/telemetry/install.sh`

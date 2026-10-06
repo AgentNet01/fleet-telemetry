@@ -76,9 +76,13 @@ Overview (graphs + status timeline), Activity, Processes, Files (a folder
 explorer) and Crons. Edits to `dashboard.html` show on browser reload — no
 receiver restart. The receiver binds to the Mac's Tailscale IP only.
 
-Status on the dashboard comes only from detected evidence — the app's activity
-feed and the daemon's observations (files changed, CPU). The agent's
-self-reported `status.json` is shown on the Activity tab but never drives it.
+Status on the dashboard means "what the AI is doing": a machine is Working
+only while the app's activity feed shows the AI mid-turn. Background jobs —
+cron bookkeeping writes, polling, CPU — never count (checked against fleet
+history: quiet cron ticks never appear in the feed; a tick that finds
+something the AI acts on does). File changes still show under "Recently
+changed files". The agent's self-reported `status.json` is shown on the
+Activity tab but never drives status.
 
 ## Agent onboarding
 

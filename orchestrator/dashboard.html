@@ -435,27 +435,23 @@ const hrefM = (name, tab, path) => "#/m/" + encodeURIComponent(name)
   + (tab && tab !== "overview" ? "/" + tab : "")
   + (path && path.length ? "/" + path.map(encodeURIComponent).join("/") : "");
 
-// ---------- detected status (never the agent's self-report) ----------
+// ---------- status = what the AI is doing ----------
+// Working only while the app's activity feed shows the AI mid-turn. Machine
+// side-effects (cron bookkeeping writes, CPU, polling) are not the AI working:
+// checked against fleet history, quiet cron ticks never show up in the feed,
+// while a tick that finds something the AI acts on does. Self-report is unused.
 function detect(a) {
-  const p = a.latest || {}, act = p.activity || {}, obs = p.observed || {};
+  const p = a.latest || {}, act = p.activity || {};
   const age = nowS() - (a.last_seen || 0);
   const last = (act.entries || []).find(e => e.status !== "pending");
   const lastTxt = last && clean(last.status_title || last.title);
   const lastTs = last && isoTs(last.timestamp);
   if (age > STALE) return { state: "offline", label: "Offline", head: "Not reporting", why: html`Last heartbeat ${agoEl(a.last_seen)}` };
   if (act.current) return { state: "working", label: "Working", head: clean(act.current), why: "From the app’s live activity feed" };
-  // daemon v1 counted its own log writes as "files changed", so its observations aren't evidence
-  if (obs.working && p.daemon) {
-    const rec = obs.recent || [], sigs = obs.signals || [];
-    const cpu = sigs.find(s => /% cpu$/.test(s));
-    const head = rec.length ? `Changing ${base(rec[0][0])}${rec.length > 1 ? ` and ${plural(rec.length - 1, "other file")}` : ""}`
-      : cpu ? `Running ${cpu.replace(/ at .*$/, "")}` : (sigs[0] ? sigs[0][0].toUpperCase() + sigs[0].slice(1) : "Busy");
-    return { state: "working", label: "Working", head, why: "Detected · " + sigs.join(" · ") };
-  }
   if (last && last.status === "error") return { state: "idle", label: "Idle", tone: "warn", head: lastTxt, why: html`Last action failed ${lastTs ? agoEl(lastTs) : ""}` };
   return { state: "idle", label: "Idle", head: lastTxt || "Idle", why: last ? html`Last activity ${lastTs ? agoEl(lastTs) : ""}` : "No app activity reported" };
 }
-const hstate = h => (h.app || (h.obs && h.v)) ? "working" : "idle";
+const hstate = h => h.app ? "working" : "idle";
 // how long the machine has been in its current state, from the history runs
 function since(a, d) {
   const hist = a.history || [];
@@ -546,7 +542,7 @@ function runs(hist, t1) {
   hist.forEach((h, i) => {
     const next = i + 1 < hist.length ? hist[i + 1].ts : t1;
     const end = Math.min(next, h.ts + GAP), st = hstate(h);
-    push(st, h.ts, end, st === "working" ? clean(h.app || (h.sig && /% cpu$/.test(h.sig) ? "Busy: " + h.sig : "")) : null);
+    push(st, h.ts, end, st === "working" ? clean(h.app) : null);
     if (i + 1 < hist.length && next - h.ts > GAP) push("offline", end, next, null);
   });
   if (hist.length && t1 - hist[hist.length - 1].ts > GAP) push("offline", hist[hist.length - 1].ts + GAP, t1, null);
@@ -566,7 +562,7 @@ const runList = (rs, n) => html`<ol class="runs">${rs.slice().reverse().slice(0,
   <span class="run-state"><i class="dot d-${r.state}"></i>${STATE_LABEL[r.state]}</span>
   <span class="run-time">${clock(r.start)} – ${clock(r.end)}</span>
   <span class="run-dur">${dur(r.end - r.start)}</span>
-  <span class="run-what">${r.labels.length ? r.labels.join(" · ") : r.state === "working" ? "Files changing (detected)" : ""}</span></li>`)}</ol>`;
+  <span class="run-what">${r.labels.join(" · ")}</span></li>`)}</ol>`;
 
 // ---------- top bar ----------
 function countsHTML() {
@@ -676,7 +672,7 @@ function paneHead(a, d) {
       <span>Boot <b>${String(p.boot_id || "—").slice(0, 8)}</b>${p.vm_replaced ? html` <span class="warn">VM was replaced</span>` : ""}</span>
       <span>Daemon <b>v${p.daemon || 1}</b></span>
     </div>
-    ${p.daemon ? "" : html`<p class="banner">This machine runs the older telemetry daemon, which counts its own log writes as file changes. Its status uses only the app’s activity feed until it’s updated, and it doesn’t send per-process CPU or file times. Have the agent re-install <code>agents/telemetryd.py</code>.</p>`}`;
+    ${p.daemon ? "" : html`<p class="banner">This machine runs the older telemetry daemon, so it doesn’t send per-process CPU, file times, machine details or file viewing. Have the agent re-install <code>agents/telemetryd.py</code>.</p>`}`;
 }
 function tabBody(a, r) {
   if (r.tab === "activity") return activityTab(a);
@@ -695,7 +691,7 @@ function overviewTab(a) {
       ${chartPanel("ov-mem", "Memory · all processes", hist.map(h => [h.ts, h.mem]), fmtMB)}
       ${diskPanel(p.disk || {})}
     </div>
-    <section class="sec"><div class="sec-head"><h2>Status</h2><span class="sec-sub">Detected from the app’s activity feed and local evidence · last ${dur(t1 - t0)}</span></div>
+    <section class="sec"><div class="sec-head"><h2>Status</h2><span class="sec-sub">From the app’s activity feed · background jobs and file changes don’t count · last ${dur(t1 - t0)}</span></div>
       <div class="panel">${hist.length ? html`${strip(rs, t0, t1)}${runList(rs, 6)}` : html`<p class="empty">No history yet.</p>`}</div>
       <p class="note"><a class="lnk" href="${hrefM(a.name, "activity")}">Full status history</a></p>
     </section>

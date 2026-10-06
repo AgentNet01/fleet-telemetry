@@ -81,4 +81,4 @@ else
 fi
 
 echo "Watch the log: tail -f $TDIR/telemetryd.log"
-echo "Verify on Jack's dashboard: $(python3 -c "import json; print(json.load(open('$TDIR/config.json'))['receiver_url'])".replace('/ingest',''))"
+echo "Verify on Jack's dashboard: $(python3 -c "import json; print(json.load(open('$TDIR/config.json'))['receiver_url'].replace('/ingest',''))")"
