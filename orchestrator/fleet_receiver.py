@@ -23,8 +23,10 @@ Endpoints:
   POST /upload              agent sends that file back (X-Agent-Token)
   GET  /api/fetch/<id>      request status;  GET /api/file/<id>  the file
 
-Payload schema each agent sends (daemon v2; v1 lacks the marked fields):
-  {"agent": "boboe2", "daemon": 2*, "ts": 1728..., "boot_id": "...",
+Payload schema each agent sends (daemon v8; all read passively, nothing
+agent-written; older daemons may lack the * fields or add self-reports,
+which are ignored):
+  {"agent": "boboe2", "daemon": 8, "ts": 1728..., "boot_id": "...",
    "cpu": {"count": 2, "load1": 0.2, "load5": 0.18, "load15": 0.15},
    "mem": {"top": [...], "all": [["hatch", 412.0, 1.5*, 731*], ...],
            "unit": "MB", "cpu_total": 0.8*},      # rows: name, MB, cpu%, pid
@@ -32,14 +34,13 @@ Payload schema each agent sends (daemon v2; v1 lacks the marked fields):
    "uptime_s": 9690,
    "files": {"count": 42, "mb": 3.1,
              "entries": [["report.md", 12.3, 1728...*], ...]},  # path, KB, mtime
-   "status": {"state": "working", "task": "...", "since": 1728...},
    "activity": {"current": "Editing code",
                 "entries": [{"timestamp":..., "activity_type":...,
                              "status":..., "title":..., "status_title":...,
                              "subtitle":...}]},
    "observed": {"working": true, "signals": ["2 files changed in last 5m"],
                 "recent": [["README.md", 1728...]]*},
-   "crons": [{"id": "slack-watch-boboe2", "last_run": "...", "status": "ok"}]}
+   "system": {...}, "capabilities": {...}}   # OS/CPU/network; static manifest
 """
 
 import hmac
@@ -116,7 +117,6 @@ def save(force=False):
 
 def history_point(now, payload):
     """One graphable sample: detected state, CPU, memory, top processes."""
-    st = payload.get("status") or {}
     act = payload.get("activity") or {}
     obs = payload.get("observed") or {}
     mem = payload.get("mem") or {}
@@ -131,8 +131,6 @@ def history_point(now, payload):
             cur[1] = (cur[1] or 0) + cpu
     top = sorted(by_name.items(), key=lambda kv: -kv[1][0])[:12]
     return {"ts": now,
-            "state": st.get("state"),           # self-reported (shown muted)
-            "task": st.get("task"),
             "app": act.get("current"),
             "obs": obs.get("working"),
             "v": payload.get("daemon"),         # v1's "obs" counts its own writes
@@ -151,6 +149,12 @@ def summary(name, rec):
     files = dict(p.get("files") or {})
     files.pop("entries", None)
     p["mem"], p["files"] = mem, files
+    # the Slack watch rewrites its checkpoint every run: its mtime is the last run
+    seen = [e for e in (rec.get("latest") or {}).get("files", {}).get("entries", [])
+            if e and e[0] == "slack-watch/seen.json" and len(e) > 2]
+    p["slack_seen"] = seen[0][2] if seen else None
+    for k in ("status", "crons", "active_work", "capabilities"):
+        p.pop(k, None)   # self-reports (unused) and static text: keep the wall light
     hist = [{k: h.get(k) for k in ("ts", "app", "obs", "v", "cpu", "load", "mem")}
             for h in rec.get("history", [])[-SUMMARY_HISTORY:]]
     return {"name": name, "latest": p, "last_seen": rec.get("last_seen"),
@@ -191,7 +195,10 @@ class Handler(BaseHTTPRequestHandler):
             payload = self._json_body()
         except Exception:
             return self._send(400, '{"error":"bad json"}')
-        agent = str(payload.get("agent", "unknown"))
+        agent = payload.get("agent") if isinstance(payload, dict) else None
+        if not isinstance(agent, str) or not agent.strip():
+            # a test ping or broken config must not create a phantom machine
+            return self._send(400, '{"error":"payload needs an agent name"}')
         now = time.time()
         with lock:
             rec = store.get(agent, {"history": [], "cron_history": [],

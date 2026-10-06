@@ -597,9 +597,13 @@ function wallView() {
   if (!names.length) return stateBox(`No machines match “${S.q}”`, "Filtering looks at machine names and what each one is doing.", html`<button class="btn" data-act="clear-q">Clear filter</button>`);
   return html`<div class="wall">${names.map(n => tile(S.fleet[n]))}</div>`;
 }
+// daemon version; amber when this machine is behind the newest one in the fleet
+function daemonTag(p) {
+  const v = p.daemon || 1, newest = Math.max(1, ...S.order.map(n => (S.fleet[n].latest || {}).daemon || 1));
+  return html`<span class="${v < newest ? "warn" : ""}" title="${v < newest ? `Behind: newest in the fleet is v${newest}` : "Telemetry daemon version"}">Daemon v${v}</span>`;
+}
 function tile(a) {
-  const d = detect(a), p = a.latest || {}, disk = p.disk || {}, crons = p.crons || [];
-  const bad = crons.filter(c => c.status !== "ok");
+  const d = detect(a), p = a.latest || {}, disk = p.disk || {};
   const cpu = cpuSeries(a), mem = (a.history || []).map(h => [h.ts, h.mem]);
   return html`<a class="tile is-${d.state}" href="${hrefM(a.name)}">
     <div class="tile-top"><span class="tile-name">${a.name}</span>${isLive(a) ? chip("live", "Live tail") : ""}</div>
@@ -612,8 +616,8 @@ function tile(a) {
     </div>
     <div class="tile-foot">
       <span>Disk ${disk.total_gb ? fmtPct(disk.used_gb / disk.total_gb * 100) : "—"}</span>
-      <span class="${bad.length ? "warn" : ""}">${crons.length ? (bad.length ? `${plural(bad.length, "cron")} failing` : `${plural(crons.length, "cron")} OK`) : "No crons"}</span>
-      ${p.daemon ? "" : html`<span class="warn">Old daemon</span>`}
+      ${cronFoot(p)}
+      ${daemonTag(p)}
       <span class="push">${agoEl(a.last_seen)}</span>
     </div></a>`;
 }
@@ -645,7 +649,7 @@ function detailView() {
 }
 function tabCount(a, k) {
   const p = a.latest || {};
-  const n = k === "processes" ? ((p.mem || {}).all || []).length : k === "files" ? (p.files || {}).count : k === "crons" ? (p.crons || []).length : null;
+  const n = k === "processes" ? ((p.mem || {}).all || []).length : k === "files" ? (p.files || {}).count : k === "crons" ? null : null;
   return n ? html`<span class="n">${n}</span>` : "";
 }
 function paneHead(a, d) {
@@ -751,13 +755,12 @@ const actList = entries => html`<ul class="acts">${entries.map(e => {
 
 function activityTab(a) {
   const p = a.latest || {}, act = (p.activity || {}).entries || [], hist = a.history || [], t1 = nowS();
-  const st = p.status || {}, rs = runs(hist, t1);
+  const rs = runs(hist, t1);
   return html`<section class="sec" style="margin-top:0"><div class="sec-head"><h2>App activity</h2><span class="sec-sub">The app’s own feed — the same one behind its sidebar</span></div>
       <div class="panel list">${act.length ? actList(act) : html`<p class="empty">${actEmpty(p)}</p>`}</div></section>
     <section class="sec"><div class="sec-head"><h2>Status history</h2><span class="sec-sub">${hist.length ? `Since ${clock(hist[0].ts)}` : ""}</span></div>
       <div class="panel">${hist.length ? html`${strip(rs, hist[0].ts, t1)}${runList(rs, 200)}` : html`<p class="empty">No history yet.</p>`}</div></section>
-    <section class="sec"><div class="sec-head"><h2>What the agent says</h2><span class="sec-sub">Self-reported · not used for status</span></div>
-      <div class="panel"><p>${st.state ? html`The agent reports <b>${st.state}</b>${st.task ? html` — “${st.task}”` : ""}${st.since ? html`, updated ${agoEl(st.since)}` : ""}.` : "The agent hasn’t written a status file."}</p></div></section>`;
+`;
 }
 
 function processesTab(a) {
@@ -902,14 +905,18 @@ async function pollFile(v) {
 }
 const sizeCell = (kb, max) => html`<span class="fx-size"><span class="bar"><i style="width:${(kb / max * 100).toFixed(1)}%"></i></span><span class="r">${fmtKB(kb)}</span></span>`;
 
+// ---------- crons: passive evidence only ----------
+// No agent writes reports for the dashboard. The Slack watch's own checkpoint
+// file changes every time it runs, so its modified time says when it last ran.
+const slackSeen = p => { const e = ((p.files || {}).entries || []).find(x => x[0] === "slack-watch/seen.json"); return p.slack_seen || (e && e[2]) || null; };
+const cronFoot = p => { const t = slackSeen(p); return t ? html`<span title="When slack-watch/seen.json last changed">Slack ${agoEl(t)}</span>` : ""; };
 function cronsTab(a) {
-  const crons = (a.latest || {}).crons || [], hist = (a.cron_history || []).slice().reverse();
-  if (!crons.length && !hist.length) return html`<div class="panel"><p class="empty">No cron heartbeats yet. Crons appear once the agent’s jobs write <code>cron_heartbeat.json</code>.</p></div>`;
-  const row = c => { const ts = isoTs(c.last_run); return html`<tr><td class="nm">${c.id}</td><td>${c.status === "ok" ? html`<span class="chip working"><i class="dot"></i>OK</span>` : html`<span class="chip offline"><i class="dot"></i>${c.status || "unknown"}</span>`}</td><td>${ts ? html`${agoEl(ts)} <span class="c-pid">· ${stamp(ts)}</span>` : clean(c.last_run || "—")}</td></tr>`; };
-  return html`<div class="panel" style="padding:0 4px"><table class="pt"><thead><tr><th>Cron</th><th>Status</th><th>Last run</th></tr></thead><tbody>${crons.map(row)}</tbody></table></div>
-    <section class="sec"><div class="sec-head"><h2>Run history</h2><span class="sec-sub">Each time a cron reported in</span></div>
-      <div class="panel list"><ol class="runs" style="margin:0">${hist.map(h => html`<li class="run" style="grid-template-columns:168px minmax(0,1fr)"><span class="run-time">${stamp(h.ts)}</span>
-        <span class="run-what">${(h.crons || []).length ? h.crons.map(c => `${c.id}: ${c.status}`).join(" · ") : "No crons reported"}</span></li>`)}</ol></div></section>`;
+  const t = slackSeen(a.latest || {});
+  return html`<section class="sec" style="margin-top:0"><div class="sec-head"><h2>Slack watch</h2></div>
+    <div class="panel">${t ? html`<p>Last ran <b>${agoEl(t)}</b> <span class="mut">· ${stamp(t)}</span></p>
+      <p class="note">Read from when <code>slack-watch/seen.json</code> last changed: the watch updates that checkpoint on every run.</p>`
+      : html`<p class="empty">No Slack watch checkpoint (<code>slack-watch/seen.json</code>) on this machine.</p>`}</div></section>
+    <p class="note">A full list of this machine’s crons and their runs needs a passive source, one the agent doesn’t have to write. That’s still being looked into.</p>`;
 }
 
 // ---------- render loop ----------
