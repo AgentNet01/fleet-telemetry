@@ -524,7 +524,6 @@ CAPABILITIES = {
 }
 
 ACTIVE_WORK_FILE = os.path.join(TDIR, "active_work.json")
-APPROVALS_FILE = os.path.join(TDIR, "pending_approvals.json")
 
 
 def read_active_work():
@@ -538,21 +537,6 @@ def read_active_work():
         return snap
     except (OSError, ValueError):
         return {"ts": 0, "stale": True, "subagents": [], "crons": [],
-                "note": "no snapshot yet"}
-
-
-def read_pending_approvals():
-    """Approvals waiting on Jack, written by a cron job via
-    permissions.list_pending (the daemon itself can't call agent tools).
-    Slimmed to safe fields -- never tokens or secrets. Marked stale if the
-    snapshot is older than 10 minutes."""
-    try:
-        with open(APPROVALS_FILE) as f:
-            snap = json.load(f)
-        snap["stale"] = (time.time() - snap.get("ts", 0)) > 600
-        return snap
-    except (OSError, ValueError):
-        return {"ts": 0, "stale": True, "approvals": [],
                 "note": "no snapshot yet"}
 
 
@@ -573,7 +557,7 @@ def build_payload(token_note_replaced=False):
     now = time.time()
     return {
         "agent": AGENT,
-        "daemon": 6,              # payload version; dashboard flags older ones
+        "daemon": 7,              # payload version; dashboard flags older ones
         "ts": now,
         "boot_id": bid,
         "vm_replaced": vm_replaced,
@@ -590,7 +574,6 @@ def build_payload(token_note_replaced=False):
         "system": system(now),    # OS, CPU, shared-host memory, network, IP
         "capabilities": CAPABILITIES,   # static: what this agent can do
         "active_work": read_active_work(),  # dynamic: subagents, jobs (cron-written)
-        "pending_approvals": read_pending_approvals(),  # approvals waiting on Jack (cron-written)
     }
 
 
