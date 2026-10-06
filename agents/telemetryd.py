@@ -30,7 +30,9 @@ import urllib.request
 
 # ---- config: loaded from ~/workspace/telemetry/config.json (written by install.sh) ----
 # {"agent": "boboe2", "receiver_url": "http://RECEIVER_IP:8787/ingest"}
-INTERVAL = 30             # seconds between pushes
+INTERVAL = 15             # seconds between routine pushes (base cadence)
+POLL_TICK = 2          # seconds between cheap activity checks
+CHANGE_DEBOUNCE = 5    # min seconds between change-triggered pushes
 # ----------------------------------------------------------------------------------
 
 HOME = os.path.expanduser("~")
@@ -360,6 +362,48 @@ def crons():
         return []
 
 
+def _fetch_entries():
+    """Raw entries from the agent activity feed socket (read-only).
+
+    Same feed behind the app's sidebar and status indicators. Documented,
+    sanctioned read path: ~/subscriptions/activity_feed/subscription.md.
+    Raises on failure; callers handle it.
+    """
+    sock_path = os.environ.get("JARVIS_SANDBOX_API_SOCK",
+                               "/run/hatch/sandbox-api/api.sock")
+    import socket as _socket
+    s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    s.settimeout(5)
+    s.connect(sock_path)
+    s.sendall(b"GET /activity/recent?limit=8 HTTP/1.0\r\n"
+              b"Host: localhost\r\n\r\n")
+    raw = b""
+    while True:
+        chunk = s.recv(65536)
+        if not chunk:
+            break
+        raw += chunk
+    s.close()
+    body = raw.split(b"\r\n\r\n", 1)[1]
+    return json.loads(body).get("result", {}).get("entries", [])
+
+
+def peek_activity():
+    """Cheap check: current activity status string only, for change detection.
+
+    Same socket as activity() but minimal parse -- safe to call every few
+    seconds. Returns None when idle or on any failure (failures never count
+    as a "change", to avoid churn).
+    """
+    try:
+        for e in _fetch_entries():
+            if e.get("status") == "pending":
+                return e.get("status_title") or e.get("title")
+    except Exception:
+        pass
+    return None
+
+
 def activity():
     """Read the agent activity feed from the daemon sandbox API (read-only).
 
@@ -368,24 +412,8 @@ def activity():
     ~/subscriptions/activity_feed/subscription.md. No auth needed -- the socket
     is world-accessible by design for sandboxed agents.
     """
-    sock_path = os.environ.get("JARVIS_SANDBOX_API_SOCK",
-                               "/run/hatch/sandbox-api/api.sock")
     try:
-        import socket as _socket
-        s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-        s.settimeout(5)
-        s.connect(sock_path)
-        s.sendall(b"GET /activity/recent?limit=8 HTTP/1.0\r\n"
-                  b"Host: localhost\r\n\r\n")
-        raw = b""
-        while True:
-            chunk = s.recv(65536)
-            if not chunk:
-                break
-            raw += chunk
-        s.close()
-        body = raw.split(b"\r\n\r\n", 1)[1]
-        entries = json.loads(body).get("result", {}).get("entries", [])
+        entries = _fetch_entries()
         current = None
         for e in entries:
             if e.get("status") == "pending":
@@ -493,7 +521,7 @@ def build_payload(token_note_replaced=False):
     now = time.time()
     return {
         "agent": AGENT,
-        "daemon": 4,              # payload version; dashboard flags older ones
+        "daemon": 5,              # payload version; dashboard flags older ones
         "ts": now,
         "boot_id": bid,
         "vm_replaced": vm_replaced,
@@ -625,26 +653,42 @@ def main():
     if not os.path.exists(STATUS_FILE):
         with open(STATUS_FILE, "w") as f:
             json.dump({"state": "idle", "task": "", "since": time.time()}, f)
+    last_push = 0.0
+    last_activity = None
     while True:
         try:
-            interval, bursting = burst_state(time.time())
-            payload = build_payload()
-            payload["burst"] = bursting
-            try:
-                ok, cmd = post(op, token, payload)
-                if ok:
-                    handle_cmd(cmd, time.time())
-                    send_fetches(op, token, cmd.get("fetch") if isinstance(cmd, dict) else None)
-                    flush_spool(op, token)
-                else:
+            now = time.time()
+            interval, bursting = burst_state(now)
+            # Cheap 2s tick: only the activity string. A full (expensive)
+            # payload goes out on schedule, in burst mode, or immediately
+            # when the activity changes (debounced) -- so the dashboard's
+            # live status reacts in seconds, not on the next heartbeat.
+            # Commands from the receiver still ride the next push's reply:
+            # worst-case latency is now one 15s interval, not 30s.
+            cur = peek_activity()
+            changed = cur is not None and cur != last_activity
+            if cur is not None:
+                last_activity = cur
+            due = (now - last_push) >= interval
+            fresh_change = changed and (now - last_push) >= CHANGE_DEBOUNCE
+            if due or fresh_change:
+                payload = build_payload()
+                payload["burst"] = bursting
+                try:
+                    ok, cmd = post(op, token, payload)
+                    if ok:
+                        handle_cmd(cmd, time.time())
+                        send_fetches(op, token, cmd.get("fetch") if isinstance(cmd, dict) else None)
+                        flush_spool(op, token)
+                    else:
+                        spool(payload)
+                except Exception as e:
+                    log("post failed: %s" % e)
                     spool(payload)
-            except Exception as e:
-                log("post failed: %s" % e)
-                spool(payload)
+                last_push = time.time()
         except Exception as e:
             log("cycle failed: %s" % e)
-        interval, _ = burst_state(time.time())
-        time.sleep(interval)
+        time.sleep(POLL_TICK)
 
 
 if __name__ == "__main__":
