@@ -1,9 +1,18 @@
 # Fleet Telemetry
 
-Live status dashboard for the Boboe agent fleet (Boboe 1–6). Each agent's VM
-pushes a JSON heartbeat every 30 seconds to the receiver; the dashboard shows
-live app activity, observed working state, processes, files, cron health, and
-per-agent detail views — all read-only.
+Live status dashboard for Jack Wilber's fleet of six personal AI agents
+(Boboe 1–6). Jack wanted a single screen on his Mac showing what every agent
+is doing *right now* — not a manually-updated status board, but live,
+app-derived state: what each agent's app is actually doing, whether it looks
+genuinely busy, plus the usual machine vitals.
+
+How it works: each agent VM runs a small Python daemon (`telemetryd.py`) that
+pushes a JSON heartbeat to a receiver on Jack's Mac every 30 seconds. The
+receiver (`fleet_receiver.py`) stores the heartbeats and serves a dashboard
+with clickable agent cards. Each card opens a read-only detail view: recent
+app activity, status timeline, full process list, searchable file browser, and
+cron history. There are no remote controls — the dashboard is strictly
+read-only, by Jack's choice.
 
 ```
 fleet-telemetry/
@@ -15,35 +24,93 @@ fleet-telemetry/
     └── fleet_setup_prompt.md
 ```
 
-## Orchestrator (Mac)
+## About Boboe 2 (the agent who built this)
+
+Boboe 2 is one of Jack's six Muse agents (built by Meta, powered by Muse
+Spark). It participates in the `agentnet` Slack swarm alongside Boboe 1–6 and
+Darragh Buckley's Income Project agents, coordinating in `#all-agentnet`.
+
+In this project Boboe 2 is the builder and maintainer: it wrote the daemon,
+the receiver, and the dashboard, runs the agent-side daemon on its own VM
+(dogfooding the system), and keeps this repo current. If you're an AI agent
+reading this to work on the project: the daemon code is the agent-side source
+of truth, the receiver is the orchestrator-side source of truth, and changes
+to either should be tested (there are notes on how below) before pushing.
+
+## Agent VM specs (Boboe 2's computer)
+
+The agent side runs on a lightweight Linux VM in shared infrastructure:
+
+- **OS:** Ubuntu 24.04 LTS, running as a `systemd-nspawn` container
+- **CPU:** 2 vCPUs visible
+- **Memory:** ~8 GB host-visible, but the container is shared — Boboe 2's own
+  processes use roughly 0.5 GB (the `hatch` runtime dominates at ~430 MB)
+- **Disk:** 100 GB home filesystem (`/home/hatch`), nearly all free
+- **GPU:** none
+- **Network:** Tailscale client only — the VM can make *outbound* TCP
+  connections through the runtime's tunnel proxy, but cannot accept inbound
+  connections. This is why telemetry is push-based: agents push out, the
+  receiver never connects in.
+- **Init:** system-level systemd works; the user systemd bus does not, so the
+  daemon runs as a system service.
+- **Durability:** `/home/hatch` (especially `~/workspace` and `~/memory`)
+  survives VM restarts and replacements. `/tmp` and system paths like `/etc`
+  do not — the watchdog cron reinstalls the daemon after a replacement.
+
+Keep the daemon light: a heartbeat currently costs ~26 ms to build and
+~12 KB on the wire. Don't add heavy collectors without thinking about the
+30-second cadence.
+
+## Orchestrator setup (Jack's Mac)
 
 1. Put the shared secret in `token.txt` next to `fleet_receiver.py`
-   (same secret every agent uses; never commit this file).
+   (same secret every agent uses; **never commit this file**).
 2. Run: `python3 orchestrator/fleet_receiver.py`
 3. Open `http://<mac-tailscale-ip>:8787`
 
-The dashboard auto-refreshes every 10s. Click any agent card for the detail
-view: recent app activity, status timeline, full process list, searchable file
-browser, and cron history.
+The dashboard auto-refreshes every 10s. The receiver binds to the Mac's
+Tailscale IP only.
 
-**Live tail:** the detail view has a "Live tail" button. It asks that agent to
-push every 2 seconds for 2 minutes (auto-stops). The daemon enforces hard caps
-(≥2s interval, ≤5min) no matter what the receiver requests.
+## Agent onboarding
 
-## Agents (Boboe VMs)
+Each agent installs the daemon using the one-shot prompt in
+`agents/fleet_setup_prompt.md` — Jack fills in the receiver IP and token
+before pasting it to the agent. The prompt covers the Tailscale join (Jack
+approves each one), the daemon install, and the watchdog cron.
 
-Each agent installs the daemon with the one-shot prompt in
-`agents/fleet_setup_prompt.md` (Jack fills in the receiver IP and token before
-pasting). The daemon:
+The daemon reports:
 
-- pushes CPU / memory / disk / process list / file inventory every 30s
-- reports the app's live activity feed as its primary status
-- heuristically detects working state (recent file changes, CPU, browser)
-- survives VM replacement via a watchdog cron that reinstalls it
-- spools failed pushes locally and flushes on recovery
+- CPU / memory / disk and the full process list
+- file inventory (paths + sizes, up to 500 entries)
+- the app's live activity feed as its primary status headline
+  (read via the sanctioned local API — see `telemetryd.py`)
+- heuristic working-state detection (recent file changes, CPU, browser)
+- cron health via a heartbeat file the watch jobs update
+
+Failed pushes spool to disk locally and flush on recovery.
+
+## Live tail
+
+The detail view has a "▶ Live tail" button for on-demand high-frequency
+monitoring. It tells the receiver to include a burst command in its reply to
+that agent's next heartbeat; the agent then pushes every 2 seconds for
+2 minutes, then falls back to 30s automatically. Safety is enforced in the
+daemon, not the receiver: it will never push faster than every 2s or burst
+longer than 5 minutes, no matter what it's told. The dashboard shows a
+pulsing "live" badge and countdown while a tail is active.
+
+## Testing changes
+
+- Daemon logic (burst caps, payload building): run the unit tests noted in
+  `agents/telemetryd.py` — hostile inputs (interval 0, huge durations,
+  garbage) must not change behavior.
+- Receiver + dashboard JS: exercise the endpoints and the modal render path
+  against a local test instance before pushing; the dashboard JS has no
+  build step, so a ReferenceError ships straight to Jack's browser.
 
 ## Security notes
 
-- `token.txt` (orchestrator) and `~/.token` (agents) are never committed.
-- The dashboard is read-only: no remote controls.
+- `token.txt` (orchestrator) and agent `~/.token` files are never committed.
+- The dashboard is read-only: no remote controls, no command channel back to
+  agents except the burst-frequency hint described above.
 - Agents push outbound only; the VMs accept no inbound connections.
