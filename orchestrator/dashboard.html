@@ -225,7 +225,14 @@ main{padding:24px}
 .act-sub{margin-top:2px;font-size:12px;color:var(--ink-3);overflow-wrap:anywhere}
 .act-time{font-size:12px;color:var(--ink-3);white-space:nowrap;text-align:right}
 .act-type{display:block;font-size:12px;color:var(--ink-3)}
-.s-success{color:var(--work)} .s-error{color:var(--down)} .s-pending{color:var(--live)}
+.s-success{color:var(--work)} .s-error{color:var(--down)} .s-pending{color:var(--live)} .s-slack{color:var(--ink-3)}
+.slk summary{cursor:pointer;font-weight:500;color:var(--ink-2)}
+.sent-text{color:var(--ink-2);white-space:pre-wrap;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.slk-list{list-style:none;margin:8px 0 0;padding:0}
+.slk-list li{padding:8px 0;border-top:1px solid var(--line);font-size:13px}
+.slk-list .slk-meta{display:flex;gap:8px;align-items:baseline;font-size:12px;color:var(--ink-3)}
+.slk-list b{color:var(--ink-2);font-weight:600}
+.slk-list p{margin-top:2px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2)}
 .recent{list-style:none;margin:0;padding:0}
 .recent a{display:grid;grid-template-columns:16px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--line);color:var(--ink-2)}
 .recent li:first-child a{border-top:0}
@@ -383,6 +390,7 @@ const I = {
   ok: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="m5.5 8.25 1.75 1.75 3.25-3.5"/></svg>'),
   err: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="m6 6 4 4m0-4-4 4"/></svg>'),
   pending: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 4.75V8l2 1.5"/></svg>'),
+  chat: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.75 3.25h10.5v7.5H7.5l-3 2.5v-2.5H2.75z"/></svg>'),
 };
 
 // ---------- state ----------
@@ -390,6 +398,7 @@ const S = {
   fleet: {}, order: [], detail: null, ok: null, lastOk: 0, skew: 0,
   q: "", fq: "", procSort: "mem", fileSort: { key: "name", dir: 1 },
   tailBusy: false, tailErr: null, flash: null, viewer: null, route: parseRoute(), key: "",
+  openSlk: new Set(),   // Slack groups Jack expanded (kept open across re-renders)
 };
 const $ = s => document.querySelector(s);
 const nowS = () => Date.now() / 1000 + S.skew;   // receiver clock
@@ -688,6 +697,8 @@ function tabBody(a, r) {
   return overviewTab(a);
 }
 
+const every15 = () => html`<p class="tip" style="margin-top:10px"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 7.25v4M8 5v.01"/></svg>
+  CPU, memory, processes and files update every 15 seconds. What the AI is doing updates within a few seconds.</p>`;
 function overviewTab(a) {
   const p = a.latest || {}, hist = a.history || [], t1 = nowS(), t0 = hist.length ? hist[0].ts : t1;
   const cpu = cpuSeries(a), cores = (p.cpu || {}).count;
@@ -696,7 +707,7 @@ function overviewTab(a) {
       ${chartPanel("ov-cpu", cpuLabel(p) === "CPU" ? "CPU" : `Load · ${plural(cores || 1, "core")}`, cpu, fmtPct, { max: Math.max(5, ...cpu.map(x => x[1] || 0)) * 1.25 })}
       ${chartPanel("ov-mem", "Memory · all processes", hist.map(h => [h.ts, h.mem]), fmtMB)}
       ${diskPanel(p.disk || {})}
-    </div>
+    </div>${every15()}
     <section class="sec"><div class="sec-head"><h2>Status</h2><span class="sec-sub">From the app’s activity feed · background jobs and file changes don’t count · last ${dur(t1 - t0)}</span></div>
       <div class="panel">${hist.length ? html`${strip(rs, t0, t1)}${runList(rs, 6)}` : html`<p class="empty">No history yet.</p>`}</div>
       <p class="note"><a class="lnk" href="${hrefM(a.name, "activity")}">Full status history</a></p>
@@ -748,31 +759,83 @@ function recentFiles(a) {
   })}</ul>`;
 }
 const actEmpty = p => (p.activity || {}).error ? `Couldn’t read the app’s activity feed on this machine (${(p.activity || {}).error}).` : "The app hasn’t reported any activity yet.";
-const actList = entries => html`<ul class="acts">${entries.map(e => {
+const actList = entries => html`<ul class="acts">${entries.map(actRow)}</ul>`;
+function actRow(e) {
   const ts = isoTs(e.timestamp), st = e.status === "success" ? "success" : e.status === "error" ? "error" : "pending";
   return html`<li class="act"><span class="s-${st}" title="${e.status || ""}">${st === "success" ? I.ok : st === "error" ? I.err : I.pending}</span>
     <div><p class="act-title">${clean(e.status_title || e.title)}</p>${e.subtitle ? html`<p class="act-sub">${clean(e.subtitle)}</p>` : ""}</div>
     <div class="act-time">${ts ? agoEl(ts) : ""}<span class="act-type">${String(e.activity_type || "").replace(/_/g, " ")}</span></div></li>`;
-})}</ul>`;
+}
 
 // every feed item the receiver has kept (falls back to the latest few)
 const feedOf = a => (a.feed && a.feed.length ? a.feed : ((a.latest || {}).activity || {}).entries) || [];
-// group feed items by local day, newest first
-function feedByDay(entries) {
+// Slack text arrives in Slack's markup: <@U123>, <url|label>, &lt; &gt; &amp;
+const slackName = (sl, id) => (sl.users || {})[id] || id || "unknown";
+const slackText = (sl, t) => String(t || "")
+  .replace(/<@([A-Z0-9]+)>/g, (_, id) => "@" + slackName(sl, id))
+  .replace(/<#[A-Z0-9]+\|([^>]+)>/g, "#$1")
+  .replace(/<(https?:[^|>]+)\|([^>]+)>/g, "$2").replace(/<(https?:[^>]+)>/g, "$1")
+  .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+// The AI's actions plus the Slack messages around them, newest first. Messages
+// between two actions fold into one row; only messages since the oldest kept
+// action are shown, so both sides cover the same stretch of time.
+function timeline(a) {
+  const acts = feedOf(a).map(e => ({ ts: isoTs(e.timestamp) || 0, e }));
+  const since = acts.length ? acts[acts.length - 1].ts : nowS() - 86400;
+  const msgs = ((a.slack || {}).messages || []).filter(m => +m.ts >= since).map(m => ({ ts: +m.ts, m }));
+  // messages Jack's Mac handed to this agent (it was named, or it's their thread)
+  const sent = new Map((a.delivered || []).concat(a.queued || []).map(d => [d.channel_id + "|" + d.ts, d]));
+  // this agent's own posts ("Boboe 2" in Slack is boboe2 here)
+  const users = (a.slack || {}).users || {}, mine = m => String(users[m.user] || "").toLowerCase().replace(/\s+/g, "") === a.name;
+  const out = [];
+  for (const it of acts.concat(msgs).sort((x, y) => y.ts - x.ts)) {
+    const last = out[out.length - 1], d = it.m && sent.get(it.m.ch + "|" + it.m.ts);
+    if (d) out.push({ ts: it.ts, sent: it.m, d });
+    else if (it.m && mine(it.m)) out.push({ ts: it.ts, own: it.m });
+    else if (it.m && last && last.slack) last.slack.unshift(it.m);
+    else out.push(it.m ? { ts: it.ts, slack: [it.m] } : it);
+  }
+  return out;
+}
+// group timeline rows by local day, newest first
+function byDay(rows) {
   const days = [];
-  for (const e of entries) {
-    const ts = isoTs(e.timestamp), day = ts ? new Date(ts * 1000).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }) : "Unknown date";
+  for (const r of rows) {
+    const day = r.ts ? new Date(r.ts * 1000).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }) : "Unknown date";
     if (!days.length || days[days.length - 1][0] !== day) days.push([day, []]);
-    days[days.length - 1][1].push(e);
+    days[days.length - 1][1].push(r);
   }
   return days;
 }
+function slackRow(a, ms) {
+  const sl = a.slack || {}, id = ms[0].ch + "|" + ms[0].ts, newest = +ms[ms.length - 1].ts;
+  const chans = [...new Set(ms.map(m => "#" + ((sl.channels || {})[m.ch] || m.ch)))].join(", ");
+  return html`<li class="act slk"><span class="s-slack">${I.chat}</span>
+    <details data-slk="${id}"${raw(S.openSlk.has(id) ? " open" : "")}><summary>${plural(ms.length, "Slack message")} in ${chans}</summary>
+      <ul class="slk-list">${ms.map(m => html`<li><div class="slk-meta"><b>${slackName(sl, m.user)}</b><span>${clock(+m.ts)}</span>${m.thread ? html`<span>in a thread</span>` : ""}</div><p>${slackText(sl, m.text)}</p></li>`)}</ul></details>
+    <div class="act-time">${agoEl(newest)}<span class="act-type">slack</span></div></li>`;
+}
+const WHY = { mentioned: "named", "your thread": "its thread", everyone: "@channel / @here" };
+function sentRow(a, m, d) {
+  const sl = a.slack || {};
+  return html`<li class="act"><span class="s-pending">${I.chat}</span>
+    <div><p class="act-title">${slackName(sl, m.user)} in #${(sl.channels || {})[m.ch] || m.ch}${m.thread ? " · thread" : ""}</p><p class="act-sub sent-text">${slackText(sl, m.text)}</p>
+      <p class="act-sub">${d.delivered ? html`Sent to ${a.name} ${agoEl(d.delivered)} · ${WHY[d.why] || d.why}` : html`Waiting for ${a.name} to pick it up · ${WHY[d.why] || d.why}`}</p></div>
+    <div class="act-time">${agoEl(+m.ts)}<span class="act-type">slack → ${a.name}</span></div></li>`;
+}
+function ownRow(a, m) {
+  const sl = a.slack || {};
+  return html`<li class="act"><span class="s-success">${I.chat}</span>
+    <div><p class="act-title">${a.name} ${m.thread ? "replied in a thread" : "posted"} in #${(sl.channels || {})[m.ch] || m.ch}</p><p class="act-sub sent-text">${slackText(sl, m.text)}</p></div>
+    <div class="act-time">${agoEl(+m.ts)}<span class="act-type">slack</span></div></li>`;
+}
+const timelineList = (a, rows) => html`<ul class="acts">${rows.map(r => r.sent ? sentRow(a, r.sent, r.d) : r.own ? ownRow(a, r.own) : r.slack ? slackRow(a, r.slack) : actRow(r.e))}</ul>`;
 function activityTab(a) {
   const p = a.latest || {}, act = feedOf(a), hist = a.history || [], t1 = nowS();
   const rs = runs(hist, t1);
-  const first = act.length ? isoTs(act[act.length - 1].timestamp) : null;
-  return html`<section class="sec" style="margin-top:0"><div class="sec-head"><h2>Everything the AI did</h2><span class="sec-sub">From the app’s own activity feed · ${plural(act.length, "item")}${first ? ` since ${stamp(first)}` : ""}</span></div>
-      ${act.length ? feedByDay(act).map(([day, es]) => html`<p class="day">${day}</p><div class="panel list">${actList(es)}</div>`) : html`<div class="panel list"><p class="empty">${actEmpty(p)}</p></div>`}</section>
+  const first = act.length ? isoTs(act[act.length - 1].timestamp) : null, rows = timeline(a);
+  return html`<section class="sec" style="margin-top:0"><div class="sec-head"><h2>Everything the AI did</h2><span class="sec-sub">From the app’s own activity feed, with the Slack messages around it · ${plural(act.length, "action")}${first ? ` since ${stamp(first)}` : ""}</span></div>
+      ${rows.length ? byDay(rows).map(([day, rs]) => html`<p class="day">${day}</p><div class="panel list">${timelineList(a, rs)}</div>`) : html`<div class="panel list"><p class="empty">${actEmpty(p)}</p></div>`}</section>
     <section class="sec"><div class="sec-head"><h2>Status history</h2><span class="sec-sub">${hist.length ? `Since ${clock(hist[0].ts)}` : ""}</span></div>
       <div class="panel">${hist.length ? html`${strip(rs, hist[0].ts, t1)}${runList(rs, 200)}` : html`<p class="empty">No history yet.</p>`}</div></section>
 `;
@@ -792,7 +855,7 @@ function processesTab(a) {
   return html`<div class="grid-2" style="gap:12px">
       ${chartPanel("pr-cpu", hasCpu ? "CPU · whole machine" : "Load", cpu, fmtPct, { max: Math.max(5, ...cpu.map(x => x[1] || 0)) * 1.25 })}
       ${chartPanel("pr-mem", "Memory · all processes", hist.map(h => [h.ts, h.mem]), fmtMB)}
-    </div>
+    </div>${every15()}
     <section class="sec"><div class="sec-head"><h2>${plural(rows.length, "process")}</h2><span class="sec-sub">Inside this machine’s container · trend is the last hour of memory</span></div>
       <div class="panel" style="padding:0 4px">${rows.length ? html`<table class="pt">
         <thead><tr>${th("name", "Name", "")}<th class="c-pid">PID</th>${hasCpu ? th("cpu", "CPU", "c-cpu") : html`<th class="c-cpu">CPU</th>`}${th("mem", "Memory", "c-mem")}<th class="c-trend">Trend</th></tr></thead>
@@ -1023,6 +1086,10 @@ $("#theme").addEventListener("click", () => {
   syncThemeButton();
 });
 syncThemeButton();
+document.addEventListener("toggle", e => {
+  const id = e.target.dataset && e.target.dataset.slk;
+  if (id) e.target.open ? S.openSlk.add(id) : S.openSlk.delete(id);
+}, true);
 document.addEventListener("click", e => {
   const fl = e.target.closest("[data-flash]");
   if (fl) { S.flash = fl.dataset.flash; S.fq = ""; setTimeout(() => { S.flash = null; render(); }, 2400); }

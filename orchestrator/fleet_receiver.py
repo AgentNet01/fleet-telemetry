@@ -18,10 +18,13 @@ Endpoints:
   POST /ingest              agents push heartbeats here (X-Agent-Token)
   POST /api/burst           dashboard asks an agent for live tail (X-Token)
   GET  /api/agents          fleet summary (light; polled by the wall view)
-  GET  /api/agents/<name>   one machine in full (detail view)
+  GET  /api/agents/<name>   one machine in full (detail view), incl. the last
+                            7 days of Slack messages (slack_reader.py)
   POST /api/fetch           dashboard asks a machine for one file (X-Token)
   POST /upload              agent sends that file back (X-Agent-Token)
   GET  /api/fetch/<id>      request status;  GET /api/file/<id>  the file
+  GET  /api/wait?agent=&after=  an agent's open line: returns items queued for
+                            it (held up to 25s when none) (X-Agent-Token)
 
 Payload schema each agent sends (daemon v8; all read passively, nothing
 agent-written; older daemons may lack the * fields or add self-reports,
@@ -52,7 +55,9 @@ import shutil
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
+
+import slack_reader
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -85,6 +90,11 @@ FILE_CACHE = os.path.join(HERE, "file_cache")   # files Jack opened (cleared on 
 UPLOAD_MAX = 10 * 1024 * 1024
 MAX_FETCHES = 50       # older viewed files are deleted from the cache
 
+MAILBOX_FILE = os.path.join(HERE, "mailbox.json")
+HOLD = 25              # seconds an agent's /api/wait is held open when nothing is queued
+MAX_QUEUE = 500        # undelivered items kept per agent
+MAX_DELIVERED = 300    # delivery records kept per agent (shown on the dashboard)
+
 store = {}   # agent -> {"latest","history","cron_history","first_seen","last_seen"}
 bursts = {}  # agent -> epoch until which fast pushes were requested (live tail)
 fetches = {}  # id -> {"agent","path","ts","status","error","size"} (file viewing)
@@ -114,6 +124,64 @@ def save(force=False):
         json.dump(store, f)
     os.replace(tmp, DATA_FILE)
     _last_save = now
+
+
+# ---- mailbox: what this Mac sends each agent ----
+# Agents can't be called, so each keeps a request open (/api/wait). Items get
+# increasing ids; an agent asking for "after N" has stored everything up to N,
+# which is when an item counts as delivered.
+mail = {"next": 1, "queue": {}, "delivered": {}}
+mail_cv = threading.Condition()
+
+
+def mail_load():
+    try:
+        with open(MAILBOX_FILE) as f:
+            mail.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+
+
+def mail_save():
+    """Caller holds mail_cv."""
+    tmp = MAILBOX_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(mail, f)
+    os.replace(tmp, MAILBOX_FILE)
+
+
+def deliver(agent, item):
+    """Queue one item for an agent and wake its open /api/wait."""
+    with mail_cv:
+        q = mail["queue"].setdefault(agent, [])
+        q.append(dict(item, id=mail["next"], queued=time.time()))
+        mail["next"] += 1
+        del q[:-MAX_QUEUE]
+        mail_save()
+        mail_cv.notify_all()
+
+
+def mail_wait(agent, after):
+    """Ack everything up to `after`, then return newer items, waiting up to HOLD."""
+    deadline = time.time() + HOLD
+    with mail_cv:
+        if after >= mail["next"]:
+            after = 0   # the agent's cursor predates a lost mailbox file
+        q = mail["queue"].get(agent, [])
+        done = [i for i in q if i["id"] <= after]
+        if done:
+            now = time.time()
+            mail["queue"][agent] = [i for i in q if i["id"] > after]
+            log = mail["delivered"].setdefault(agent, [])
+            log.extend(dict(i, delivered=now) for i in done)
+            del log[:-MAX_DELIVERED]
+            mail_save()
+        while True:
+            items = [i for i in mail["queue"].get(agent, []) if i["id"] > after]
+            left = deadline - time.time()
+            if items or left <= 0:
+                return after, items[:50]
+            mail_cv.wait(left)
 
 
 def history_point(now, payload):
@@ -312,12 +380,28 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == "/api/wait":
+            if not hmac.compare_digest(self.headers.get("X-Agent-Token", ""), TOKEN):
+                return self._send(403, '{"error":"bad token"}')
+            q = parse_qs(urlsplit(self.path).query)
+            agent = (q.get("agent") or [""])[0]
+            try:
+                after = int((q.get("after") or ["0"])[0])
+            except ValueError:
+                return self._send(400, '{"error":"bad after"}')
+            if not agent:
+                return self._send(400, '{"error":"agent required"}')
+            after, items = mail_wait(agent, after)
+            return self._send(200, json.dumps({"after": after, "items": items}))
         if path == "/api/agents":
             with lock:
                 out = [summary(a, r) for a, r in store.items()]
             return self._send(200, json.dumps({"now": time.time(), "agents": out}))
         if path.startswith("/api/agents/"):
             name = unquote(path[len("/api/agents/"):])
+            # every agent watches the same channels today; per-agent channel
+            # lists come when that stops being true
+            slack = slack_reader.messages_since(time.time() - 7 * 86400)
             with lock:
                 r = store.get(name)
                 out = r and {"name": name, "latest": r.get("latest"),
@@ -328,6 +412,11 @@ class Handler(BaseHTTPRequestHandler):
                              "cron_history": r.get("cron_history", []),
                              "feed": sorted((r.get("feed") or {}).values(),
                                             key=lambda e: e["timestamp"], reverse=True)}
+                if out:
+                    out["slack"] = slack
+                    with mail_cv:
+                        out["delivered"] = mail["delivered"].get(name, [])[-MAX_DELIVERED:]
+                        out["queued"] = mail["queue"].get(name, [])
                 body = json.dumps({"now": time.time(), "agent": out})
             return self._send(200 if out else 404, body)
         if path.startswith("/api/fetch/"):
@@ -365,6 +454,9 @@ if __name__ == "__main__":
     shutil.rmtree(FILE_CACHE, ignore_errors=True)
     os.makedirs(FILE_CACHE)
     srv = ThreadingHTTPServer((BIND_IP, PORT), Handler)
+    mail_load()
+    slack_reader.DATA_FILE = os.path.join(HERE, "slack_messages.json")   # beside this receiver's other data
+    print("slack reader: %s" % ("on" if slack_reader.start(deliver) else "off (no SLACK_BOT_TOKEN in .env)"))
     print("fleet receiver listening on http://%s:%d  (dashboard + ingest)" % (BIND_IP, PORT))
     print("waiting for agents... (Ctrl-C to stop)")
     try:

@@ -1,0 +1,31 @@
+"""Who gets woken for a Slack message. Run: python3 orchestrator/test_slack_route.py"""
+import slack_reader as s
+
+sent = []
+s._deliver = lambda agent, item: sent.append((agent, item["why"], item["ts"]))
+s.state.update(users={"U1": "Boboe 1", "U10": "Boboe 10", "UP": "Boboe Prime", "UD": "Darragh"},
+               channels={"C": "all-agentnet"}, route_since=100.0,
+               messages={"C|150.0": {"ts": "150.0", "ch": "C", "user": "U10", "thread": None, "text": "starting H26"}})
+
+
+def msg(ts, user, text, thread=None):
+    m = {"ts": ts, "ch": "C", "user": user, "thread": thread, "text": text}
+    s.state["messages"]["C|" + ts] = m
+    return ("C", m)
+
+
+def who(*new):
+    sent.clear()
+    s.route(list(new))
+    return sorted((a, why) for a, why, _ in sent)
+
+
+assert who(msg("200.0", "UD", "dot → Boboe 1: please review")) == [("boboe1", "mentioned")]
+assert who(msg("201.0", "UD", "<@U10> can you check")) == [("boboe10", "mentioned")]
+assert who(msg("202.0", "UD", "boboe prime, status?")) == [("boboeprime", "mentioned")]
+assert who(msg("203.0", "UD", "reply in H26", thread="150.0")) == [("boboe10", "your thread")]
+assert who(msg("204.0", "U10", "done, Boboe 10 here", thread="150.0")) == []          # never the author
+assert who(msg("205.0", "UD", "<!here> standup")) == [("boboe1", "everyone"), ("boboe10", "everyone"), ("boboeprime", "everyone")]
+assert who(msg("50.0", "UD", "Boboe 1 old news")) == []                               # before the reader started
+assert who(msg("206.0", "UD", "unrelated chatter")) == []
+print("ok")
