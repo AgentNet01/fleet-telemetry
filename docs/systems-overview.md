@@ -13,7 +13,7 @@ Jack's accounts. It is not a chatbot window — it is a persistent operator
 that does work on its own, on a schedule, and in conversation.
 
 Each agent has:
-- **A name and identity** (Boboe 1–6), plus service identities (e.g. Boboe 2
+- **A name and identity** (boboe1–11 and boboeprime), plus service identities (e.g. Boboe 2
   is `U0C6TQRHRT8` / `boboe2muse@gmail.com` in the agentnet Slack swarm, and
   the `Boboe2` GitHub user for this repo).
 - **A VM**: Ubuntu 24.04 container, 2 vCPUs, ~100 GB disk, no GPU. Outbound
@@ -49,9 +49,8 @@ its own task, and reports back when done. The parent can:
 - close ones that are no longer needed, or resume interrupted ones.
 
 Example: while answering Jack in chat, a subagent can be researching
-something for 20 minutes in the background. The dashboard's single "current
-status" line can't show both — which is why the telemetry reports active
-subagents separately (see §5).
+something for 20 minutes in the background. Subagents are not readable
+passively from the VM (see §6), so the dashboard can't show them.
 
 Subagents can spawn their own subagents one level down (a coordinator
 pattern), but nesting stops there.
@@ -139,13 +138,13 @@ shows what can be read passively; the agent never writes reports for it.
 
 ## 5. What the telemetry reports (for dashboard builders)
 
-Per 30-second heartbeat, each daemon sends:
+Every 15 seconds (sooner when the activity feed changes), each daemon sends:
 
 | Section | Contents |
 |---|---|
 | `daemon` | payload version (dashboard flags outdated daemons) |
-| `app_status` / `activity` | live status from the app's activity feed + recent entries |
-| `observed` | heuristic working detection (file changes, CPU, browser), daemon's own files excluded |
+| `activity` | the latest 8 activity-feed entries (the receiver keeps every entry it sees, up to 1000 per agent) |
+| `observed` | file changes and CPU, daemon's own files excluded (shown as context; status comes only from `activity`) |
 | `system` | OS, cores, CPU model, host vs container memory, net rx/tx, Tailscale IP |
 | `mem` / `cpu` / `disk` | process list with per-process CPU%, totals |
 | `files` | workspace inventory: paths, sizes, mtimes (names only, never contents) |
@@ -157,3 +156,78 @@ fetch its contents (sandboxed: workspace-only, no hidden/secret files,
 10 MB cap). The **Live tail** button switches that agent to 2-second
 pushes for 2 minutes. Everything is read-only — there are no remote
 controls, by Jack's choice.
+
+## 6. How the agent wakes, and what can be read passively
+
+Confirmed by Boboe 2 and by `agents/probe_sources.sh` (Oct 2026).
+
+**The AI is not a running process on the VM.** It exists as *turns*. Only
+four things start a turn: a chat message from Jack, a cron firing, a hook
+deciding to wake it, or a completion handoff (subagent, browser task, device
+notification). SSH, HTTP or webhooks reach the computer, not the AI.
+
+**The VM** is Linux; the AI is root with a persistent home (`/home/hatch`),
+bash, Chromium, outbound internet and systemd. Each has a Tailscale address
+on Jack's tailnet, but Tailscale runs on the platform host, outside the VM:
+the VM's network namespace has only `lo` and `198.19.0.2` (host0), so it can't
+bind its tailnet IP. Inbound is impossible: a server on `0.0.0.0:8799` was
+refused from Jack's Mac over Tailscale (tested Oct 2026). No firewall in the VM.
+The tailnet IP and name survive VM replacement.
+**`/etc` is wiped on every reboot**, not only on VM replacement, and the
+platform reboots VMs without warning (boboe2: 3 times in about 6 hours on Oct 6). The
+systemd unit and its enable link vanish, so the daemon stays down until the
+15-minute watchdog cron re-runs `install.sh`. `/home/hatch` persists. Anything Jack's side wants to
+send must ride a connection the VM opens. Pushes to
+Jack's Mac go through the runtime's tunnel proxy on `:3130`, which answers
+407 if proxy credentials are sent.
+
+**Connectors (Slack, Gmail, …) run inside the AI's turn, not on the VM.**
+What a connector returned only lands on disk if the AI writes it there, and
+every agent's `slack-watch/` folder uses its own improvised format.
+
+### Documented read-only feeds
+
+All on the sandbox API socket `$JARVIS_SANDBOX_API_SOCK`
+(`/run/hatch/sandbox-api/api.sock`), documented in
+`~/subscriptions/<name>/subscription.md`. Responses are
+`{"ok": true, "result": {...}}`.
+
+| Feed | Endpoint | What it holds |
+|---|---|---|
+| activity_feed | `GET /activity/recent?limit=10` (max 100; filters `is_goal=true\|false`, `activity_type=`) | The sidebar cards: `timestamp`, `activity_type` (email_sent, message_sent, file_created, file_updated, reminder_set, web_search, task_running, goal), `status` (success, error, pending, blocked, stopped), `title`, `status_title`, `subtitle`, optional `task_label`, `message_id` (the chat turn it came from). Outcomes, not tool calls. The newest `pending` entry is the app's "is working" badge. |
+| device_syncs | `GET /device-syncs?source=notifications&limit=20`, `GET /device-syncs/<global_seq>` | Events synced from Jack's devices: `global_seq`, `producer_id`, `source`, `received_at`, `status`, `summary_preview`; single fetch adds `payload`, `payload_representation`. Notification/SMS/iMessage text is redacted. Nothing about the AI itself. |
+| spaces_actions | `GET /spaces-actions?space_slug=<slug>&limit=20`, `?invocation_id=<id>`, `?source_kind=` | Every web-artifact action, whether from a UI tap, a tool call or a cron: `invocation_id`, `space_slug`, `action`, `status`, `invoked_at_ms`, `settled_at_ms`, `source_kind`, `source_ref`, `trigger_ref`, `args_preview`, `result_preview`, `error`. Result key: `invocations`. Web artifacts only. |
+
+### Not readable passively
+
+- Cron jobs and their run history, and subagents: only through the AI's own
+  tools (`cron.runs`, `cron.status`, `subagent.list`).
+- What started a turn (chat, cron or hook), the tool-call stream, the
+  conversation, and what a connector returned.
+
+### What the activity feed can and can't tell you (checked on Boboe 2, 30 entries)
+
+- `message_id` is always set: `activity_thread:<uuid>` for goals, a plain
+  uuid for simple cards. It stays the same while an item goes from pending to
+  done, and the timestamp moves to the finish time, so the receiver keys its
+  history on `message_id` (daemon v9 and later send it).
+- Nothing says whether an item came from chat, a cron or a hook. Chat and
+  background work look identical.
+- A cron run only shows up if it does something that makes a card (sends a
+  message or email, creates a file through the file tools, searches the web).
+  A quiet Slack-watch tick leaves no trace in the feed.
+
+### Credentials and hooks (per Boboe 2, Oct 2026)
+
+- **Only the AI, inside a turn, can use a connector.** The `slack` CLI
+  (`/opt/hatch/bin/slack`) gets its credential injected into the AI's turn;
+  there is no token on disk or in env. Hook scripts, systemd services and any
+  other plain process run without secrets or connector credentials.
+- **Hooks** wake the AI from code. Script: `~/hooks/scripts/<name>.sh`, sources
+  `$HATCH_HOOK_RUNTIME` (`~/hooks/runtime/hatch_hook_runtime.sh`) and ends each
+  run with exactly one `silent "reason"` or `wake "reason" '{payload}'`.
+  Definition (id, script, prompt, interval: default 60s, min 5s, delivery chat)
+  is registered with the `hooks.add` tool, not a file. Lifecycle: add (disabled)
+  → `dry_run` → `enable`. State goes in `~/hooks/state/`, and every run appends to a
+  JSONL log (read with `hooks.logs`). `wake` starts a worker turn that decides
+  whether to notify the main agent.
