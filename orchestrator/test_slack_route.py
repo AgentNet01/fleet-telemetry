@@ -26,6 +26,13 @@ assert who(msg("202.0", "UD", "boboe prime, status?")) == [("boboeprime", "menti
 assert who(msg("203.0", "UD", "reply in H26", thread="150.0")) == [("boboe10", "your thread")]
 assert who(msg("204.0", "U10", "done, Boboe 10 here", thread="150.0")) == []          # never the author
 assert who(msg("205.0", "UD", "<!here> standup")) == [("boboe1", "everyone"), ("boboe10", "everyone"), ("boboeprime", "everyone")]
+assert who(msg("207.0", "UD", "@channel", thread="150.0")) == [("boboe1", "everyone"), ("boboe10", "everyone"), ("boboeprime", "everyone")]  # typed, not <!channel>
+assert who(msg("208.0", "UD", "email me@channel.com")) == []
 assert who(msg("50.0", "UD", "Boboe 1 old news")) == []                               # before the reader started
 assert who(msg("206.0", "UD", "unrelated chatter")) == []
+# a thread message carries the thread so far: the original post, then earlier replies
+sent.clear(); full = []
+s._deliver = lambda agent, item: full.append(item)
+s.route([msg("209.0", "UD", "Boboe 10 thoughts?", thread="150.0")])
+assert [x["text"] for x in full[0]["thread"]][:2] == ["starting H26", "reply in H26"]
 print("ok")

@@ -26,12 +26,13 @@ THREAD_EVERY = 60    # seconds between thread sweeps
 THREAD_DAYS = 3      # threads with a reply this recent are watched
 KEEP_DAYS = 30       # messages older than this are dropped
 FIRST_DAYS = 3       # how far back to read on the very first run
+THREAD_CONTEXT = 20  # earlier replies sent with a thread message (plus the original post)
 
 lock = threading.Lock()
 state = {"messages": {}, "cursor": {}, "threads": {}, "users": {}, "channels": {}}
 _deliver = None   # fleet_receiver.deliver(agent, item), set by start()
 AGENT_NAME = re.compile(r"^boboe ?(\d+|prime)$", re.I)
-EVERYONE = ("<!channel>", "<!here>", "<!everyone>")
+EVERYONE = re.compile(r"<!(channel|here|everyone)\b|(^|\s)@(channel|here|everyone)\b")
 
 
 def token():
@@ -114,6 +115,7 @@ def route(new):
         who = agents()
         since = state.get("route_since", 0)
         chans = dict(state["channels"])
+        names = dict(state["users"])
         threads = {}
         for m in state["messages"].values():
             if m["user"] in who:
@@ -127,17 +129,27 @@ def route(new):
             num = agent[len("boboe"):]
             if "<@%s>" % uid.lower() in text or re.search(r"\bboboe ?%s\b" % num, text):
                 targets[agent] = "mentioned"
-        if any(e in text for e in EVERYONE):
+        if EVERYONE.search(text):
             for agent in who.values():
                 targets.setdefault(agent, "everyone")
         for agent in threads.get((ch, m["thread"] or m["ts"]), ()):
             targets.setdefault(agent, "your thread")
         targets.pop(who.get(m["user"]), None)
+        item = {"kind": "slack", "channel": chans.get(ch, ch), "channel_id": ch, "ts": m["ts"],
+                "thread_ts": m["thread"], "user": m["user"], "user_name": names.get(m["user"], m["user"]),
+                "text": m["text"]}
+        if m["thread"]:
+            # the thread so far, so the agent has the context without fetching it
+            with lock:
+                earlier = sorted((x for x in state["messages"].values() if x["ch"] == ch
+                                  and (x["ts"] == m["thread"] or x["thread"] == m["thread"])
+                                  and float(x["ts"]) < float(m["ts"])), key=lambda x: float(x["ts"]))
+            keep_ = earlier[:1] + earlier[1:][-THREAD_CONTEXT:]
+            item["thread"] = [{"user_name": names.get(x["user"], x["user"]), "ts": x["ts"],
+                               "text": x["text"][:1500]} for x in keep_]
+            item["thread_skipped"] = len(earlier) - len(keep_)
         for agent, why in targets.items():
-            _deliver(agent, {"kind": "slack", "why": why, "channel": chans.get(ch, ch),
-                             "channel_id": ch, "ts": m["ts"], "thread_ts": m["thread"],
-                             "user": m["user"], "user_name": state["users"].get(m["user"], m["user"]),
-                             "text": m["text"]})
+            _deliver(agent, dict(item, why=why))
 
 
 def refresh_names(tok):

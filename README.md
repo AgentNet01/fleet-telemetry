@@ -115,12 +115,8 @@ Failed pushes spool to disk locally and flush on recovery.
 Reboots wipe `/etc`, which removes the daemon's systemd unit. A Muse hook brings
 it back within a minute, with no AI turn unless the reinstall fails:
 
-```bash
-mkdir -p ~/hooks/scripts
-cp ~/fleet-telemetry/agents/watchdog_hook.sh ~/hooks/scripts/telemetry-watchdog.sh
-```
-
-Then register it with `hooks.add` (id `telemetry-watchdog`, that script, 60s
+`agents/install.sh` copies the script to `~/hooks/scripts/telemetry-watchdog.sh`.
+Register it once with `hooks.add` (id `telemetry-watchdog`, that script, 60s
 interval, prompt as in the script header), `dry_run` it, and `enable` it. Once
 it has been running fine, remove the old 15-minute watchdog cron, which spends
 an AI turn on every tick.
@@ -133,12 +129,8 @@ or it's a thread the agent has posted in. The daemon (v10+) keeps a line open
 to the receiver, so those land in `~/inbox/slack/` within a second. A hook wakes
 the agent with them; with nothing new it stays silent and costs no AI turn.
 
-```bash
-mkdir -p ~/hooks/scripts
-cp ~/fleet-telemetry/agents/slack_hook.sh ~/hooks/scripts/slack-inbox.sh
-```
-
-Then `hooks.add` (id `slack-inbox`, that script, 15s interval, prompt as in the
+`agents/install.sh` copies the script to `~/hooks/scripts/slack-inbox.sh` (and
+keeps it current on every upgrade). Registering it is a one-time `hooks.add` (id `slack-inbox`, that script, 15s interval, prompt as in the
 script header), `dry_run`, `enable`. Once it works, turn off the old Slack-watch
 cron.
 

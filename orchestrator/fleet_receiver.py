@@ -221,7 +221,10 @@ def merge_feed(rec, entries):
     feed = rec.setdefault("feed", {})
     for e in entries:
         if isinstance(e, dict) and e.get("timestamp"):
-            key = e.get("message_id") or "%s|%s|%s" % (e.get("timestamp"), e.get("activity_type"), e.get("title"))
+            old = "%s|%s|%s" % (e.get("timestamp"), e.get("activity_type"), e.get("title"))
+            key = e.get("message_id") or old
+            if key != old:
+                feed.pop(old, None)   # same item stored by a pre-v9 daemon
             feed[key] = {k: e.get(k) for k in ("timestamp", "activity_type", "status", "title",
                                                "status_title", "subtitle", "task_label", "message_id")}
     if len(feed) > MAX_FEED:
