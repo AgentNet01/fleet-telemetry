@@ -79,6 +79,7 @@ DASHBOARD_FILE = os.path.join(HERE, "dashboard.html")
 MAX_HISTORY = 360      # heartbeats kept per agent (~3h at 30s; less in live tail)
 SUMMARY_HISTORY = 60   # points per agent in the fleet summary (sparklines)
 MAX_CRON_HISTORY = 100
+MAX_FEED = 1000       # activity-feed items kept per agent (the AI's own record of its work)
 SAVE_EVERY = 10        # seconds; caps disk writes as the fleet grows
 FILE_CACHE = os.path.join(HERE, "file_cache")   # files Jack opened (cleared on start)
 UPLOAD_MAX = 10 * 1024 * 1024
@@ -139,6 +140,23 @@ def history_point(now, payload):
             "load": (payload.get("cpu") or {}).get("load1"),
             "mem": round(sum(v[0] for v in by_name.values()), 1),
             "procs": {k: [round(v[0], 1), v[1]] for k, v in top}}
+
+
+def merge_feed(rec, entries):
+    """Keep every activity-feed item ever seen. Agents send only their latest
+    few each heartbeat; an item that changes later (pending -> success) is
+    updated in place, keyed by when it started, its type and its title."""
+    if not isinstance(entries, list):
+        return
+    feed = rec.setdefault("feed", {})
+    for e in entries:
+        if isinstance(e, dict) and e.get("timestamp"):
+            key = "%s|%s|%s" % (e.get("timestamp"), e.get("activity_type"), e.get("title"))
+            feed[key] = {k: e.get(k) for k in ("timestamp", "activity_type", "status",
+                                               "title", "status_title", "subtitle")}
+    if len(feed) > MAX_FEED:
+        for k in sorted(feed, key=lambda k: feed[k]["timestamp"])[:-MAX_FEED]:
+            del feed[k]
 
 
 def summary(name, rec):
@@ -207,6 +225,7 @@ class Handler(BaseHTTPRequestHandler):
             rec["last_seen"] = now
             rec["history"].append(history_point(now, payload))
             rec["history"] = rec["history"][-MAX_HISTORY:]
+            merge_feed(rec, (payload.get("activity") or {}).get("entries"))
             crons = payload.get("crons", [])
             last_c = (rec["cron_history"][-1]["crons"]
                       if rec["cron_history"] else None)
@@ -304,7 +323,9 @@ class Handler(BaseHTTPRequestHandler):
                              "first_seen": r.get("first_seen"),
                              "burst_until": bursts.get(name, 0),
                              "history": r.get("history", []),
-                             "cron_history": r.get("cron_history", [])}
+                             "cron_history": r.get("cron_history", []),
+                             "feed": sorted((r.get("feed") or {}).values(),
+                                            key=lambda e: e["timestamp"], reverse=True)}
                 body = json.dumps({"now": time.time(), "agent": out})
             return self._send(200 if out else 404, body)
         if path.startswith("/api/fetch/"):

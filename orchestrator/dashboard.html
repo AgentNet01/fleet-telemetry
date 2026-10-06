@@ -184,6 +184,8 @@ main{padding:24px}
 .sec-sub{font-size:12px;color:var(--ink-3)}
 .lnk{margin-left:auto;font-size:12px;color:var(--ink-3)}
 .lnk:hover{color:var(--ink)}
+.day{margin:16px 0 8px;font-size:12px;font-weight:600;color:var(--ink-3)}
+.sec-head+.day{margin-top:0}
 .note{margin-top:12px;font-size:12px;color:var(--ink-3)}
 .empty{padding:24px 0;text-align:center;color:var(--ink-3)}
 
@@ -689,7 +691,7 @@ function tabBody(a, r) {
 function overviewTab(a) {
   const p = a.latest || {}, hist = a.history || [], t1 = nowS(), t0 = hist.length ? hist[0].ts : t1;
   const cpu = cpuSeries(a), cores = (p.cpu || {}).count;
-  const act = (p.activity || {}).entries || [], rs = runs(hist, t1);
+  const act = feedOf(a), rs = runs(hist, t1);
   return html`<div class="grid-3">
       ${chartPanel("ov-cpu", cpuLabel(p) === "CPU" ? "CPU" : `Load · ${plural(cores || 1, "core")}`, cpu, fmtPct, { max: Math.max(5, ...cpu.map(x => x[1] || 0)) * 1.25 })}
       ${chartPanel("ov-mem", "Memory · all processes", hist.map(h => [h.ts, h.mem]), fmtMB)}
@@ -753,11 +755,24 @@ const actList = entries => html`<ul class="acts">${entries.map(e => {
     <div class="act-time">${ts ? agoEl(ts) : ""}<span class="act-type">${String(e.activity_type || "").replace(/_/g, " ")}</span></div></li>`;
 })}</ul>`;
 
+// every feed item the receiver has kept (falls back to the latest few)
+const feedOf = a => (a.feed && a.feed.length ? a.feed : ((a.latest || {}).activity || {}).entries) || [];
+// group feed items by local day, newest first
+function feedByDay(entries) {
+  const days = [];
+  for (const e of entries) {
+    const ts = isoTs(e.timestamp), day = ts ? new Date(ts * 1000).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }) : "Unknown date";
+    if (!days.length || days[days.length - 1][0] !== day) days.push([day, []]);
+    days[days.length - 1][1].push(e);
+  }
+  return days;
+}
 function activityTab(a) {
-  const p = a.latest || {}, act = (p.activity || {}).entries || [], hist = a.history || [], t1 = nowS();
+  const p = a.latest || {}, act = feedOf(a), hist = a.history || [], t1 = nowS();
   const rs = runs(hist, t1);
-  return html`<section class="sec" style="margin-top:0"><div class="sec-head"><h2>App activity</h2><span class="sec-sub">The app’s own feed — the same one behind its sidebar</span></div>
-      <div class="panel list">${act.length ? actList(act) : html`<p class="empty">${actEmpty(p)}</p>`}</div></section>
+  const first = act.length ? isoTs(act[act.length - 1].timestamp) : null;
+  return html`<section class="sec" style="margin-top:0"><div class="sec-head"><h2>Everything the AI did</h2><span class="sec-sub">From the app’s own activity feed · ${plural(act.length, "item")}${first ? ` since ${stamp(first)}` : ""}</span></div>
+      ${act.length ? feedByDay(act).map(([day, es]) => html`<p class="day">${day}</p><div class="panel list">${actList(es)}</div>`) : html`<div class="panel list"><p class="empty">${actEmpty(p)}</p></div>`}</section>
     <section class="sec"><div class="sec-head"><h2>Status history</h2><span class="sec-sub">${hist.length ? `Since ${clock(hist[0].ts)}` : ""}</span></div>
       <div class="panel">${hist.length ? html`${strip(rs, hist[0].ts, t1)}${runList(rs, 200)}` : html`<p class="empty">No history yet.</p>`}</div></section>
 `;
