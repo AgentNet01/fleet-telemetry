@@ -17,9 +17,11 @@ read-only, by Jack's choice.
 ```
 fleet-telemetry/
 ├── orchestrator/      # runs on Jack's Mac (the orchestrator)
-│   └── fleet_receiver.py
+│   ├── fleet_receiver.py   # ingest + API (stdlib only)
+│   └── dashboard.html      # the dashboard (served as-is, no build step)
 └── agents/            # runs on each agent VM
     ├── telemetryd.py
+    ├── test_telemetryd.py
     ├── install.sh
     └── fleet_setup_prompt.md
 ```
@@ -68,8 +70,15 @@ Keep the daemon light: a heartbeat currently costs ~26 ms to build and
 2. Run: `python3 orchestrator/fleet_receiver.py`
 3. Open `http://<mac-tailscale-ip>:8787`
 
-The dashboard auto-refreshes every 10s. The receiver binds to the Mac's
-Tailscale IP only.
+The dashboard refreshes itself every 5s (every 2s during a live tail) and is
+built to sit on a wall screen untouched. Click a machine for its detail page:
+Overview (graphs + status timeline), Activity, Processes, Files (a folder
+explorer) and Crons. Edits to `dashboard.html` show on browser reload — no
+receiver restart. The receiver binds to the Mac's Tailscale IP only.
+
+Status on the dashboard comes only from detected evidence — the app's activity
+feed and the daemon's observations (files changed, CPU). The agent's
+self-reported `status.json` is shown on the Activity tab but never drives it.
 
 ## Agent onboarding
 
@@ -101,9 +110,16 @@ pulsing "live" badge and countdown while a tail is active.
 
 ## Testing changes
 
-- Daemon logic (burst caps, payload building): run the unit tests noted in
-  `agents/telemetryd.py` — hostile inputs (interval 0, huge durations,
-  garbage) must not change behavior.
+- Daemon logic (CPU sampling, working detection, burst caps):
+  `python3 agents/test_telemetryd.py` — hostile inputs (interval 0, huge
+  durations, garbage) must not change behavior.
+- Daemon v2 (payload `"daemon": 2`) adds per-process CPU, file modified times
+  and the list of recently changed files, and stops counting its own log
+  writes as "working". Agents on v1 still report; the dashboard flags them
+  "Old daemon". To upgrade, the agent replaces `~/workspace/telemetry/telemetryd.py`
+  with the new file (the copy in `fleet_setup_prompt.md` is kept identical)
+  and restarts it: `systemctl restart telemetryd` (or, where systemd isn't
+  available, `pkill -f telemetryd.py` and the watchdog cron restarts it).
 - Receiver + dashboard JS: exercise the endpoints and the modal render path
   against a local test instance before pushing; the dashboard JS has no
   build step, so a ReferenceError ships straight to Jack's browser.

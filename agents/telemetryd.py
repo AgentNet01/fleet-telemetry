@@ -22,7 +22,6 @@ Config lives in ~/workspace/telemetry/:
 import json
 import os
 import shutil
-import subprocess
 import sys
 import time
 import urllib.request
@@ -82,22 +81,65 @@ def cpu():
     return {"count": os.cpu_count(), "load1": l1, "load5": l5, "load15": l15}
 
 
-def procs():
-    """Process list inside this container (honest, container-scoped).
+CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+PAGE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
+_prev_ticks = {}   # pid -> cpu ticks at the previous sample
+_prev_wall = None
 
-    Returns top (for the card) and all (for the detail view).
+
+def read_proc_stats():
+    """[(pid, name, rss_mb, cpu_ticks)] from /proc -- container-scoped."""
+    out = []
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open("/proc/%s/stat" % pid) as f:
+                stat = f.read()
+        except OSError:
+            continue
+        # comm sits in parens and may contain spaces; fields follow the last ')'
+        name = stat[stat.find("(") + 1:stat.rfind(")")][:32]
+        rest = stat[stat.rfind(")") + 2:].split()
+        ticks = int(rest[11]) + int(rest[12])          # utime + stime
+        out.append((int(pid), name, int(rest[21]) * PAGE / 1048576, ticks))
+    return out
+
+
+def cpu_percents(samples, prev, dt):
+    """Per-pid CPU % over the last interval, top-style (100 = one core).
+
+    Pure logic, unit-testable. None when there is no baseline yet (first
+    sample after start). A pid absent from prev started during the interval.
     """
+    if not prev or not dt or dt <= 0:
+        return {pid: None for pid, _, _, _ in samples}
+    return {pid: round(max(0, ticks - prev.get(pid, 0)) / CLK_TCK / dt * 100, 1)
+            for pid, _, _, ticks in samples}
+
+
+def procs():
+    """Process list with memory and live CPU %.
+
+    all/top rows are [name, rss_mb, cpu_pct, pid] (first two fields unchanged
+    from v1). cpu_total is % of the whole machine (all cores).
+    """
+    global _prev_ticks, _prev_wall
     try:
-        out = subprocess.run(["ps", "-eo", "comm,rss", "--sort=-rss"],
-                             capture_output=True, text=True, timeout=10).stdout
-        allp = []
-        for line in out.splitlines()[1:]:
-            parts = line.split()
-            if len(parts) >= 2 and parts[1].isdigit():
-                allp.append([parts[0][:32], round(int(parts[1]) / 1024, 1)])
-        return {"top": allp[:8], "all": allp, "unit": "MB"}
+        samples = read_proc_stats()
     except Exception:
-        return {"top": [], "all": [], "unit": "MB"}
+        return {"top": [], "all": [], "unit": "MB", "cpu_total": None}
+    now = time.time()
+    pct = cpu_percents(samples, _prev_ticks,
+                       now - _prev_wall if _prev_wall else None)
+    _prev_ticks = {pid: ticks for pid, _, _, ticks in samples}
+    _prev_wall = now
+    allp = sorted(([name, round(rss, 1), pct[pid], pid]
+                   for pid, name, rss, _ in samples), key=lambda r: -r[1])
+    known = [r[2] for r in allp if r[2] is not None]
+    total = (round(sum(known) / (os.cpu_count() or 1), 1)
+             if known else None)
+    return {"top": allp[:8], "all": allp, "unit": "MB", "cpu_total": total}
 
 
 def disk():
@@ -126,10 +168,10 @@ def boot_id():
         return None
 
 
-def files():
-    """Workspace inventory: counts, sizes, and relative paths (names only)."""
+def walk_workspace():
+    """[(relpath, size_bytes, mtime)] for every file under ~/workspace."""
     root = os.path.join(HOME, "workspace")
-    entries, total = [], 0
+    entries = []
     try:
         for dirpath, dirnames, filenames in os.walk(root):
             # skip the telemetry spool itself to avoid feedback loops
@@ -138,17 +180,26 @@ def files():
             for fn in filenames:
                 p = os.path.join(dirpath, fn)
                 try:
-                    sz = os.path.getsize(p)
+                    st = os.stat(p)
                 except OSError:
                     continue
-                total += sz
-                entries.append((os.path.relpath(p, root), sz))
+                entries.append((os.path.relpath(p, root), st.st_size,
+                                st.st_mtime))
     except Exception:
         pass
-    entries.sort(key=lambda e: -e[1])
+    return entries
+
+
+def files(walked):
+    """Workspace inventory: names, sizes and modified times (never contents).
+
+    entries rows are [relpath, kb, mtime] (first two fields unchanged from v1).
+    """
+    entries = sorted(walked, key=lambda e: -e[1])
     return {"count": len(entries),
-            "mb": round(total / 1e6, 1),
-            "entries": [[rel, round(sz / 1024, 1)] for rel, sz in entries[:500]]}
+            "mb": round(sum(e[1] for e in entries) / 1e6, 1),
+            "entries": [[rel, round(sz / 1024, 1), int(mt)]
+                        for rel, sz, mt in entries[:500]]}
 
 
 def status():
@@ -209,53 +260,33 @@ def activity():
         return {"current": None, "entries": [], "error": str(e)[:120]}
 
 
-def observed():
-    """Heuristic working detection from local signals.
+def observed(walked, plist, now, self_pid):
+    """Heuristic working detection from local evidence. Pure, unit-testable.
 
     Backs up the self-reported status.json: catches real activity even when
     the agent forgot to update its status file. Signals are labeled so the
     dashboard can show WHY it thinks the agent is working.
+
+    The daemon's own directory and process are excluded: it rewrites its log
+    and .boot_id every cycle, which used to make every agent look "working".
     """
+    own = os.path.relpath(TDIR, os.path.join(HOME, "workspace")) + os.sep
+    changed = sorted((e for e in walked
+                      if now - e[2] < 300 and not e[0].startswith(own)),
+                     key=lambda e: -e[2])
+    busy = sorted((p for p in plist
+                   if p[2] is not None and p[2] > 5.0 and p[3] != self_pid),
+                  key=lambda p: -p[2])
     signals = []
-    now = time.time()
-    try:
-        root = os.path.join(HOME, "workspace")
-        recent = 0
-        for dirpath, _, filenames in os.walk(root):
-            for fn in filenames:
-                try:
-                    if now - os.path.getmtime(os.path.join(dirpath, fn)) < 300:
-                        recent += 1
-                except OSError:
-                    pass
-            if recent > 25:
-                break
-        if recent:
-            signals.append("%d files changed in last 5m" % recent)
-    except Exception:
-        pass
-    try:
-        out = subprocess.run(["ps", "-eo", "comm,pcpu", "--sort=-pcpu"],
-                             capture_output=True, text=True,
-                             timeout=10).stdout
-        low = out.lower()
-        if "chrome" in low:
-            signals.append("browser running")
-        for line in out.splitlines()[1:]:
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            try:
-                pcpu = float(parts[1])
-            except ValueError:
-                continue
-            name = parts[0]
-            if pcpu > 5.0 and name not in ("telemetryd.py", "ps"):
-                signals.append("%s at %.0f%% cpu" % (name[:24], pcpu))
-                break
-    except Exception:
-        pass
-    return {"working": bool(signals), "signals": signals[:4]}
+    if changed:
+        signals.append("%d file%s changed in last 5m"
+                       % (len(changed), "" if len(changed) == 1 else "s"))
+    if busy:
+        signals.append("%s at %.0f%% cpu" % (busy[0][0][:24], busy[0][2]))
+    if any("chrome" in p[0].lower() for p in plist):
+        signals.append("browser running")   # context only, not "working"
+    return {"working": bool(changed or busy), "signals": signals[:4],
+            "recent": [[rel, int(mt)] for rel, _, mt in changed[:8]]}
 
 
 def build_payload(token_note_replaced=False):
@@ -270,19 +301,24 @@ def build_payload(token_note_replaced=False):
             f.write(bid or "")
     except Exception:
         pass
+    mem = procs()
+    walked = walk_workspace()
+    now = time.time()
     return {
         "agent": AGENT,
-        "ts": time.time(),
+        "daemon": 2,              # payload version; dashboard flags older ones
+        "ts": now,
         "boot_id": bid,
         "vm_replaced": vm_replaced,
         "cpu": cpu(),
-        "mem": procs(),
+        "mem": mem,
         "disk": disk(),
         "uptime_s": uptime_s(),
-        "files": files(),
+        "files": files(walked),
         "status": status(),       # self-reported by the agent (status.json)
         "activity": activity(),   # app's activity feed (same source as sidebar)
-        "observed": observed(),   # heuristic working detection (local signals)
+        # heuristic working detection (local evidence)
+        "observed": observed(walked, mem["all"], now, os.getpid()),
         "crons": crons(),
     }
 

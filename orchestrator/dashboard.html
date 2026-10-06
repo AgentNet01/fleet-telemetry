@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<!-- f01-uiux · structure: status wall + master-detail page with tabs · differs from last on: structure (was card grid + overflowing modal) -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fleet</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23111113'/%3E%3Ccircle cx='5' cy='5' r='1.6' fill='%2345c08a'/%3E%3Ccircle cx='11' cy='5' r='1.6' fill='%238b8b93'/%3E%3Ccircle cx='5' cy='11' r='1.6' fill='%238b8b93'/%3E%3Ccircle cx='11' cy='11' r='1.6' fill='%2345c08a'/%3E%3C/svg%3E">
+<script>try{if(localStorage.getItem("fleet-theme")==="light")document.documentElement.dataset.theme="light"}catch(e){}</script>
+<style>
+/* Thesis: a wall-and-laptop status board for one orchestrator watching 10-30
+   agent machines. The detected status sentence does the talking: it is the
+   largest, brightest text on every tile and page; everything else is 12-13px
+   grey, and colour is spent only on state (working / offline / live). */
+:root{
+  --bg:#0a0a0b; --raised:#111113; --raised-2:#17171a; --inset:#070708;
+  --line:rgba(255,255,255,.07); --line-2:rgba(255,255,255,.12);
+  --ink:#ededee; --ink-2:#b5b5ba; --ink-3:#8b8b93; --ink-4:#5c5c64;
+  --work:#45c08a; --work-bg:rgba(69,192,138,.12); --work-edge:rgba(69,192,138,.32);
+  --down:#ef5b5b; --down-bg:rgba(239,91,91,.12); --down-edge:rgba(239,91,91,.3);
+  --warn:#e9a23b; --warn-bg:rgba(233,162,59,.1);
+  --live:#8b93ff; --live-bg:rgba(139,147,255,.14);
+  --chart:#8b93ff;
+  --fill:rgba(255,255,255,.06); --fill-2:rgba(255,255,255,.08); --fill-3:rgba(255,255,255,.14); --fill-0:rgba(255,255,255,.03);
+  --topbar:rgba(10,10,11,.86); --btn-hover:#1f1f23; --mark:#1b1b1f;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+:root[data-theme="light"]{
+  --bg:#f6f6f7; --raised:#ffffff; --raised-2:#f1f1f3; --inset:#ffffff;
+  --line:rgba(0,0,0,.08); --line-2:rgba(0,0,0,.15);
+  --ink:#18181b; --ink-2:#3f3f46; --ink-3:#686871; --ink-4:#a1a1aa;
+  --work:#13774b; --work-bg:rgba(19,119,75,.1); --work-edge:rgba(19,119,75,.38);
+  --down:#c92f2f; --down-bg:rgba(201,47,47,.09); --down-edge:rgba(201,47,47,.35);
+  --warn:#9a5a00; --warn-bg:rgba(154,90,0,.09);
+  --live:#4a52d9; --live-bg:rgba(74,82,217,.1);
+  --chart:#5a62e6;
+  --fill:rgba(0,0,0,.05); --fill-2:rgba(0,0,0,.07); --fill-3:rgba(0,0,0,.13); --fill-0:rgba(0,0,0,.03);
+  --topbar:rgba(246,246,247,.86); --btn-hover:#e8e8eb; --mark:#e4e4e8;
+  color-scheme:light;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;scrollbar-color:var(--line-2) transparent}
+/* big wall screens: scale the whole board instead of stretching tiles */
+@media (min-width:2200px){html{zoom:1.3}}
+@media (min-width:3200px){html{zoom:1.75}}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--ink);font:400 13px/1.5 var(--sans);font-variant-numeric:tabular-nums;overflow-x:clip}
+::selection{background:rgba(139,147,255,.35)}
+a{color:inherit;text-decoration:none}
+p{margin:0}
+input{caret-color:var(--live)}
+:focus-visible{outline:2px solid var(--live);outline-offset:2px;border-radius:4px}
+code{font:12px/1.4 var(--mono);background:var(--fill);padding:1px 5px;border-radius:4px;color:var(--ink-2)}
+.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+
+/* ---------- top bar ---------- */
+.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:24px;height:56px;padding:0 24px;
+  background:var(--topbar);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px;font:600 15px/1 var(--sans);letter-spacing:-.01em}
+.brand svg{width:18px;height:18px}
+.counts{display:flex;align-items:center;gap:16px;color:var(--ink-2);white-space:nowrap}
+.counts .total{color:var(--ink-3)}
+.cnt{display:inline-flex;align-items:center;gap:6px}
+.search{display:flex;align-items:center;gap:8px;height:32px;width:240px;padding:0 8px 0 10px;background:var(--inset);
+  border:1px solid var(--line);border-radius:8px;color:var(--ink-3);transition:border-color .15s ease-out}
+.search:focus-within{border-color:var(--live)}
+.search input{flex:1;min-width:0;height:100%;background:none;border:0;outline:none;color:var(--ink);font:inherit}
+.search input::placeholder{color:var(--ink-3)}
+.search input::-webkit-search-cancel-button{display:none}
+kbd{font:500 11px/16px var(--mono);color:var(--ink-3);border:1px solid var(--line-2);border-radius:4px;padding:0 5px}
+.top .search{margin-left:auto}
+.conn{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-3);white-space:nowrap;min-width:112px}
+.conn b{font-weight:500;color:var(--ink-2)}
+.conn.bad,.conn.bad b{color:var(--warn)}
+.theme{display:grid;place-items:center;width:32px;height:32px;padding:0;border:1px solid var(--line);border-radius:8px;background:none;color:var(--ink-3);cursor:pointer;transition:color .15s ease-out,background-color .15s ease-out}
+.theme:hover{color:var(--ink);background:var(--raised)}
+.theme .moon{display:none}
+:root[data-theme="light"] .theme .sun{display:none}
+:root[data-theme="light"] .theme .moon{display:block}
+
+main{padding:24px}
+
+/* ---------- status vocabulary ---------- */
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;flex:none;background:var(--ink-3)}
+.d-working{background:var(--work)} .d-offline{background:var(--down)} .d-live{background:var(--live)} .d-idle{background:var(--ink-3)}
+.chip{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:999px;font:500 12px/1 var(--sans);
+  white-space:nowrap;background:var(--fill);color:var(--ink-2)}
+.chip.working{background:var(--work-bg);color:var(--work)}
+.chip.offline{background:var(--down-bg);color:var(--down)}
+.chip.live{background:var(--live-bg);color:var(--live)}
+.chip .dot{background:currentColor}
+.chip.working .dot,.chip.live .dot,.pulse{animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.3}}
+.warn{color:var(--warn)}
+
+/* ---------- wall ---------- */
+.wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.tile{display:flex;flex-direction:column;gap:12px;min-width:0;padding:16px;background:var(--raised);border:1px solid var(--line);
+  border-radius:12px;transition:border-color .15s ease-out,background-color .15s ease-out}
+.tile:hover{background:var(--raised-2);border-color:var(--line-2)}
+.tile-top{display:flex;align-items:center;gap:8px;min-width:0}
+.tile-name{margin-right:auto;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tile-head{font:500 15px/1.4 var(--sans);min-height:2.8em;overflow-wrap:anywhere;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.status.is-idle .tile-head{color:var(--ink-2)}
+.status.is-offline .tile-head{color:var(--ink-3)}
+.status{display:flex;flex-direction:column;gap:4px;min-width:0;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--fill-0)}
+.status.is-working{background:var(--work-bg);border-color:var(--work-edge)}
+.status.is-offline{background:var(--down-bg);border-color:var(--down-edge)}
+.status-top{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.status .chip{height:auto;padding:0;background:none}
+.status-for{font-size:12px;color:var(--ink-3)}
+.status.big{margin-top:16px;padding:16px 20px;border-radius:12px}
+.status.big .ph-head{margin-top:0}
+.tile-why{font-size:12px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile-why.warn{color:var(--warn)}
+.tile-sparks{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding-top:12px;border-top:1px solid var(--line);--chart:var(--ink-3)}
+.tile.is-offline .tile-sparks{opacity:.45}
+.sb{display:grid;grid-template-columns:auto 1fr;gap:4px 8px;min-width:0}
+.sb-lbl{font-size:12px;color:var(--ink-3)}
+.sb-val{font-size:12px;color:var(--ink-2);text-align:right}
+.sb .chart{grid-column:1/-1;height:28px}
+.tile-foot{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:12px;color:var(--ink-3)}
+.tile-foot .push{margin-left:auto}
+
+/* ---------- charts ---------- */
+.chart{position:relative;height:72px}
+.chart svg{display:block;width:100%;height:100%;overflow:visible}
+.chart .ln{fill:none;stroke:var(--chart);stroke-width:1.5;vector-effect:non-scaling-stroke}
+.chart .ar{fill:var(--chart);opacity:.1}
+.chart .base{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
+.chart .cursor{position:absolute;top:0;bottom:0;left:var(--x,0);width:1px;background:var(--ink-3);opacity:0;pointer-events:none}
+.chart.hovering .cursor{opacity:1}
+.chart .none{position:absolute;inset:0;display:grid;place-items:center;font-size:12px;color:var(--ink-3)}
+
+/* ---------- detail ---------- */
+.detail{display:grid;grid-template-columns:232px minmax(0,1fr);gap:40px;max-width:1440px;margin:0 auto}
+.rail{position:sticky;top:80px;align-self:start;max-height:calc(100vh - 104px);overflow:auto;display:flex;flex-direction:column;gap:2px}
+.rail-all{display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;margin-bottom:8px;border-radius:6px;color:var(--ink-3)}
+.rail-all:hover{color:var(--ink);background:var(--raised)}
+.rail-item{display:grid;grid-template-columns:6px minmax(0,1fr);align-items:center;gap:0 10px;padding:8px;border-radius:8px;color:var(--ink-2)}
+.rail-item:hover{background:var(--raised)}
+.rail-item.is-current{background:var(--raised-2);color:var(--ink)}
+.ri-name{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ri-head{grid-column:2;font-size:12px;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pane{min-width:0}
+.back{display:none;align-items:center;gap:6px;margin-bottom:16px;color:var(--ink-3)}
+.back:hover{color:var(--ink)}
+.ph-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ph-name{margin:0 4px 0 0;font:600 15px/1.2 var(--sans)}
+.ph-actions{margin-left:auto;display:flex;align-items:center;gap:8px}
+.ph-head{font:500 20px/1.35 var(--sans);letter-spacing:-.01em;overflow-wrap:anywhere;text-wrap:balance}
+.is-idle .ph-head{color:var(--ink-2)}
+.is-offline .ph-head{color:var(--ink-3)}
+.ph-why{margin-top:4px;color:var(--ink-3)}
+.ph-why.warn{color:var(--warn)}
+.ph-meta{display:flex;flex-wrap:wrap;gap:4px 20px;margin-top:16px;font-size:12px;color:var(--ink-3)}
+.ph-meta b{font-weight:500;color:var(--ink-2)}
+.banner{margin-top:16px;padding:10px 12px;border-radius:8px;background:var(--warn-bg);color:var(--warn)}
+.inline-err{margin-top:8px;color:var(--down)}
+.btn{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 12px;border:1px solid var(--line-2);border-radius:8px;background:var(--raised-2);
+  color:var(--ink);font:500 13px/1 var(--sans);cursor:pointer;transition:background-color .15s ease-out,transform .1s ease-out}
+.btn:hover{background:var(--btn-hover)}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.6;cursor:default}
+.btn .ic{width:14px;height:14px}
+.btn.on{background:var(--live-bg);border-color:rgba(139,147,255,.35);color:var(--live)}
+
+.tabs{display:flex;gap:4px;margin:24px 0;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.tab{position:relative;padding:8px 10px 10px;color:var(--ink-3);font-weight:500;white-space:nowrap}
+.tab:hover{color:var(--ink)}
+.tab[aria-current]{color:var(--ink)}
+.tab[aria-current]::after{content:"";position:absolute;left:10px;right:10px;bottom:-1px;height:2px;border-radius:2px;background:var(--ink)}
+.tab .n{margin-left:6px;font-weight:400;color:var(--ink-3)}
+
+.panel{min-width:0;padding:16px;background:var(--raised);border:1px solid var(--line);border-radius:12px}
+.panel.list{padding:0 16px}
+.grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 24px}
+.sec{margin-top:32px;min-width:0}
+.sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:12px}
+.sec-head h2{margin:0;font:600 13px/1.4 var(--sans)}
+.sec-sub{font-size:12px;color:var(--ink-3)}
+.lnk{margin-left:auto;font-size:12px;color:var(--ink-3)}
+.lnk:hover{color:var(--ink)}
+.note{margin-top:12px;font-size:12px;color:var(--ink-3)}
+.empty{padding:24px 0;text-align:center;color:var(--ink-3)}
+
+.cp-head{display:flex;align-items:baseline;gap:8px;margin-bottom:12px}
+.cp-lbl{color:var(--ink-3)}
+.cp-val{margin-left:auto;font:600 15px/1 var(--sans)}
+.cp-when{font-size:12px;color:var(--ink-3)}
+.cp-axis{display:flex;justify-content:space-between;margin-top:8px;font-size:12px;color:var(--ink-3)}
+.bar{height:6px;border-radius:3px;background:var(--fill-2);overflow:hidden}
+.bar>i{display:block;height:100%;min-width:2px;border-radius:inherit;background:var(--chart)}
+.disk-val{margin:8px 0 16px;font-size:12px;color:var(--ink-3)}
+.disk-val b{font:600 15px/1 var(--sans);color:var(--ink);margin-right:4px}
+
+.strip svg{display:block;width:100%;height:20px;border-radius:4px}
+.strip .s-bg{fill:var(--fill-0)}
+.strip .s-working{fill:var(--work)}
+.strip .s-idle{fill:var(--fill-3)}
+.strip .s-offline{fill:var(--down);opacity:.55}
+.strip-axis{position:relative;height:16px;margin-top:6px;font-size:12px;color:var(--ink-3)}
+.strip-axis span{position:absolute;top:0;transform:translateX(-50%);white-space:nowrap}
+.strip-axis span:first-child{transform:none}
+.strip-axis span:last-child{transform:translateX(-100%)}
+.legend{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:8px;font-size:12px;color:var(--ink-3)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend .sq{width:8px;height:8px;border-radius:2px}
+.runs{list-style:none;margin:16px 0 0;padding:0}
+.run{display:grid;grid-template-columns:96px 168px 56px minmax(0,1fr);gap:12px;align-items:baseline;padding:8px 0;border-top:1px solid var(--line)}
+.run-state{display:inline-flex;align-items:center;gap:8px;font-weight:500}
+.run-time,.run-dur{font-size:12px;color:var(--ink-3)}
+.run-what{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.acts{list-style:none;margin:0;padding:0}
+.act{display:grid;grid-template-columns:16px minmax(0,1fr) auto;gap:4px 12px;align-items:start;padding:12px 0;border-top:1px solid var(--line)}
+.act:first-child{border-top:0}
+.act .ic{margin-top:2px}
+.act-title{font-weight:500;overflow-wrap:anywhere}
+.act-sub{margin-top:2px;font-size:12px;color:var(--ink-3);overflow-wrap:anywhere}
+.act-time{font-size:12px;color:var(--ink-3);white-space:nowrap;text-align:right}
+.act-type{display:block;font-size:12px;color:var(--ink-3)}
+.s-success{color:var(--work)} .s-error{color:var(--down)} .s-pending{color:var(--live)}
+.recent{list-style:none;margin:0;padding:0}
+.recent a{display:grid;grid-template-columns:16px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--line);color:var(--ink-2)}
+.recent li:first-child a{border-top:0}
+.recent a:hover{color:var(--ink)}
+.recent .p{font:12px/1.4 var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recent .t{font-size:12px;color:var(--ink-3)}
+.recent .ic{color:var(--ink-3)}
+
+table.pt{width:100%;border-collapse:collapse}
+.pt th{padding:12px 12px 8px;border-bottom:1px solid var(--line);font:500 12px/1.2 var(--sans);color:var(--ink-3);text-align:left;white-space:nowrap}
+.pt th button{all:unset;cursor:pointer;border-radius:4px}
+.pt th button:hover{color:var(--ink)}
+.pt th[aria-sort] button{color:var(--ink)}
+.pt td{padding:8px 12px;border-bottom:1px solid var(--line);color:var(--ink-2)}
+.pt tr:last-child td{border-bottom:0}
+.pt .nm{color:var(--ink);font-weight:500;overflow-wrap:anywhere}
+.pt .r{text-align:right}
+.pt .c-pid{color:var(--ink-3);font-size:12px}
+.meter{display:grid;grid-template-columns:minmax(40px,1fr) 64px;gap:10px;align-items:center}
+.meter .bar{height:4px}
+.meter span{text-align:right}
+.pt .c-trend{width:132px}
+.pt .c-trend .chart{height:20px}
+.pt .c-mem{width:30%}
+.pt .c-cpu{width:20%}
+
+.fx-bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:12px}
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px;min-width:0}
+.crumbs a{padding:2px 6px;border-radius:6px;color:var(--ink-3)}
+.crumbs a:hover{color:var(--ink);background:var(--raised)}
+.crumbs [aria-current]{color:var(--ink);font-weight:500}
+.crumbs .sep{color:var(--ink-4)}
+.fx-bar .search{margin-left:auto;width:280px}
+.fx{background:var(--raised);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.fx-row{display:grid;grid-template-columns:minmax(0,1fr) 176px 88px 96px;gap:16px;align-items:center;min-height:36px;padding:6px 16px;
+  border-top:1px solid var(--line);color:var(--ink-2)}
+.fx-head{border-top:0;font-size:12px;font-weight:500;color:var(--ink-3)}
+.fx-head button{all:unset;cursor:pointer;border-radius:4px}
+.fx-head button:hover,.fx-head button[aria-pressed=true]{color:var(--ink)}
+a.fx-row:hover{background:var(--raised-2);color:var(--ink)}
+.fx-name{display:flex;align-items:center;gap:10px;min-width:0;color:var(--ink)}
+.fx-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fx-name .ic{color:var(--ink-3)}
+.fx-dir .fx-name .ic{color:var(--chart)}
+.fx-path{display:block;font:12px/1.4 var(--mono);color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fx-size{display:grid;grid-template-columns:minmax(0,1fr) 64px;gap:8px;align-items:center}
+.fx-size .bar{height:4px}
+.fx .r{text-align:right}
+.fx-meta{font-size:12px;color:var(--ink-3)}
+.fx-row.flash{background:var(--live-bg)}
+.fx-foot{margin-top:12px;font-size:12px;color:var(--ink-3)}
+
+.state{max-width:520px;margin:96px auto;text-align:center}
+.state-title{margin-bottom:8px;font:600 15px/1.4 var(--sans)}
+.state-body{margin-bottom:16px;color:var(--ink-3);text-wrap:pretty}
+
+@media (max-width:1100px){.grid-3{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:900px){
+  .detail{grid-template-columns:minmax(0,1fr)}
+  .rail{display:none}
+  .back{display:inline-flex}
+  .grid-2{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:640px){
+  main{padding:16px}
+  .top{flex-wrap:wrap;height:auto;padding:12px 16px;gap:8px 16px}
+  .conn{order:2;margin-left:auto;min-width:0}
+  .theme{order:2}
+  .counts{order:3;width:100%;gap:12px;overflow-x:auto}
+  .top .search{order:4;width:100%;margin-left:0}
+  kbd{display:none}
+  .grid-3{grid-template-columns:minmax(0,1fr)}
+  .fx-row{grid-template-columns:minmax(0,1fr) 72px 64px;gap:12px}
+  .fx-row>:nth-child(3){display:none}
+  .fx-size{display:block}
+  .fx-size .bar{display:none}
+  .fx-bar .search{width:100%;margin-left:0}
+  .pt .c-pid,.pt .c-trend{display:none}
+  .run{grid-template-columns:auto 1fr auto}
+  .run-what{grid-column:1/-1}
+}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/" aria-label="Fleet — all machines">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><rect width="16" height="16" rx="4" style="fill:var(--mark)"/><circle cx="5" cy="5" r="1.6" fill="#45c08a"/><circle cx="11" cy="5" r="1.6" fill="#8b8b93"/><circle cx="5" cy="11" r="1.6" fill="#8b8b93"/><circle cx="11" cy="11" r="1.6" fill="#45c08a"/></svg>
+    Fleet
+  </a>
+  <div class="counts" id="counts"></div>
+  <label class="search">
+    <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25"/><path d="m10.25 10.25 3 3"/></svg>
+    <input id="q" type="search" placeholder="Filter machines" aria-label="Filter machines by name or status" autocomplete="off" spellcheck="false">
+    <kbd>/</kbd>
+  </label>
+  <div class="conn" id="conn">Connecting…</div>
+  <button class="theme" id="theme" type="button" aria-label="Switch to light mode" title="Switch to light mode">
+    <svg class="ic sun" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.5M8 13v1.5M1.5 8H3M13 8h1.5M3.4 3.4l1.06 1.06M11.54 11.54l1.06 1.06M3.4 12.6l1.06-1.06M11.54 4.46l1.06-1.06"/></svg>
+    <svg class="ic moon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.25 9.5A5.5 5.5 0 0 1 6.5 2.75a5.5 5.5 0 1 0 6.75 6.75z"/></svg>
+  </button>
+</header>
+<main id="view"></main>
+
+<script>
+"use strict";
+const TOKEN = "%%TOKEN%%";
+const STALE = 120;   // s without a heartbeat before a machine counts as offline
+const GAP = 95;      // s between samples that counts as a hole in the history
+const TABS = [["overview", "Overview"], ["activity", "Activity"], ["processes", "Processes"], ["files", "Files"], ["crons", "Crons"]];
+
+// ---------- safe HTML: every interpolation is escaped unless wrapped in raw() ----------
+class Raw { constructor(s) { this.s = s; } }
+const raw = s => new Raw(s);
+const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const esc = s => String(s).replace(/[&<>"']/g, c => ESC[c]);
+const out = v => v instanceof Raw ? v.s : Array.isArray(v) ? v.map(out).join("") : (v == null || v === false) ? "" : esc(v);
+const html = (strs, ...vals) => raw(strs.reduce((acc, s, i) => acc + out(vals[i - 1]) + s));
+
+const I = {
+  folder: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 4.25c0-.55.45-1 1-1h3.4l1.5 1.5h5.6c.55 0 1 .45 1 1v6.5c0 .55-.45 1-1 1H2.75c-.55 0-1-.45-1-1z"/></svg>'),
+  file: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.75h5l3.25 3.25v9.25H4z"/><path d="M9 1.75V5h3.25"/></svg>'),
+  up: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4.5 3 7.5l3 3"/><path d="M3 7.5h7.25c1.5 0 2.75 1.25 2.75 2.75v1.5"/></svg>'),
+  back: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>'),
+  grid: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>'),
+  play: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5v9l7-4.5z"/></svg>'),
+  stop: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.5"/></svg>'),
+  ok: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="m5.5 8.25 1.75 1.75 3.25-3.5"/></svg>'),
+  err: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="m6 6 4 4m0-4-4 4"/></svg>'),
+  pending: raw('<svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 4.75V8l2 1.5"/></svg>'),
+};
+
+// ---------- state ----------
+const S = {
+  fleet: {}, order: [], detail: null, ok: null, lastOk: 0, skew: 0,
+  q: "", fq: "", procSort: "mem", fileSort: { key: "name", dir: 1 },
+  tailBusy: false, tailErr: null, flash: null, route: parseRoute(), key: "",
+};
+const $ = s => document.querySelector(s);
+const nowS = () => Date.now() / 1000 + S.skew;   // receiver clock
+
+// ---------- formatting ----------
+const clean = s => String(s ?? "").replace(/[⁦-⁩]/g, "");
+const natural = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+function agoTxt(s) {
+  s = Math.max(0, Math.round(s));
+  if (s < 5) return "just now";
+  if (s < 60) return s + "s ago";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+const agoEl = ts => ts ? html`<span data-ago="${ts}">${agoTxt(nowS() - ts)}</span>` : "—";
+function dur(s) {
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m";
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ${m % 60}m` : `${Math.floor(h / 24)}d ${h % 24}h`;
+}
+const clock = ts => new Date(ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const stamp = ts => new Date(ts * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+const fmtPct = v => v == null ? "—" : (v < 10 ? v.toFixed(1) : Math.round(v)) + "%";
+const fmtMB = v => v == null ? "—" : v >= 1024 ? (v / 1024).toFixed(1) + " GB" : (v < 10 ? v.toFixed(1) : Math.round(v)) + " MB";
+const fmtKB = v => v == null ? "—" : v >= 1024 * 1024 ? (v / 1048576).toFixed(1) + " GB" : v >= 1024 ? (v / 1024).toFixed(1) + " MB" : (v < 10 ? v.toFixed(1) : Math.round(v)) + " KB";
+const base = p => p.split("/").pop();
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : /s$/.test(w) ? "es" : "s"}`;
+const isLive = a => (a.burst_until || 0) > nowS();
+const isoTs = s => { const t = Date.parse(s); return isNaN(t) ? null : t / 1000; };
+
+// ---------- routing: #/  ·  #/m/<name>[/<tab>[/<folder path>]] ----------
+function parseRoute() {
+  const parts = location.hash.replace(/^#\/?/, "").split("/").map(p => { try { return decodeURIComponent(p); } catch { return p; } });
+  if (parts[0] === "m" && parts[1]) {
+    const tab = TABS.some(t => t[0] === parts[2]) ? parts[2] : "overview";
+    return { view: "detail", name: parts[1], tab, path: tab === "files" ? parts.slice(3).filter(Boolean) : [] };
+  }
+  return { view: "wall" };
+}
+const hrefM = (name, tab, path) => "#/m/" + encodeURIComponent(name)
+  + (tab && tab !== "overview" ? "/" + tab : "")
+  + (path && path.length ? "/" + path.map(encodeURIComponent).join("/") : "");
+
+// ---------- detected status (never the agent's self-report) ----------
+function detect(a) {
+  const p = a.latest || {}, act = p.activity || {}, obs = p.observed || {};
+  const age = nowS() - (a.last_seen || 0);
+  const last = (act.entries || []).find(e => e.status !== "pending");
+  const lastTxt = last && clean(last.status_title || last.title);
+  const lastTs = last && isoTs(last.timestamp);
+  if (age > STALE) return { state: "offline", label: "Offline", head: "Not reporting", why: html`Last heartbeat ${agoEl(a.last_seen)}` };
+  if (act.current) return { state: "working", label: "Working", head: clean(act.current), why: "From the app’s live activity feed" };
+  // daemon v1 counted its own log writes as "files changed", so its observations aren't evidence
+  if (obs.working && p.daemon) {
+    const rec = obs.recent || [], sigs = obs.signals || [];
+    const cpu = sigs.find(s => /% cpu$/.test(s));
+    const head = rec.length ? `Changing ${base(rec[0][0])}${rec.length > 1 ? ` and ${plural(rec.length - 1, "other file")}` : ""}`
+      : cpu ? `Running ${cpu.replace(/ at .*$/, "")}` : (sigs[0] ? sigs[0][0].toUpperCase() + sigs[0].slice(1) : "Busy");
+    return { state: "working", label: "Working", head, why: "Detected · " + sigs.join(" · ") };
+  }
+  if (last && last.status === "error") return { state: "idle", label: "Idle", tone: "warn", head: lastTxt, why: html`Last action failed ${lastTs ? agoEl(lastTs) : ""}` };
+  return { state: "idle", label: "Idle", head: lastTxt || "Idle", why: last ? html`Last activity ${lastTs ? agoEl(lastTs) : ""}` : "No app activity reported" };
+}
+const hstate = h => (h.app || (h.obs && h.v)) ? "working" : "idle";
+// how long the machine has been in its current state, from the history runs
+function since(a, d) {
+  const hist = a.history || [];
+  if (!hist.length) return "";
+  const rs = runs(hist, nowS()), last = rs[rs.length - 1];
+  if (!last || last.state !== d.state) return "";
+  return "for " + dur(nowS() - last.start) + (last.start <= hist[0].ts + 1 ? "+" : "");
+}
+const chip = (state, label) => html`<span class="chip ${state}"><i class="dot"></i>${label}</span>`;
+
+// ---------- series ----------
+function cpuSeries(a) {
+  const cores = ((a.latest || {}).cpu || {}).count || 1;
+  return (a.history || []).map(h => [h.ts, h.cpu != null ? h.cpu : h.load != null ? Math.min(100, h.load / cores * 100) : null]);
+}
+const cpuLabel = p => ((p.mem || {}).cpu_total != null) ? "CPU" : "Load";
+const lastVal = pts => { for (let i = pts.length - 1; i >= 0; i--) if (pts[i][1] != null) return pts[i][1]; return null; };
+
+// ---------- charts (hand-rolled SVG; hover shows the value at that time) ----------
+const CHARTS = {};
+function chart(id, pts, { fmt, t0, t1, max, cls = "" }) {
+  t1 = t1 ?? nowS();
+  t0 = t0 ?? (pts.length ? pts[0][0] : t1 - 1800);
+  const vals = pts.map(p => p[1]).filter(v => v != null);
+  if (!vals.length) return html`<div class="chart ${cls}"><span class="none">No data yet</span></div>`;
+  const top = max ?? (Math.max(...vals) * 1.2 || 1);
+  const span = Math.max(1, t1 - t0);
+  const X = ts => ((ts - t0) / span * 1000).toFixed(1), Y = v => (100 - Math.min(1, v / top) * 94).toFixed(1);
+  const segs = []; let cur = [];
+  pts.forEach((p, i) => {
+    if (p[1] == null || (i && p[0] - pts[i - 1][0] > GAP)) { if (cur.length) segs.push(cur); cur = []; }
+    if (p[1] != null) cur.push(p);
+  });
+  if (cur.length) segs.push(cur);
+  const line = segs.map(s => "M" + s.map(p => X(p[0]) + "," + Y(p[1])).join("L") + (s.length === 1 ? "h4" : "")).join("");
+  const area = segs.map(s => `M${X(s[0][0])},100L` + s.map(p => X(p[0]) + "," + Y(p[1])).join("L") + `L${X(s[s.length - 1][0])},100Z`).join("");
+  CHARTS[id] = { pts, t0, t1: t0 + span, fmt };
+  return html`<div class="chart ${cls}" data-chart="${id}">
+    <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><line class="base" x1="0" y1="100" x2="1000" y2="100"/><path class="ar" d="${area}"/><path class="ln" d="${line}"/></svg>
+    <i class="cursor"></i></div>`;
+}
+function chartPanel(id, label, pts, fmt, opts = {}) {
+  const v = lastVal(pts), vals = pts.map(p => p[1]).filter(x => x != null);
+  const t1 = nowS(), t0 = pts.length ? pts[0][0] : t1;
+  return html`<div class="panel" data-panel="${id}">
+    <div class="cp-head"><span class="cp-lbl">${label}</span><span class="cp-when"></span><span class="cp-val" data-now="${fmt(v)}">${fmt(v)}</span></div>
+    ${chart(id, pts, { fmt, t0, t1, max: opts.max })}
+    <div class="cp-axis"><span>${pts.length ? agoTxt(t1 - t0).replace("just now", "now") : ""}</span><span>${vals.length ? "peak " + fmt(Math.max(...vals)) : ""}</span><span>now</span></div>
+  </div>`;
+}
+let hover = null;
+function showHover(c, clientX) {
+  const spec = CHARTS[c.dataset.chart]; if (!spec) return;
+  const r = c.getBoundingClientRect();
+  const ts = spec.t0 + Math.min(1, Math.max(0, (clientX - r.left) / r.width)) * (spec.t1 - spec.t0);
+  let best = null;
+  for (const p of spec.pts) if (p[1] != null && (!best || Math.abs(p[0] - ts) < Math.abs(best[0] - ts))) best = p;
+  if (!best) return;
+  c.style.setProperty("--x", ((best[0] - spec.t0) / (spec.t1 - spec.t0) * 100) + "%");
+  c.classList.add("hovering");
+  const panel = c.closest("[data-panel]");
+  if (panel) { panel.querySelector(".cp-val").textContent = spec.fmt(best[1]); panel.querySelector(".cp-when").textContent = clock(best[0]); }
+}
+function clearHover() {
+  document.querySelectorAll(".chart.hovering").forEach(c => {
+    c.classList.remove("hovering");
+    const panel = c.closest("[data-panel]");
+    if (panel) { const v = panel.querySelector(".cp-val"); v.textContent = v.dataset.now; panel.querySelector(".cp-when").textContent = ""; }
+  });
+}
+document.addEventListener("pointermove", e => {
+  const c = e.target.closest && e.target.closest(".chart[data-chart]");
+  if (!c) { if (hover) { hover = null; clearHover(); } return; }
+  if (hover && hover.id !== c.dataset.chart) clearHover();
+  hover = { id: c.dataset.chart, x: e.clientX };
+  showHover(c, e.clientX);
+});
+
+// ---------- status runs: consecutive samples merged into "working 8:22–8:40" ----------
+function runs(hist, t1) {
+  const rs = [];
+  const push = (state, s, e, label) => {
+    if (e <= s) return;
+    const r = rs[rs.length - 1];
+    if (r && r.state === state && Math.abs(r.end - s) < 1) { r.end = e; if (label && !r.labels.includes(label)) r.labels.push(label); }
+    else rs.push({ state, start: s, end: e, labels: label ? [label] : [] });
+  };
+  hist.forEach((h, i) => {
+    const next = i + 1 < hist.length ? hist[i + 1].ts : t1;
+    const end = Math.min(next, h.ts + GAP), st = hstate(h);
+    push(st, h.ts, end, st === "working" ? clean(h.app || (h.sig && /% cpu$/.test(h.sig) ? "Busy: " + h.sig : "")) : null);
+    if (i + 1 < hist.length && next - h.ts > GAP) push("offline", end, next, null);
+  });
+  if (hist.length && t1 - hist[hist.length - 1].ts > GAP) push("offline", hist[hist.length - 1].ts + GAP, t1, null);
+  return rs;
+}
+const STATE_LABEL = { working: "Working", idle: "Idle", offline: "Offline" };
+function strip(rs, t0, t1) {
+  const span = Math.max(1, t1 - t0);
+  return html`<div class="strip"><svg viewBox="0 0 1000 20" preserveAspectRatio="none" role="img" aria-label="Status over time">
+    <rect class="s-bg" width="1000" height="20"/>
+    ${rs.map(r => html`<rect class="s-${r.state}" x="${((r.start - t0) / span * 1000).toFixed(2)}" width="${Math.max(1, (r.end - r.start) / span * 1000).toFixed(2)}" height="20"><title>${STATE_LABEL[r.state]} · ${clock(r.start)}–${clock(r.end)}${r.labels.length ? " · " + r.labels.join(", ") : ""}</title></rect>`)}
+  </svg></div>
+  <div class="strip-axis" aria-hidden="true">${[0, .25, .5, .75, 1].map(f => html`<span style="left:${f * 100}%">${f === 1 ? "now" : clock(t0 + f * span)}</span>`)}</div>
+  <div class="legend"><span><i class="sq d-working"></i>Working</span><span><i class="sq" style="background:var(--fill-3)"></i>Idle</span><span><i class="sq d-offline"></i>Offline</span></div>`;
+}
+const runList = (rs, n) => html`<ol class="runs">${rs.slice().reverse().slice(0, n).map(r => html`<li class="run">
+  <span class="run-state"><i class="dot d-${r.state}"></i>${STATE_LABEL[r.state]}</span>
+  <span class="run-time">${clock(r.start)} – ${clock(r.end)}</span>
+  <span class="run-dur">${dur(r.end - r.start)}</span>
+  <span class="run-what">${r.labels.length ? r.labels.join(" · ") : r.state === "working" ? "Files changing (detected)" : ""}</span></li>`)}</ol>`;
+
+// ---------- top bar ----------
+function countsHTML() {
+  if (!S.order.length) return "";
+  const c = { working: 0, idle: 0, offline: 0 };
+  S.order.forEach(n => c[detect(S.fleet[n]).state]++);
+  return html`<span class="total">${plural(S.order.length, "machine")}</span>
+    <span class="cnt"><i class="dot d-working"></i>${c.working} working</span>
+    <span class="cnt"><i class="dot d-idle"></i>${c.idle} idle</span>
+    ${c.offline ? html`<span class="cnt"><i class="dot d-offline"></i>${c.offline} offline</span>` : ""}`;
+}
+function tickConn() {
+  const el = $("#conn");
+  if (S.ok === null) { el.className = "conn"; el.textContent = "Connecting…"; return; }
+  const since = agoTxt((Date.now() - S.lastOk) / 1000);
+  if (S.ok) { el.className = "conn"; el.innerHTML = out(html`<i class="dot d-working pulse"></i><b>Live</b> updated ${since}`); }
+  else { el.className = "conn bad"; el.innerHTML = out(S.lastOk ? html`<i class="dot" style="background:var(--warn)"></i><b>Reconnecting</b> last update ${since}` : html`<b>Receiver unreachable</b>`); }
+}
+
+// ---------- wall ----------
+const matchQ = n => { if (!S.q) return true; const d = detect(S.fleet[n]); return (n + " " + d.head + " " + d.label).toLowerCase().includes(S.q.toLowerCase()); };
+function stateBox(title, body, action) {
+  return html`<div class="state"><p class="state-title">${title}</p><p class="state-body">${body}</p>${action || ""}</div>`;
+}
+function wallView() {
+  if (S.ok === null) return stateBox("Connecting to the receiver…", "");
+  if (!S.order.length) {
+    if (S.ok === false) return stateBox("Can’t reach the receiver", html`The page loaded, but the receiver isn’t answering — it may have stopped. Start it on the Mac with <code>python3 orchestrator/fleet_receiver.py</code>. Retrying every 5 seconds.`);
+    return stateBox("No machines reporting yet", html`A machine shows up here after its first heartbeat. Set one up by pasting <code>agents/fleet_setup_prompt.md</code> to the agent.`);
+  }
+  const names = S.order.filter(matchQ);
+  if (!names.length) return stateBox(`No machines match “${S.q}”`, "Filtering looks at machine names and what each one is doing.", html`<button class="btn" data-act="clear-q">Clear filter</button>`);
+  return html`<div class="wall">${names.map(n => tile(S.fleet[n]))}</div>`;
+}
+function tile(a) {
+  const d = detect(a), p = a.latest || {}, disk = p.disk || {}, crons = p.crons || [];
+  const bad = crons.filter(c => c.status !== "ok");
+  const cpu = cpuSeries(a), mem = (a.history || []).map(h => [h.ts, h.mem]);
+  return html`<a class="tile is-${d.state}" href="${hrefM(a.name)}">
+    <div class="tile-top"><span class="tile-name">${a.name}</span>${isLive(a) ? chip("live", "Live tail") : ""}</div>
+    <div class="status is-${d.state}">
+      <div class="status-top">${chip(d.state, d.label)}<span class="status-for">${since(a, d)}</span></div>
+      <p class="tile-head">${d.head}</p><p class="tile-why${d.tone ? " warn" : ""}">${d.why}</p></div>
+    <div class="tile-sparks">
+      <div class="sb"><span class="sb-lbl">${cpuLabel(p)}</span><span class="sb-val">${fmtPct(lastVal(cpu))}</span>${chart("t-cpu-" + a.name, cpu, { fmt: fmtPct, max: Math.max(10, ...cpu.map(x => x[1] || 0)) * 1.2 })}</div>
+      <div class="sb"><span class="sb-lbl">Memory</span><span class="sb-val">${fmtMB(lastVal(mem))}</span>${chart("t-mem-" + a.name, mem, { fmt: fmtMB })}</div>
+    </div>
+    <div class="tile-foot">
+      <span>Disk ${disk.total_gb ? fmtPct(disk.used_gb / disk.total_gb * 100) : "—"}</span>
+      <span class="${bad.length ? "warn" : ""}">${crons.length ? (bad.length ? `${plural(bad.length, "cron")} failing` : `${plural(crons.length, "cron")} OK`) : "No crons"}</span>
+      ${p.daemon ? "" : html`<span class="warn">Old daemon</span>`}
+      <span class="push">${agoEl(a.last_seen)}</span>
+    </div></a>`;
+}
+
+// ---------- detail ----------
+function rail() {
+  const tab = S.route.tab === "files" ? "files" : S.route.tab;
+  return html`<nav class="rail" id="rail" aria-label="Machines">
+    <a class="rail-all" href="#/">${I.grid} All machines</a>
+    ${S.order.filter(matchQ).map(n => {
+      const d = detect(S.fleet[n]), cur = n === S.route.name;
+      return html`<a class="rail-item${cur ? " is-current" : ""}" href="${hrefM(n, tab)}"${raw(cur ? ' aria-current="page"' : "")}>
+        <i class="dot d-${d.state}"></i><span class="ri-name">${n}</span><span class="ri-head">${d.head}</span></a>`;
+    })}</nav>`;
+}
+function detailView() {
+  const r = S.route, sum = S.fleet[r.name];
+  const det = S.detail && S.detail.name === r.name ? S.detail : null;
+  if (!sum && !det) {
+    if (S.detail && S.detail.missing === r.name) return stateBox(`No machine called “${r.name}”`, "It hasn’t sent a heartbeat to this receiver.", html`<a class="btn" href="#/">All machines</a>`);
+    return stateBox("Loading…", "");
+  }
+  const a = det || sum, d = detect(a);
+  return html`<div class="detail">${rail()}
+    <section class="pane is-${d.state}">${paneHead(a, d)}
+      <nav class="tabs" aria-label="Machine sections">${TABS.map(([k, l]) => html`<a class="tab" href="${hrefM(a.name, k)}"${raw(k === r.tab ? ' aria-current="page"' : "")}>${l}${tabCount(a, k)}</a>`)}</nav>
+      <div class="tab-body">${det ? tabBody(det, r) : html`<p class="empty">Loading ${a.name}…</p>`}</div>
+    </section></div>`;
+}
+function tabCount(a, k) {
+  const p = a.latest || {};
+  const n = k === "processes" ? ((p.mem || {}).all || []).length : k === "files" ? (p.files || {}).count : k === "crons" ? (p.crons || []).length : null;
+  return n ? html`<span class="n">${n}</span>` : "";
+}
+function paneHead(a, d) {
+  const p = a.latest || {}, live = isLive(a), started = live && p.burst;
+  const btn = S.tailBusy ? html`<button class="btn" disabled aria-busy="true">${live ? "Stopping…" : "Starting…"}</button>`
+    : live ? html`<button class="btn on" data-act="tail-off">${I.stop} Stop live tail</button>`
+    : d.state === "offline" ? html`<button class="btn" disabled title="Available once the machine is reporting again">${I.play} Live tail</button>`
+    : html`<button class="btn" data-act="tail-on" title="Ask this machine to report every 2 seconds for 2 minutes">${I.play} Live tail</button>`;
+  return html`<a class="back" href="#/">${I.back} All machines</a>
+    <div class="ph-row"><h1 class="ph-name">${a.name}</h1>
+      ${live ? (started ? html`<span class="chip live"><i class="dot"></i>Live tail · <span data-until="${a.burst_until}"></span></span>`
+                        : html`<span class="chip live">Live tail requested · starts with the next heartbeat</span>`) : ""}
+      <div class="ph-actions">${btn}</div></div>
+    ${S.tailErr ? html`<p class="inline-err" role="alert">${S.tailErr}</p>` : ""}
+    <section class="status big is-${d.state}" aria-label="Current status">
+      <div class="status-top">${chip(d.state, d.label)}<span class="status-for">${since(a, d)}</span></div>
+      <p class="ph-head">${d.head}</p>
+      <p class="ph-why${d.tone ? " warn" : ""}">${d.why}</p>
+    </section>
+    <div class="ph-meta">
+      <span>Up <b>${p.uptime_s != null ? dur(p.uptime_s) : "—"}</b></span>
+      <span>Last heartbeat <b>${agoEl(a.last_seen)}</b></span>
+      <span>First seen <b>${a.first_seen ? stamp(a.first_seen) : "—"}</b></span>
+      <span>Boot <b>${String(p.boot_id || "—").slice(0, 8)}</b>${p.vm_replaced ? html` <span class="warn">VM was replaced</span>` : ""}</span>
+      <span>Daemon <b>v${p.daemon || 1}</b></span>
+    </div>
+    ${p.daemon ? "" : html`<p class="banner">This machine runs the older telemetry daemon, which counts its own log writes as file changes. Its status uses only the app’s activity feed until it’s updated, and it doesn’t send per-process CPU or file times. Have the agent re-install <code>agents/telemetryd.py</code>.</p>`}`;
+}
+function tabBody(a, r) {
+  if (r.tab === "activity") return activityTab(a);
+  if (r.tab === "processes") return processesTab(a);
+  if (r.tab === "files") return filesTab(a, r);
+  if (r.tab === "crons") return cronsTab(a);
+  return overviewTab(a);
+}
+
+function overviewTab(a) {
+  const p = a.latest || {}, hist = a.history || [], t1 = nowS(), t0 = hist.length ? hist[0].ts : t1;
+  const cpu = cpuSeries(a), cores = (p.cpu || {}).count;
+  const act = (p.activity || {}).entries || [], rs = runs(hist, t1);
+  return html`<div class="grid-3">
+      ${chartPanel("ov-cpu", cpuLabel(p) === "CPU" ? "CPU" : `Load · ${plural(cores || 1, "core")}`, cpu, fmtPct, { max: Math.max(5, ...cpu.map(x => x[1] || 0)) * 1.25 })}
+      ${chartPanel("ov-mem", "Memory · all processes", hist.map(h => [h.ts, h.mem]), fmtMB)}
+      ${diskPanel(p.disk || {})}
+    </div>
+    <section class="sec"><div class="sec-head"><h2>Status</h2><span class="sec-sub">Detected from the app’s activity feed and local evidence · last ${dur(t1 - t0)}</span></div>
+      <div class="panel">${hist.length ? html`${strip(rs, t0, t1)}${runList(rs, 6)}` : html`<p class="empty">No history yet.</p>`}</div>
+      <p class="note"><a class="lnk" href="${hrefM(a.name, "activity")}">Full status history</a></p>
+    </section>
+    <div class="grid-2">
+      <section class="sec"><div class="sec-head"><h2>Recently changed files</h2><span class="sec-sub">Last 5 minutes</span><a class="lnk" href="${hrefM(a.name, "files")}">Browse files</a></div>
+        <div class="panel list">${recentFiles(a)}</div></section>
+      <section class="sec"><div class="sec-head"><h2>Recent activity</h2><a class="lnk" href="${hrefM(a.name, "activity")}">All activity</a></div>
+        <div class="panel list">${act.length ? actList(act.slice(0, 5)) : html`<p class="empty">${actEmpty(p)}</p>`}</div></section>
+    </div>`;
+}
+function diskPanel(d) {
+  const pct = d.total_gb ? d.used_gb / d.total_gb * 100 : null;
+  return html`<div class="panel"><div class="cp-head"><span class="cp-lbl">Disk</span><span class="cp-val">${fmtPct(pct)}</span></div>
+    <p class="disk-val"><b>${d.used_gb ?? "—"} GB</b> of ${d.total_gb ?? "—"} GB used</p>
+    <div class="bar"><i style="width:${pct == null ? 0 : Math.min(100, pct).toFixed(2)}%"></i></div>
+    <div class="cp-axis"><span>${d.path || ""}</span><span>${d.total_gb ? (d.total_gb - d.used_gb).toFixed(1) + " GB free" : ""}</span></div></div>`;
+}
+function recentFiles(a) {
+  const p = a.latest || {}, obs = p.observed || {};
+  if (!p.daemon) return html`<p class="empty">Shown once this machine runs the updated daemon.</p>`;
+  const rec = obs.recent || [];
+  if (!rec.length) return html`<p class="empty">No files changed in the last 5 minutes.</p>`;
+  return html`<ul class="recent">${rec.map(([path, mt]) => {
+    const dir = path.split("/").slice(0, -1);
+    return html`<li><a href="${hrefM(a.name, "files", dir)}" data-flash="${base(path)}">${I.file}<span class="p">${path}</span><span class="t">${agoEl(mt)}</span></a></li>`;
+  })}</ul>`;
+}
+const actEmpty = p => (p.activity || {}).error ? `Couldn’t read the app’s activity feed on this machine (${(p.activity || {}).error}).` : "The app hasn’t reported any activity yet.";
+const actList = entries => html`<ul class="acts">${entries.map(e => {
+  const ts = isoTs(e.timestamp), st = e.status === "success" ? "success" : e.status === "error" ? "error" : "pending";
+  return html`<li class="act"><span class="s-${st}" title="${e.status || ""}">${st === "success" ? I.ok : st === "error" ? I.err : I.pending}</span>
+    <div><p class="act-title">${clean(e.status_title || e.title)}</p>${e.subtitle ? html`<p class="act-sub">${clean(e.subtitle)}</p>` : ""}</div>
+    <div class="act-time">${ts ? agoEl(ts) : ""}<span class="act-type">${String(e.activity_type || "").replace(/_/g, " ")}</span></div></li>`;
+})}</ul>`;
+
+function activityTab(a) {
+  const p = a.latest || {}, act = (p.activity || {}).entries || [], hist = a.history || [], t1 = nowS();
+  const st = p.status || {}, rs = runs(hist, t1);
+  return html`<section class="sec" style="margin-top:0"><div class="sec-head"><h2>App activity</h2><span class="sec-sub">The app’s own feed — the same one behind its sidebar</span></div>
+      <div class="panel list">${act.length ? actList(act) : html`<p class="empty">${actEmpty(p)}</p>`}</div></section>
+    <section class="sec"><div class="sec-head"><h2>Status history</h2><span class="sec-sub">${hist.length ? `Since ${clock(hist[0].ts)}` : ""}</span></div>
+      <div class="panel">${hist.length ? html`${strip(rs, hist[0].ts, t1)}${runList(rs, 200)}` : html`<p class="empty">No history yet.</p>`}</div></section>
+    <section class="sec"><div class="sec-head"><h2>What the agent says</h2><span class="sec-sub">Self-reported · not used for status</span></div>
+      <div class="panel"><p>${st.state ? html`The agent reports <b>${st.state}</b>${st.task ? html` — “${st.task}”` : ""}${st.since ? html`, updated ${agoEl(st.since)}` : ""}.` : "The agent hasn’t written a status file."}</p></div></section>`;
+}
+
+function processesTab(a) {
+  const p = a.latest || {}, mem = p.mem || {}, hist = a.history || [], t1 = nowS();
+  const rows = (mem.all || mem.top || []).map(r => ({ name: String(r[0]), mb: r[1] || 0, cpu: r.length > 2 ? r[2] : null, pid: r[3] }));
+  const hasCpu = rows.some(r => r.cpu != null);
+  const key = S.procSort === "cpu" && !hasCpu ? "mem" : S.procSort;
+  rows.sort(key === "name" ? (x, y) => natural(x.name, y.name) : key === "cpu" ? (x, y) => (y.cpu || 0) - (x.cpu || 0) || y.mb - x.mb : (x, y) => y.mb - x.mb);
+  // CPU bars are on a one-core scale (100% = a full core), like top/Activity Monitor
+  const maxMb = Math.max(1, ...rows.map(r => r.mb)), maxCpu = Math.max(100, ...rows.map(r => r.cpu || 0));
+  const recent = hist.filter(h => h.ts > t1 - 3600);
+  const cpu = cpuSeries(a);
+  const th = (k, label, cls) => html`<th class="${cls}"${raw(key === k ? ` aria-sort="${k === "name" ? "ascending" : "descending"}"` : "")}><button data-sort="${k}">${label}</button></th>`;
+  return html`<div class="grid-2" style="gap:12px">
+      ${chartPanel("pr-cpu", hasCpu ? "CPU · whole machine" : "Load", cpu, fmtPct, { max: Math.max(5, ...cpu.map(x => x[1] || 0)) * 1.25 })}
+      ${chartPanel("pr-mem", "Memory · all processes", hist.map(h => [h.ts, h.mem]), fmtMB)}
+    </div>
+    <section class="sec"><div class="sec-head"><h2>${plural(rows.length, "process")}</h2><span class="sec-sub">Inside this machine’s container · trend is the last hour of memory</span></div>
+      <div class="panel" style="padding:0 4px">${rows.length ? html`<table class="pt">
+        <thead><tr>${th("name", "Name", "")}<th class="c-pid">PID</th>${hasCpu ? th("cpu", "CPU", "c-cpu") : html`<th class="c-cpu">CPU</th>`}${th("mem", "Memory", "c-mem")}<th class="c-trend">Trend</th></tr></thead>
+        <tbody>${rows.map((r, i) => html`<tr>
+          <td class="nm">${r.name}</td>
+          <td class="c-pid">${r.pid ?? "—"}</td>
+          <td class="c-cpu">${r.cpu == null ? html`<span class="c-pid">—</span>` : html`<div class="meter"><div class="bar"><i style="width:${(r.cpu / maxCpu * 100).toFixed(1)}%"></i></div><span>${fmtPct(r.cpu)}</span></div>`}</td>
+          <td class="c-mem"><div class="meter"><div class="bar"><i style="width:${(r.mb / maxMb * 100).toFixed(1)}%"></i></div><span>${fmtMB(r.mb)}</span></div></td>
+          <td class="c-trend">${chart("pr-t-" + i + r.name, recent.map(h => [h.ts, ((h.procs || {})[r.name] || [])[0] ?? null]), { fmt: fmtMB, t0: t1 - 3600, t1 })}</td></tr>`)}
+        </tbody></table>` : html`<p class="empty">No process data in the latest heartbeat.</p>`}</div>
+      ${hasCpu ? "" : html`<p class="note">Per-process CPU arrives with the updated telemetry daemon. Until then the graph shows load average.</p>`}
+    </section>`;
+}
+
+// ---------- files: a real explorer built from the inventory paths ----------
+let treeCache = { key: null, root: null };
+function tree(a) {
+  const p = a.latest || {}, key = a.name + ":" + p.ts;
+  if (treeCache.key === key) return treeCache.root;
+  const mk = name => ({ name, dirs: new Map(), files: [], kb: 0, n: 0, mt: 0 });
+  const root = mk("workspace");
+  for (const [path, kb, mt] of (p.files || {}).entries || []) {
+    const parts = String(path).split("/");
+    let node = root;
+    const add = n => { n.kb += kb || 0; n.n++; n.mt = Math.max(n.mt, mt || 0); };
+    add(node);
+    for (const seg of parts.slice(0, -1)) {
+      if (!node.dirs.has(seg)) node.dirs.set(seg, mk(seg));
+      node = node.dirs.get(seg); add(node);
+    }
+    node.files.push({ name: parts[parts.length - 1], kb: kb || 0, mt: mt || 0, path });
+  }
+  treeCache = { key, root };
+  return root;
+}
+function filesTab(a, r) {
+  const p = a.latest || {}, files = p.files || {}, entries = files.entries || [];
+  const root = tree(a);
+  let node = root;
+  for (const seg of r.path) { node = node && node.dirs.get(seg); }
+  const crumbs = html`<nav class="crumbs" aria-label="Folder">${[["workspace", []], ...r.path.map((s, i) => [s, r.path.slice(0, i + 1)])].map(([label, path], i, all) =>
+    html`${i ? html`<span class="sep" aria-hidden="true">/</span>` : ""}<a href="${hrefM(a.name, "files", path)}"${raw(i === all.length - 1 ? ' aria-current="page"' : "")}>${label}</a>`)}</nav>`;
+  const bar = html`<div class="fx-bar">${crumbs}<label class="search">
+      <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.25"/><path d="m10.25 10.25 3 3"/></svg>
+      <input id="fq" type="search" placeholder="Search all files" aria-label="Search all files on this machine" value="${S.fq}" autocomplete="off" spellcheck="false"></label></div>`;
+  const truncated = files.count > entries.length;
+  const foot = html`<p class="fx-foot">${plural(files.count || 0, "file")} · ${files.mb ?? 0} MB in ~/workspace${truncated ? ` · showing the ${entries.length} largest` : ""}${entries.length && entries[0].length < 3 ? " · modified times arrive with the updated daemon" : ""}</p>`;
+  if (!entries.length) return html`${bar}<div class="fx"><p class="empty">No files in ~/workspace yet.</p></div>`;
+
+  const sk = S.fileSort, sorter = (x, y) => sk.key === "size" ? (x.kb - y.kb) * sk.dir || natural(x.name, y.name)
+    : sk.key === "mod" ? (x.mt - y.mt) * sk.dir || natural(x.name, y.name) : natural(x.name, y.name) * sk.dir;
+  const head = (k, label, cls = "") => html`<span class="${cls}"><button data-fsort="${k}" aria-pressed="${sk.key === k}">${label}${sk.key === k ? (sk.dir > 0 ? " ↑" : " ↓") : ""}</button></span>`;
+  const headRow = html`<div class="fx-row fx-head">${head("name", "Name")}${head("size", "Size")}<span class="r">Contents</span>${head("mod", "Modified", "r")}</div>`;
+
+  if (S.fq) {
+    const q = S.fq.toLowerCase();
+    const hits = entries.filter(e => String(e[0]).toLowerCase().includes(q)).slice(0, 200)
+      .map(e => ({ name: base(e[0]), path: e[0], kb: e[1], mt: e[2] || 0 })).sort(sorter);
+    const max = Math.max(1, ...hits.map(h => h.kb));
+    return html`${bar}<div class="fx" role="list">${headRow}${hits.length ? hits.map(h => html`<a class="fx-row" role="listitem" href="${hrefM(a.name, "files", h.path.split("/").slice(0, -1))}" data-flash="${h.name}">
+        <span class="fx-name">${I.file}<span><span>${h.name}</span><span class="fx-path">${h.path}</span></span></span>${sizeCell(h.kb, max)}<span class="r fx-meta">Open folder</span><span class="r fx-meta">${h.mt ? agoEl(h.mt) : "—"}</span></a>`)
+      : html`<p class="empty">No file paths contain “${S.fq}”.</p>`}</div>${foot}`;
+  }
+  if (!node) return html`${bar}<div class="fx"><p class="empty">This folder isn’t in the latest heartbeat. <a class="lnk" href="${hrefM(a.name, "files")}">Back to workspace</a></p></div>`;
+  const dirs = [...node.dirs.values()].map(d => ({ ...d, kind: "dir" })).sort(sorter);
+  const fls = node.files.map(f => ({ ...f, kind: "file" })).sort(sorter);
+  const max = Math.max(1, ...dirs.map(d => d.kb), ...fls.map(f => f.kb));
+  return html`${bar}<div class="fx" role="list">${headRow}
+    ${r.path.length ? html`<a class="fx-row" role="listitem" href="${hrefM(a.name, "files", r.path.slice(0, -1))}"><span class="fx-name">${I.up}<span>Up to ${r.path.length > 1 ? r.path[r.path.length - 2] : "workspace"}</span></span><span></span><span></span><span></span></a>` : ""}
+    ${dirs.map(d => html`<a class="fx-row fx-dir" role="listitem" href="${hrefM(a.name, "files", [...r.path, d.name])}"><span class="fx-name">${I.folder}<span>${d.name}</span></span>${sizeCell(d.kb, max)}<span class="r fx-meta">${plural(d.n, "file")}</span><span class="r fx-meta">${d.mt ? agoEl(d.mt) : "—"}</span></a>`)}
+    ${fls.map(f => html`<div class="fx-row${S.flash === f.name ? " flash" : ""}" role="listitem"><span class="fx-name">${I.file}<span title="${f.path}">${f.name}</span></span>${sizeCell(f.kb, max)}<span class="r fx-meta">${(f.name.includes(".") ? f.name.split(".").pop() : "file").toUpperCase()}</span><span class="r fx-meta">${f.mt ? agoEl(f.mt) : "—"}</span></div>`)}
+    ${!dirs.length && !fls.length ? html`<p class="empty">This folder is empty.</p>` : ""}
+  </div>${foot}`;
+}
+const sizeCell = (kb, max) => html`<span class="fx-size"><span class="bar"><i style="width:${(kb / max * 100).toFixed(1)}%"></i></span><span class="r">${fmtKB(kb)}</span></span>`;
+
+function cronsTab(a) {
+  const crons = (a.latest || {}).crons || [], hist = (a.cron_history || []).slice().reverse();
+  if (!crons.length && !hist.length) return html`<div class="panel"><p class="empty">No cron heartbeats yet. Crons appear once the agent’s jobs write <code>cron_heartbeat.json</code>.</p></div>`;
+  const row = c => { const ts = isoTs(c.last_run); return html`<tr><td class="nm">${c.id}</td><td>${c.status === "ok" ? html`<span class="chip working"><i class="dot"></i>OK</span>` : html`<span class="chip offline"><i class="dot"></i>${c.status || "unknown"}</span>`}</td><td>${ts ? html`${agoEl(ts)} <span class="c-pid">· ${stamp(ts)}</span>` : clean(c.last_run || "—")}</td></tr>`; };
+  return html`<div class="panel" style="padding:0 4px"><table class="pt"><thead><tr><th>Cron</th><th>Status</th><th>Last run</th></tr></thead><tbody>${crons.map(row)}</tbody></table></div>
+    <section class="sec"><div class="sec-head"><h2>Run history</h2><span class="sec-sub">Each time a cron reported in</span></div>
+      <div class="panel list"><ol class="runs" style="margin:0">${hist.map(h => html`<li class="run" style="grid-template-columns:168px minmax(0,1fr)"><span class="run-time">${stamp(h.ts)}</span>
+        <span class="run-what">${(h.crons || []).length ? h.crons.map(c => `${c.id}: ${c.status}`).join(" · ") : "No crons reported"}</span></li>`)}</ol></div></section>`;
+}
+
+// ---------- render loop ----------
+function renderKey() {
+  return JSON.stringify([S.route, S.q, S.fq, S.procSort, S.fileSort, S.tailBusy, S.tailErr, S.ok === null, S.ok || S.order.length > 0, S.flash,
+    S.order.map(n => { const a = S.fleet[n]; return [n, a.last_seen, a.burst_until, detect(a).state, isLive(a)]; }),
+    S.detail && [S.detail.name, S.detail.missing, S.detail.last_seen, S.detail.burst_until]]);
+}
+function render(force) {
+  const key = renderKey();
+  if (!force && key === S.key) return;
+  S.key = key;
+  const ae = document.activeElement, focus = ae && ae.id && ae.tagName === "INPUT" ? { id: ae.id, s: ae.selectionStart, e: ae.selectionEnd } : null;
+  const railEl = $("#rail"), railTop = railEl ? railEl.scrollTop : 0;
+  $("#counts").innerHTML = out(countsHTML());
+  $("#view").innerHTML = out(S.route.view === "detail" ? detailView() : wallView());
+  if (focus) { const el = document.getElementById(focus.id); if (el) { el.focus(); try { el.setSelectionRange(focus.s, focus.e); } catch {} } }
+  const r2 = $("#rail"); if (r2) r2.scrollTop = railTop;
+  if (hover) { const c = document.querySelector(`.chart[data-chart="${CSS.escape(hover.id)}"]`); if (c) showHover(c, hover.x); }
+  tickTimes(); tickConn();
+}
+function tickTimes() {
+  const now = nowS();
+  document.querySelectorAll("[data-ago]").forEach(el => { el.textContent = agoTxt(now - +el.dataset.ago); });
+  document.querySelectorAll("[data-until]").forEach(el => { const s = Math.max(0, Math.ceil(+el.dataset.until - now)); el.textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); });
+}
+setInterval(() => { render(); tickTimes(); tickConn(); }, 1000);
+
+// ---------- data ----------
+async function getJSON(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok && r.status !== 404) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+let timer = null, inflight = false;
+async function poll() {
+  clearTimeout(timer);
+  if (inflight) { timer = setTimeout(poll, 300); return; }
+  inflight = true;
+  const route = S.route;
+  try {
+    const [sum, det] = await Promise.all([getJSON("/api/agents"),
+      route.view === "detail" ? getJSON("/api/agents/" + encodeURIComponent(route.name)) : null]);
+    S.skew = sum.now - Date.now() / 1000;
+    S.fleet = Object.fromEntries(sum.agents.map(a => [a.name, a]));
+    S.order = sum.agents.map(a => a.name).sort(natural);
+    if (det && route.name === S.route.name) S.detail = det.agent || { missing: route.name };
+    S.ok = true; S.lastOk = Date.now();
+  } catch (e) { S.ok = false; }
+  inflight = false;
+  render();
+  const fast = S.route.view === "detail" && S.fleet[S.route.name] && isLive(S.fleet[S.route.name]);
+  timer = setTimeout(poll, fast ? 2000 : 5000);
+}
+async function tail(on) {
+  const name = S.route.name;
+  S.tailBusy = true; S.tailErr = null; render();
+  try {
+    const r = await fetch("/api/burst", { method: "POST", headers: { "Content-Type": "application/json", "X-Token": TOKEN },
+      body: JSON.stringify({ agent: name, duration: on ? 120 : 0 }) });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    for (const a of [S.fleet[name], S.detail && S.detail.name === name ? S.detail : null]) if (a) a.burst_until = j.burst_until;
+  } catch (e) {
+    S.tailErr = on ? "Couldn’t start live tail. Nothing changed — try again." : "Couldn’t stop live tail. It ends on its own within 2 minutes.";
+  }
+  S.tailBusy = false; render(); poll();
+}
+
+// ---------- events ----------
+window.addEventListener("hashchange", () => {
+  const prev = S.route; S.route = parseRoute();
+  if (prev.name !== S.route.name) S.tailErr = null;
+  if (prev.name !== S.route.name || S.route.tab !== "files") S.fq = "";
+  if (prev.view !== S.route.view || prev.name !== S.route.name || prev.tab !== S.route.tab || String(prev.path) !== String(S.route.path)) window.scrollTo(0, 0);
+  render(true);
+  if (S.route.view === "detail" && (!S.detail || S.detail.name !== S.route.name)) poll();
+});
+function syncThemeButton() {
+  const light = document.documentElement.dataset.theme === "light", label = light ? "Switch to dark mode" : "Switch to light mode";
+  $("#theme").setAttribute("aria-label", label); $("#theme").title = label;
+}
+$("#theme").addEventListener("click", () => {
+  const light = document.documentElement.dataset.theme !== "light";
+  if (light) document.documentElement.dataset.theme = "light"; else delete document.documentElement.dataset.theme;
+  try { localStorage.setItem("fleet-theme", light ? "light" : "dark"); } catch (e) {}
+  syncThemeButton();
+});
+syncThemeButton();
+document.addEventListener("click", e => {
+  const fl = e.target.closest("[data-flash]");
+  if (fl) { S.flash = fl.dataset.flash; S.fq = ""; setTimeout(() => { S.flash = null; render(); }, 2400); }
+  const b = e.target.closest("[data-act],[data-sort],[data-fsort]");
+  if (!b) return;
+  const act = b.dataset.act;
+  if (act === "tail-on") tail(true);
+  else if (act === "tail-off") tail(false);
+  else if (act === "clear-q") { S.q = ""; $("#q").value = ""; render(); }
+  else if (b.dataset.sort) { S.procSort = b.dataset.sort; render(); }
+  else if (b.dataset.fsort) { const k = b.dataset.fsort; S.fileSort = { key: k, dir: S.fileSort.key === k ? -S.fileSort.dir : (k === "name" ? 1 : -1) }; render(); }
+});
+document.addEventListener("input", e => {
+  if (e.target.id === "q") { S.q = e.target.value.trim(); render(); }
+  if (e.target.id === "fq") { S.fq = e.target.value.trim(); render(); }
+});
+document.addEventListener("keydown", e => {
+  const inInput = e.target.tagName === "INPUT";
+  if (e.key === "/" && !inInput) { e.preventDefault(); $("#q").focus(); return; }
+  if (e.key === "Escape") {
+    if (inInput) { e.target.value = ""; e.target.dispatchEvent(new Event("input", { bubbles: true })); e.target.blur(); }
+    else if (S.route.view === "detail") location.hash = "#/";
+  }
+});
+poll();
+</script>
+</body>
+</html>
