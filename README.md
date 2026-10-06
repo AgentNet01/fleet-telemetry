@@ -81,8 +81,12 @@ only while the app's activity feed shows the AI mid-turn. Background jobs —
 cron bookkeeping writes, polling, CPU — never count (checked against fleet
 history: quiet cron ticks never appear in the feed; a tick that finds
 something the AI acts on does). File changes still show under "Recently
-changed files". The agent's self-reported `status.json` is shown on the
-Activity tab but never drives status.
+changed files".
+
+Everything on the dashboard is read passively from data that already exists
+(the app's activity feed, files and their modified times, processes, system
+stats). Agents are never asked to write status, heartbeat or snapshot files
+for it: self-reports go stale, and it's extra work for the AI.
 
 ## Agent onboarding
 
@@ -98,7 +102,6 @@ The daemon reports:
 - the app's live activity feed as its primary status headline
   (read via the sanctioned local API — see `telemetryd.py`)
 - heuristic working-state detection (recent file changes, CPU, browser)
-- cron health via a heartbeat file the watch jobs update
 
 Failed pushes spool to disk locally and flush on recovery.
 

@@ -6,12 +6,27 @@
 #   First install:  FLEET_AGENT=boboeN ./install.sh <receiver_ip> <token>
 #   Re-install:     ./install.sh            (reuses existing config; the
 #                                            watchdog cron uses this form)
+#   Upgrade:        git pull && agents/install.sh   (run from a repo checkout:
+#                   copies the new daemon + installer in, then restarts)
 set -u
 
 TDIR=/home/hatch/workspace/telemetry
 UNIT=/etc/systemd/system/telemetryd.service
+SRC="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p "$TDIR/spool"
+
+# Run from a repo checkout: install that copy of the daemon (and this script,
+# so the watchdog cron keeps using the current installer).
+if [ "$SRC" != "$TDIR" ] && [ -f "$SRC/telemetryd.py" ]; then
+  cp "$SRC/telemetryd.py" "$TDIR/telemetryd.py"
+  cp "$SRC/install.sh" "$TDIR/install.sh" && chmod +x "$TDIR/install.sh"
+  echo "Installed daemon from $SRC."
+fi
+[ -f "$TDIR/telemetryd.py" ] || { echo "ERROR: $TDIR/telemetryd.py missing; run this from the repo's agents/ folder." >&2; exit 1; }
+
+# The dashboard no longer reads agent-written reports (v8+): clear old ones.
+rm -f "$TDIR/status.json" "$TDIR/cron_heartbeat.json" "$TDIR/active_work.json"
 
 if [ $# -ge 2 ]; then
   AGENT="${FLEET_AGENT:?set FLEET_AGENT=boboeN}"
@@ -39,10 +54,6 @@ else
   echo "Reusing existing config for $AGENT."
 fi
 
-# 3. default status file (the agent updates it as it works)
-[ -f "$TDIR/status.json" ] || \
-  printf '{"state": "idle", "task": "", "since": %s}\n' "$(date +%s)" > "$TDIR/status.json"
-
 # 4. systemd unit (system-level: no user bus exists in this container).
 #    /etc is ephemeral across VM replacements -- the watchdog cron re-runs
 #    this script, which recreates the unit. Hence: fully idempotent.
@@ -65,7 +76,9 @@ WantedBy=default.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now telemetryd.service >/dev/null 2>&1 || true
+systemctl enable telemetryd.service >/dev/null 2>&1 || true
+# restart, not just start: an upgrade must replace the running old daemon
+systemctl restart telemetryd.service >/dev/null 2>&1 || true
 sleep 3
 
 if systemctl is-active --quiet telemetryd.service; then

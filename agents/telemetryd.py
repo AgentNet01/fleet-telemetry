@@ -13,10 +13,10 @@ install.sh -- the script itself is identical across the fleet.
 Config lives in ~/workspace/telemetry/:
   .token       shared secret (0600) -- written by install.sh, never logged
   proxy.conf   tunnel proxy URL, e.g. http://<host>:3130 -- written by install.sh
-  status.json  {"state": "working|idle", "task": "...", "since": <ts>}
-               -- updated by the agent itself whenever it starts/finishes work
-  cron_heartbeat.json  {"crons": [{"id": ..., "last_run": ..., "status": ...}]}
-               -- updated by the agent's cron jobs each tick (optional)
+
+Everything reported is read passively from data that already exists (the
+app's activity feed, files, processes, system stats). The agent is never
+asked to write anything for the dashboard.
 """
 
 import json
@@ -49,8 +49,6 @@ AGENT = None
 RECEIVER_URL = None
 TOKEN_FILE = os.path.join(TDIR, ".token")
 PROXY_FILE = os.path.join(TDIR, "proxy.conf")
-STATUS_FILE = os.path.join(TDIR, "status.json")
-CRON_FILE = os.path.join(TDIR, "cron_heartbeat.json")
 SPOOL_DIR = os.path.join(TDIR, "spool")
 BOOTID_FILE = os.path.join(TDIR, ".boot_id")
 LOG = os.path.join(TDIR, "telemetryd.log")
@@ -343,25 +341,6 @@ def files(walked):
                         for rel, sz, mt in entries[:500]]}
 
 
-def status():
-    try:
-        with open(STATUS_FILE) as f:
-            s = json.load(f)
-        return {"state": s.get("state", "idle"),
-                "task": s.get("task", ""),
-                "since": s.get("since")}
-    except Exception:
-        return {"state": "idle", "task": "", "since": None}
-
-
-def crons():
-    try:
-        with open(CRON_FILE) as f:
-            return json.load(f).get("crons", [])
-    except Exception:
-        return []
-
-
 def _fetch_entries():
     """Raw entries from the agent activity feed socket (read-only).
 
@@ -430,9 +409,9 @@ def activity():
 def observed(walked, plist, now, self_pid):
     """Heuristic working detection from local evidence. Pure, unit-testable.
 
-    Backs up the self-reported status.json: catches real activity even when
-    the agent forgot to update its status file. Signals are labeled so the
-    dashboard can show WHY it thinks the agent is working.
+    Machine evidence only (files, CPU) -- shown as context on the dashboard,
+    never as the agent's status. Signals are labeled so the dashboard can show
+    what changed.
 
     The daemon's own directory and process are excluded: it rewrites its log
     and .boot_id every cycle, which used to make every agent look "working".
@@ -484,25 +463,8 @@ CAPABILITIES = {
     "limits": ["no inbound network (push-only)", "no GPU",
                "write actions need approval",
                "money / data deletion / outside contact / credential changes need Jack",
-               "one app status line; concurrent work is in active_work"],
+               "one app status line"],
 }
-
-ACTIVE_WORK_FILE = os.path.join(TDIR, "active_work.json")
-
-
-def read_active_work():
-    """Snapshot of what the agent is doing right now, written by a cron job
-    (the daemon itself can't call agent tools). Marked stale if older than
-    10 minutes."""
-    try:
-        with open(ACTIVE_WORK_FILE) as f:
-            snap = json.load(f)
-        snap["stale"] = (time.time() - snap.get("ts", 0)) > 600
-        return snap
-    except (OSError, ValueError):
-        return {"ts": 0, "stale": True, "subagents": [], "crons": [],
-                "note": "no snapshot yet"}
-
 
 def build_payload(token_note_replaced=False):
     bid = boot_id()
@@ -521,7 +483,7 @@ def build_payload(token_note_replaced=False):
     now = time.time()
     return {
         "agent": AGENT,
-        "daemon": 7,              # payload version; dashboard flags older ones
+        "daemon": 8,              # payload version; dashboard flags older ones
         "ts": now,
         "boot_id": bid,
         "vm_replaced": vm_replaced,
@@ -530,14 +492,11 @@ def build_payload(token_note_replaced=False):
         "disk": disk(),
         "uptime_s": uptime_s(),
         "files": files(walked),
-        "status": status(),       # self-reported by the agent (status.json)
         "activity": activity(),   # app's activity feed (same source as sidebar)
         # heuristic working detection (local evidence)
         "observed": observed(walked, mem["all"], now, os.getpid()),
-        "crons": crons(),
         "system": system(now),    # OS, CPU, shared-host memory, network, IP
         "capabilities": CAPABILITIES,   # static: what this agent can do
-        "active_work": read_active_work(),  # dynamic: subagents, jobs (cron-written)
     }
 
 
@@ -649,10 +608,6 @@ def main():
     token = read_token()
     op = opener()
     log("telemetryd starting for %s -> %s" % (AGENT, RECEIVER_URL))
-    # default status file so the dashboard never shows a blank
-    if not os.path.exists(STATUS_FILE):
-        with open(STATUS_FILE, "w") as f:
-            json.dump({"state": "idle", "task": "", "since": time.time()}, f)
     last_push = 0.0
     last_activity = None
     while True:

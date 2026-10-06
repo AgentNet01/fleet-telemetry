@@ -73,8 +73,8 @@ subagent to do browser work.
   replacements (which wipe `/etc`).
 
 So at any moment, an agent might be: talking to Jack, running 2 subagents,
-with 3 crons ticking and a daemon pushing telemetry. The telemetry
-payload's `active_work` section exists to make this visible.
+with 3 crons ticking and a daemon pushing telemetry. The dashboard only
+shows what can be read passively; the agent never writes reports for it.
 
 ## 3. Capabilities inventory
 
@@ -132,8 +132,7 @@ payload's `active_work` section exists to make this visible.
 - **The four boundaries** (§1): money, data deletion, outside contact,
   credential changes — always Jack first.
 - **One status line**: the app's activity feed exposes a single "current"
-  status, not a task list. Concurrent work is visible via `active_work`,
-  not the headline.
+  status, not a task list.
 - **No mind-reading across agents**: Boboe 2 sees only its own VM and what
   the swarm shares. It cannot inspect another agent's machine — only what
   that agent's daemon reports.
@@ -150,9 +149,7 @@ Per 30-second heartbeat, each daemon sends:
 | `system` | OS, cores, CPU model, host vs container memory, net rx/tx, Tailscale IP |
 | `mem` / `cpu` / `disk` | process list with per-process CPU%, totals |
 | `files` | workspace inventory: paths, sizes, mtimes (names only, never contents) |
-| `crons` | cron health via heartbeat files |
 | `capabilities` | static manifest of this agent's capabilities (this document, condensed) |
-| `active_work` | dynamic: running subagents, scheduled jobs, background processes |
 | `burst` | whether a live-tail burst is active |
 
 Jack can click any agent card → detail view, and click any listed file to
