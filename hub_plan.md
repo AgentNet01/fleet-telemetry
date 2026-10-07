@@ -1,129 +1,165 @@
-# Fleet Hub plan (draft v1, for review by the Boboes)
+# Fleet Hub plan (v2, revised after review by 11 Boboes)
 
 Goal: Jack's 12 Muse agents (and Darragh's agents) work together on several
-projects at once, **fully on their own**, with no dependency on Jack's Mac or on
-Claude Code. Every request gets an answer (**100% response rate; ~5 minutes is
-fine**), nothing is dropped, and Jack can see everything on one dashboard.
+projects at once, **fully on their own**, with no dependency on Jack's Mac or
+on Claude Code. Every request gets an answer (**100% response rate; ~5 minutes
+is fine**), nothing is dropped, and Jack sees everything on one dashboard.
 
-This replaces the patchwork we built on Oct 6-7 (Slack routing on Jack's Mac,
-the Muse Wall typing into chats, the front-door listener, timers and caps).
+This replaces the patchwork built Oct 6-7 (Slack routing on Jack's Mac, the
+Muse Wall typing into chats, the front-door listener, timers and caps).
+
+v1 -> v2: cron every 5 min (not 2) with small, capped runs; the hub assigns
+leads, chairs and fallbacks by clock; two-step "ask the fleet"; checkpointed
+long tasks; per-agent tokens, idempotent writes, local outbox; capability
+tags; Darragh bridge via @mentions in a dedicated channel; parallel rollout.
 
 ## What we know (tested, Oct 6-7)
 
-- Muse agents act only in **turns**. Turns start from: a chat message, a
-  background-exec command finishing, a **cron run**, or a hook wake.
-- **Crons are the dependable trigger.** Darragh's agent Neo (also on Muse)
-  answers Slack with a cron every 2 minutes that reads and posts with the
-  `slack` CLI; replies land in 1-4 minutes. Boboe 5's last 15 cron runs all
-  succeeded. Our earlier timeouts were runs scanning all of Slack or doing too
-  much per run.
-- **Hook workers are unreliable** (skipped while one is busy, rarely report back).
-- **VMs make outbound HTTPS to anywhere** (GitHub, Fly, Supabase tested, no
-  approvals) but accept **no inbound** connections.
-- VMs have ~600 MB free RAM, shared. `telemetryd` already runs always-on (~19 MB).
-- Muse has no built-in Slack channel and no public API to start a turn.
+- Muse agents act only in **turns** (a chat message, a background command
+  finishing, a **cron run**, or a hook wake). No inbound connections to VMs;
+  outbound HTTPS works to anywhere without approvals.
+- **Crons are the dependable trigger.** Darragh's agent Neo (on Muse) answers
+  Slack with a 2-minute cron, replies in 1-4 min. Our cron runs time out only
+  when a run tries to do too much (scan all of Slack, handle a full inbox), or,
+  we suspect, waits on an approval nobody answers.
+- Cron timing is loose: a 1-min cron drifted to every 4-5 min (queued runs are
+  coalesced). Empty runs have taken up to ~99s to start and finish.
+- Hook workers are unreliable (skipped while busy, rarely report back).
+- ~600 MB free RAM per VM, shared; `telemetryd` already runs always-on.
+- Jack's home PC runs the hub and is always on.
 
 ## The design
-
-One **hub** owns all coordination state. Agents are workers: a short cron run
-every 2 minutes asks the hub "what needs me?", does it, and reports back.
 
 ```
                     HUB  (Jack's home PC, always on; Python + SQLite)
   ┌──────────────────────────────────────────────────────────────────┐
-  │ PROJECTS ─ each has tasks and a lead                             │
-  │ WORK ITEMS, each with its own message thread:                    │
-  │   task      owner, status, definition of done, project           │
-  │   request   "A asks B" ─ waiting on B until B answers            │
-  │   question  "ask the fleet" ─ everyone answers, a chair replies  │
-  │ RULES (plain code, no AI), checked every minute:                 │
-  │   • an item is waiting on you  → it's in your queue              │
-  │   • B hasn't answered a request → stays at the top of B's queue  │
-  │   • B answers → A sees it on A's next run                        │
-  │   • you own a task → it's in your queue until done or handed off │
-  │   • you're free → next ready task in your project(s)             │
-  │   • question window closes → chair gets all views, posts 1 answer│
-  │   • stuck past a limit → "Needs Jack" list                       │
-  │ DASHBOARD: projects, items, threads, every agent, live           │
-  │ SLACK BRIDGE: mirrors chosen threads to Slack (Darragh, Jack's   │
-  │   phone); Slack replies flow back into the item                  │
+  │ PROJECTS: lead + deputy (named in the project record), members   │
+  │ AGENTS:   token, capabilities (e.g. drive-write, etsy, gh)       │
+  │ WORK ITEMS, each with a thread:                                  │
+  │   task      project, owner, definition of done, needs (caps),    │
+  │             checkpoint {done, next, blocked_on, evidence}        │
+  │   request   "A asks B": waiting on B                             │
+  │   question  "ask the fleet": views, then one chair answer        │
+  │ RULES (plain code, every minute):                                │
+  │   • waiting on you → in your inbox, oldest first, until answered │
+  │   • owner silent for 3 runs (~15 min) → re-offered to deputy/lead│
+  │   • task with no new checkpoint for 3 runs → released to lead    │
+  │   • lead assigns tasks; unassigned for 30 min → offered to an    │
+  │     idle member with matching capabilities                       │
+  │   • request chain deeper than 5 → "Needs Jack"                   │
+  │   • anything needing Jack's 4 gates (spend, delete, outside      │
+  │     contact, credentials) → "Needs Jack", never blocks a run     │
+  │ DASHBOARD: Needs Jack (top) · overdue items and who they wait on │
+  │   · projects/tasks/threads · agents: working/stuck/silent by last│
+  │   meaningful action · every view on questions · freshness stamps │
+  │ SLACK BRIDGE: requests to Darragh's agents → @mention in a       │
+  │   dedicated channel; their in-thread replies flow back; dedup key│
+  │ BACKUP: SQLite pushed to GitHub hourly; healthchecks.io ping     │
   └───────────────▲──────────────────────────────┬───────────────────┘
-                  │ fleet post/ask/claim/done      │ fleet inbox
+                  │ fleet post/ask/claim/done/   │ fleet inbox (≤3 items)
+                  │ checkpoint (outbox if down)  │
   ┌───────────────┴──────────────────────────────▼───────────────────┐
-  │ EACH VM                                                          │
-  │   cron every 2 min:  fleet inbox  → empty? stop in seconds.      │
-  │                      otherwise: act on each item, reply via      │
-  │                      fleet post / done, then stop.               │
+  │ EACH VM: cron every 5 min ── a short, capped worker run          │
   │   telemetryd (already there): health + dashboard data            │
   └──────────────────────────────────────────────────────────────────┘
 ```
 
-### Why this is reliable
-
-- **Nothing depends on an agent remembering.** "Who owes what" lives in the
-  hub. An unanswered item stays in the owner's queue on every run until it is
-  answered or handed off. That's the 100% response rate.
-- **Replies attach to an item**, so "answered?" is a fact, not a guess.
-- **Loops can't form.** Only whoever an item is waiting on gets it in their
-  queue, and a reply doesn't create a new obligation unless it asks something.
-- **Idle agents always get work**, so there's no 1-9 AM idle gap.
-- **No Mac, no Claude Code, no main chat.** Cron + hub only.
-- **Light on the VMs.** The cron run is a normal Muse run; `fleet` is one small
-  Python file (stdlib only) that makes a few HTTPS calls.
-
-### The `fleet` command (on every VM)
+### The worker run (the cron instruction, drafted by Boboe 2)
 
 ```
-fleet inbox                         what needs me now (items + their threads)
-fleet post <item> "<text>"          reply on an item
-fleet ask <agent|all> "<text>" [--project P]   new request / question
-fleet claim <task> | done <task> --evidence <link> | handoff <task> <agent>
-fleet task new --project P "<title>" --done "<definition of done>"
+FLEET WORKER RUN — about 90 seconds, then exit no matter what.
+1. fleet inbox   (10s timeout). Empty → exit now, no other tool calls.
+2. Handle at most 3 items, oldest first. One next action each:
+   read the item, then reply / claim / checkpoint / done via fleet.
+3. Never do more than ~2 min of work in a run: do one bounded chunk, write
+   a checkpoint (done, next, blocked_on, evidence), and exit. Leftover items
+   wait for the next run.
+4. Never wait on an approval: anything needing Jack's gates → fleet post
+   "awaiting-approval: <what>" and move on.
+5. Every network call has a timeout; on failure note it and continue.
+   If the hub is unreachable, fleet queues writes locally and the run exits.
 ```
+
+Expect runs every ~5 min (sometimes later). That meets "~5 minutes is fine".
+Cost: ~288 runs/agent/day, mostly empty; the hub tracks the empty-run rate.
+
+### The `fleet` command (one stdlib Python file on every VM)
+
+```
+fleet inbox                              what needs me now (≤3 items, with
+                                         checkpoint + short thread summary)
+fleet post <item> "<text>"               reply on an item
+fleet ask <agent|all> "<text>" [-p P]    new request / question
+fleet task new -p P "<title>" --done "<definition>" [--needs cap,...]
+fleet claim <task> | done <task> --evidence <link>
+fleet checkpoint <task> --done ".." --next ".." [--blocked ".."]
+fleet handoff <task> <agent>             receiver or lead must accept
+```
+
+Each agent has its own token. Every write carries an idempotency key, so a run
+that timed out can safely redo its work. Writes made while the hub is down
+are queued in `~/.fleet/outbox` and sent on the next run.
 
 ### "Ask the fleet" (one answer, not 12)
 
-1. `fleet ask all "..."` creates a question; the hub picks a chair (the
-   project lead, or the next agent in rotation).
-2. Every agent sees it on its next run and posts its view on the item.
-3. After a fixed window (e.g. 10 min) or when everyone has answered, the chair
-   gets all views and posts **one** answer, including any disagreement and
-   who didn't answer. If the chair is silent, the next agent becomes chair.
-4. Jack sees only the final answer; every view is on the dashboard.
+1. `fleet ask all "..."` creates a question. The hub assigns the chair: the
+   project lead (deputy as fallback), never chosen by the agents.
+2. Each agent posts its view (capped length) on its next run.
+3. The window closes at max(10 min, 3 runs after the last agent was
+   notified), or early once at least 7 views are in.
+4. The chair gets all views on its next run and posts **one** answer,
+   labelled *consensus*, *majority (n-m)*, or *chair's call*, with dissent
+   and non-responders named. Chair silent 5 min after the window closes → the
+   hub promotes the deputy.
+5. Jack sees the answer. Every view is on the dashboard.
 
-### Projects and roles
+### Projects, roles, long work
 
-- A project has a lead (plans tasks, reviews, unblocks) and members.
-- Roles are per project, not fixed identities. One agent can be in several.
-- A task's definition of done is written when the task is created; "done"
-  needs evidence (link, commit, file).
+- A project names a lead and a deputy (set by Jack or the project owner, e.g.
+  dot for the Income Project). The lead plans and assigns tasks.
+- Agents declare capabilities; tasks list what they need; the hub never hands
+  a task to an agent that can't do it.
+- Long tasks are worked in chunks across many runs. Each run resumes from the
+  task's checkpoint, does one chunk, commits real output (GitHub or Drive), and
+  updates the checkpoint. No subagents for long work.
+- Done means evidence (a link, commit or file).
+
+### Darragh's agents
+
+They keep their own proven setup (2-min cron + Slack CLI); no hub access. The
+hub's Slack bridge posts our requests to them as @mentions in a dedicated
+channel and imports their in-thread replies. Our side owns the follow-up: an
+unanswered bridged request stays overdue on the dashboard and escalates to
+Darragh, then Jack.
 
 ### Where things live
 
 | Thing | Where |
 |---|---|
-| Coordination state (items, tasks, threads) | Hub (SQLite on home PC) |
-| Code, docs, research | GitHub (AgentNet01) |
-| Talking with Darragh's agents | Slack, bridged into the hub |
+| Coordination state (projects, items, threads, checkpoints) | Hub (SQLite on home PC, hourly backup to GitHub) |
+| Code, docs, research, task output | GitHub (AgentNet01), or Drive |
+| Talking with Darragh's agents | Slack, via the hub's bridge |
 | Health / telemetry | Hub (today's receiver, moved) |
-
-## Open questions for the Boboes
-
-1. Does a 2-minute cron that usually exits in seconds fit your box (cost,
-   approvals, timeouts)? What would make a run time out?
-2. What must the cron's instruction say so a run handles everything in its
-   inbox reliably and ends cleanly?
-3. Is `fleet inbox` + `fleet post` enough, or what's missing to do real work?
-4. How should a long task (hours of work) span many 2-minute runs: one run
-   kicks off a subagent? checkpoints in the task thread?
-5. How should Darragh's agents join: through the Slack bridge, or their own
-   `fleet` command?
-6. What would break this, or make you ignore it?
 
 ## Rollout
 
-1. Agree this plan with the Boboes (this document).
-2. Set up the home PC (Tailscale, Python, hub as a service).
-3. Build the hub (extend the receiver) and `fleet`; test with 2 agents.
-4. Move all 12; retire the Mac routing, Muse Wall typing and front door.
-5. First real project with ~5 agents; widen once it runs cleanly.
+1. ✅ Review by the Boboes (this v2).
+2. Set up the home PC: Tailscale, Python, hub as an always-on service.
+3. Build the hub (extending today's receiver) and `fleet`, with tests.
+4. Approval test: run `fleet inbox` and `fleet post` from a cron run on 2
+   agents and confirm no approval prompts and no timeouts.
+5. Run the hub **alongside** today's setup for 24h; keep the 5-min Slack
+   backstop until every old inbox has been empty for 24h; then retire the
+   Mac routing, Muse Wall typing and front door.
+6. First real project: Darragh's Income Project with 3-4 Boboes, Slack bridge
+   live, zero disruption to Darragh's agents. Widen after it runs cleanly.
+
+## Decided / not doing
+
+- Hub on Jack's home PC (always on), not a cloud host. (Boboe 11 preferred a
+  VPS; Jack's call.)
+- No Slack fallback for our agents if the hub is briefly down: the outbox
+  holds writes and runs retry; ad-hoc Slack coordination is what we're
+  replacing.
+- No agent-chosen chairs, no rotation by agent agreement, no subagents for
+  long work, no cost dashboard until real cost data exists.
