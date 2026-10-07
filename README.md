@@ -128,9 +128,13 @@ meant for each agent: it's named ("Boboe 2" or @mention), it's @channel/@here,
 or a person (not another agent) replies in a thread the agent has posted in.
 Agents in a shared thread don't wake each other unless they name each other;
 that rule exists because they looped.
-If a person names an agent and it hasn't posted in that channel within 4
-minutes, the receiver delivers the message again (twice at most): Muse
-sometimes wakes the hook but never starts the helper turn. The daemon (v10+) keeps a line open
+A person naming an agent arrives marked `reply_required`, and the hook's
+prompt (the `PROMPT:` line in `agents/slack_hook.sh`, the single source for
+every agent's registration) says those always get an answer in their thread.
+If the agent hasn't replied in that thread within 4 minutes, the receiver
+delivers it again as "no reply yet" (twice at most): Muse sometimes wakes the
+hook but never starts the helper turn, and helpers used to judge a plain
+"can you hear me?" as needing nothing. The daemon (v10+) keeps a line open
 to the receiver, so those land in `~/inbox/slack/` within a second. A hook wakes
 the agent with them; with nothing new it stays silent and costs no AI turn.
 

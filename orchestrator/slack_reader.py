@@ -144,7 +144,7 @@ def route(new):
         targets.pop(who.get(m["user"]), None)
         item = {"kind": "slack", "channel": chans.get(ch, ch), "channel_id": ch, "ts": m["ts"],
                 "thread_ts": m["thread"], "user": m["user"], "user_name": names.get(m["user"], m["user"]),
-                "text": m["text"]}
+                "text": m["text"], "from_agent": m["user"] in who}
         if m["thread"]:
             # the thread so far, so the agent has the context without fetching it
             with lock:
@@ -167,15 +167,19 @@ def retry_unanswered(now):
         return
     with lock:
         who = agents()
+        # where each agent has posted: (agent, channel, thread or None for top level) -> newest ts
         posted = {}
         for m in state["messages"].values():
             a = who.get(m["user"])
             if a:
-                k = (a, m["ch"])
+                k = (a, m["ch"], m["thread"])
                 posted[k] = max(posted.get(k, 0.0), float(m["ts"]))
     for key, w in list(awaiting.items()):
         agent, ch, ts = key
-        if posted.get((agent, ch), 0.0) > float(ts) or w["tries"] >= RETRIES:
+        # answered = a post after it in its thread (a top-level mention: its new thread, or top level)
+        th = w["item"].get("thread_ts")
+        spots = [(agent, ch, th)] if th else [(agent, ch, ts), (agent, ch, None)]
+        if max(posted.get(k, 0.0) for k in spots) > float(ts) or w["tries"] >= RETRIES:
             del awaiting[key]
         elif now - w["at"] >= RETRY_AFTER:
             w["tries"] += 1

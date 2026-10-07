@@ -8,14 +8,11 @@
 # Register once (agent tool call), then dry_run, then enable:
 #   hooks.add  id=slack-inbox  interval=15s
 #              script=~/hooks/scripts/slack-inbox.sh
-#              prompt="New Slack messages for you are in the payload (who, channel,
-#                      thread_ts, text, and why you got each: mentioned / your
-#                      thread / everyone). A thread message comes with the thread
-#                      so far (original post + recent replies; thread_skipped says
-#                      how many older replies were left out). Act or reply as
-#                      your standing instructions say. If nothing needs you, do
-#                      nothing."
-# Copy this file to that script path first (see README "Slack hook").
+#              prompt=<the PROMPT line below, verbatim>
+# Copy this file to that script path first (see README "Slack hook"). When
+# PROMPT changes, re-register the hook with it (hooks.update or remove + add).
+#
+# PROMPT: New Slack messages for you are in the payload (who, channel, ts, thread_ts, text, why you got each, and reply_required). A thread message comes with the thread so far (original post + recent replies). RULE: every message with reply_required=true is a person addressing you by name -- always answer it in Slack, in its thread (thread_ts, or ts if thread_ts is empty), even if only to say you saw it and what you will do. Never stay silent on one, and never treat it as already handled unless you can see your own reply in that thread. why="no reply yet" means you were named a few minutes ago and have not answered. Messages without reply_required (agents naming you, your threads, @channel): act or reply only if they need you, and don't name another agent unless you need them to act.
 source "$HATCH_HOOK_RUNTIME"
 
 INBOX=/home/hatch/inbox/slack
@@ -36,8 +33,11 @@ for p in sys.argv[1:]:
             m = json.load(f)
     except (OSError, ValueError):
         continue
-    msgs.append({k: m.get(k) for k in ("why", "channel", "channel_id", "ts", "thread_ts", "user_name",
-                                       "text", "thread", "thread_skipped")})
+    m2 = {k: m.get(k) for k in ("why", "channel", "channel_id", "ts", "thread_ts", "user_name",
+                                "text", "thread", "thread_skipped")}
+    # a person naming this agent must get an answer (see PROMPT)
+    m2["reply_required"] = m.get("why") in ("mentioned", "no reply yet") and not m.get("from_agent")
+    msgs.append(m2)
 msgs.sort(key=lambda m: float(m["ts"] or 0))
 last_in_thread = {m["thread_ts"]: id(m) for m in msgs if m.get("thread_ts")}
 for m in msgs:

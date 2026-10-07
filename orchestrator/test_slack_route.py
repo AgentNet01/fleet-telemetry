@@ -50,6 +50,8 @@ s.retry_unanswered(t0 + s.RETRY_AFTER); assert sent == [("boboe1", "no reply yet
 s.retry_unanswered(t0 + 2 * s.RETRY_AFTER); s.retry_unanswered(t0 + 3 * s.RETRY_AFTER)
 assert len(sent) == 2 and not s.awaiting, sent                                     # gives up after RETRIES
 s.route([msg("302.0", "UD", "Boboe 1 again?")]); t0 = s.awaiting[("boboe1", "C", "302.0")]["at"]
-msg("303.0", "U1", "yes, here")                                                    # it answered
-sent.clear(); s.retry_unanswered(t0 + s.RETRY_AFTER); assert sent == [] and not s.awaiting
+msg("302.5", "U1", "busy elsewhere", thread="150.0")                              # a post in another thread isn't an answer
+sent.clear(); s.retry_unanswered(t0 + s.RETRY_AFTER); assert sent == [("boboe1", "no reply yet", "302.0")]
+msg("303.0", "U1", "yes, here", thread="302.0")                                    # it answered in the mention's thread
+sent.clear(); s.retry_unanswered(t0 + 2 * s.RETRY_AFTER); assert sent == [] and not s.awaiting
 print("ok")
