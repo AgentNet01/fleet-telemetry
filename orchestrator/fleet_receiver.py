@@ -91,6 +91,7 @@ UPLOAD_MAX = 10 * 1024 * 1024
 MAX_FETCHES = 50       # older viewed files are deleted from the cache
 
 MAILBOX_FILE = os.path.join(HERE, "mailbox.json")
+LISTENER_GRACE = 180   # seconds without a running listener before an agent's front door counts as down
 HOLD = 25              # seconds an agent's /api/wait is held open when nothing is queued
 MAX_QUEUE = 500        # undelivered items kept per agent
 MAX_DELIVERED = 300    # delivery records kept per agent (shown on the dashboard)
@@ -299,6 +300,8 @@ class Handler(BaseHTTPRequestHandler):
                                     "first_seen": now})
             rec["latest"] = payload
             rec["last_seen"] = now
+            if (payload.get("health") or {}).get("listener"):
+                rec["listener_seen"] = now
             rec["history"].append(history_point(now, payload))
             rec["history"] = rec["history"][-MAX_HISTORY:]
             merge_feed(rec, (payload.get("activity") or {}).get("entries"))
@@ -466,10 +469,11 @@ if __name__ == "__main__":
     slack_reader.DATA_FILE = os.path.join(HERE, "slack_messages.json")
 
     def listener_up(agent):
+        # the listener exits on purpose each time it wakes the agent and is restarted at the end
+        # of that turn, so only a gap longer than a turn means the front door is really down
         with lock:
             r = store.get(agent) or {}
-            h = (r.get("latest") or {}).get("health") or {}
-            return bool(h.get("listener")) and time.time() - r.get("last_seen", 0) < 90
+            return time.time() - r.get("listener_seen", 0) < LISTENER_GRACE
     slack_reader.listener_up = listener_up   # beside this receiver's other data
     print("slack reader: %s" % ("on" if slack_reader.start(deliver) else "off (no SLACK_BOT_TOKEN in .env)"))
     print("fleet receiver listening on http://%s:%d  (dashboard + ingest)" % (BIND_IP, PORT))

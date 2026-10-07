@@ -37,6 +37,7 @@ LISTENER_NUDGE = 900
 _wall_lock = threading.Lock()
 listener_up = lambda agent: False   # the receiver replaces this with a check of the agent's health
 _nudged = {}
+_started = time.time()   # right after a restart nobody has reported yet: don't call everyone down
 RESTART = ("Your Slack front door isn't running. Start it now with background exec (muse.exec, background=true): "
            "python3 ~/workspace/telemetry/listen.py -- and end your turn. Keep it running: when it wakes you, "
            "follow its instructions, then start it again. If that file doesn't exist yet, first cd into your "
@@ -70,6 +71,8 @@ def to_wall(name, item):
 
 def check_listeners(now):
     """Remind an agent whose front door is down to reopen it (rate-limited)."""
+    if now - _started < LISTENER_NUDGE / 5:
+        return
     with lock:
         names = dict(state["users"])
         who = agents()

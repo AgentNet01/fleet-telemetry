@@ -70,7 +70,7 @@ s.listener_up = lambda agent: agent == "boboe1"
 walled = []; s.to_wall = lambda name, item: walled.append((name, item["ts"]))
 s._deliver = lambda agent, item: None
 s.route([msg("499.0", "UD", "Boboe 1 status?")]); import time as _t; _t.sleep(0.2); assert walled == [], walled
-nudged = []; s.wall_send = lambda name, text: nudged.append(name)
+nudged = []; s.wall_send = lambda name, text: nudged.append(name); s._started = 0
 s.check_listeners(1000.0); s.check_listeners(1000.0 + 60); _t.sleep(0.2)
 assert sorted(nudged) == ["Boboe 10", "Boboe Prime"], nudged                       # once each, not boboe1
 s.check_listeners(1000.0 + s.LISTENER_NUDGE); _t.sleep(0.2); assert len(nudged) == 4
