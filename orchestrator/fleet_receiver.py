@@ -245,10 +245,8 @@ def summary(name, rec):
     files = dict(p.get("files") or {})
     files.pop("entries", None)
     p["mem"], p["files"] = mem, files
-    # the Slack watch rewrites its checkpoint every run: its mtime is the last run
-    seen = [e for e in (rec.get("latest") or {}).get("files", {}).get("entries", [])
-            if e and e[0] == "slack-watch/seen.json" and len(e) > 2]
-    p["slack_seen"] = seen[0][2] if seen else None
+    # people who named this agent in the last day and never got an answer (after re-sends)
+    p["missed_mentions"] = sum(1 for w in slack_reader.mentions_for(name, time.time() - 86400) if w["gave_up"])
     for k in ("status", "crons", "active_work", "capabilities"):
         p.pop(k, None)   # self-reports (unused) and static text: keep the wall light
     hist = [{k: h.get(k) for k in ("ts", "app", "obs", "v", "cpu", "load", "mem")}
@@ -410,6 +408,7 @@ class Handler(BaseHTTPRequestHandler):
             # every agent watches the same channels today; per-agent channel
             # lists come when that stops being true
             slack = slack_reader.messages_since(time.time() - 7 * 86400)
+            mentions = slack_reader.mentions_for(name, time.time() - 7 * 86400)
             with lock:
                 r = store.get(name)
                 out = r and {"name": name, "latest": r.get("latest"),
@@ -422,6 +421,7 @@ class Handler(BaseHTTPRequestHandler):
                                             key=lambda e: e["timestamp"], reverse=True)}
                 if out:
                     out["slack"] = slack
+                    out["mentions"] = mentions
                     with mail_cv:
                         out["delivered"] = mail["delivered"].get(name, [])[-MAX_DELIVERED:]
                         out["queued"] = mail["queue"].get(name, [])

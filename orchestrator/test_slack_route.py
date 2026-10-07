@@ -41,17 +41,25 @@ s._deliver = lambda agent, item: full.append(item)
 s.route([msg("209.0", "UD", "Boboe 10 thoughts?", thread="150.0")])
 assert [x["text"] for x in full[0]["thread"]][:2] == ["starting H26", "reply in H26"]
 # a person's mention the agent never answers is re-sent, at most RETRIES times; an answer stops it
-s.awaiting.clear(); sent.clear(); s._deliver = lambda agent, item: sent.append((agent, item["why"], item["ts"]))
+s.state["mentions"].clear(); sent.clear(); s._deliver = lambda agent, item: sent.append((agent, item["why"], item["ts"]))
 s.route([msg("300.0", "UD", "Boboe 1, can you hear me?")])
-s.route([msg("301.0", "U10", "Boboe 1 ping from an agent")])      # agents' mentions aren't tracked
-t0 = s.awaiting[("boboe1", "C", "300.0")]["at"]
+t0 = s.state["mentions"][-1]["at"]; assert len(s.state["mentions"]) == 1
 sent.clear(); s.retry_unanswered(t0 + 10); assert sent == []                        # too soon
 s.retry_unanswered(t0 + s.RETRY_AFTER); assert sent == [("boboe1", "no reply yet", "300.0")]
 s.retry_unanswered(t0 + 2 * s.RETRY_AFTER); s.retry_unanswered(t0 + 3 * s.RETRY_AFTER)
-assert len(sent) == 2 and not s.awaiting, sent                                     # gives up after RETRIES
-s.route([msg("302.0", "UD", "Boboe 1 again?")]); t0 = s.awaiting[("boboe1", "C", "302.0")]["at"]
+assert len(sent) == 2 and s.state["mentions"][-1]["gave_up"], sent                # gives up after RETRIES
+s.route([msg("302.0", "UD", "Boboe 1 again?")]); t0 = s.state["mentions"][-1]["at"]
 msg("302.5", "U1", "busy elsewhere", thread="150.0")                              # a post in another thread isn't an answer
 sent.clear(); s.retry_unanswered(t0 + s.RETRY_AFTER); assert sent == [("boboe1", "no reply yet", "302.0")]
 msg("303.0", "U1", "yes, here", thread="302.0")                                    # it answered in the mention's thread
-sent.clear(); s.retry_unanswered(t0 + 2 * s.RETRY_AFTER); assert sent == [] and not s.awaiting
+sent.clear(); s.retry_unanswered(t0 + 2 * s.RETRY_AFTER); assert sent == [] and s.state["mentions"][-1]["answered"] == 303.0
+log = s.mentions_for("boboe1", 0); assert [(x["ts"], bool(x["answered"]), x["gave_up"]) for x in log] == [("300.0", False, True), ("302.0", True, False)], log
+# agents: being named needs an answer too, but naming back is an answer, and a thread caps out
+s.state["mentions"].clear(); full = []; s._deliver = lambda agent, item: full.append((agent, item["reply_required"]))
+s.route([msg("400.0", "U10", "Boboe 1, can you check the build?")]); assert full == [("boboe1", True)]
+full.clear(); s.route([msg("401.0", "U1", "Boboe 10 done, it's green", thread="400.0")]); assert full == [("boboe10", False)]
+full.clear(); s.route([msg("402.0", "U10", "thanks Boboe 1", thread="400.0")]); assert full == [("boboe1", False)]
+for i in range(20): s.route([msg("41%d.0" % i, "U10" if i % 2 else "U1", "Boboe %s again" % ("1" if i % 2 else "10"), thread="400.0")])
+assert sum(1 for w in s.state["mentions"] if w["thread"] == "400.0") == s.AGENT_THREAD_CAP          # loop guard
+full.clear(); s.route([msg("450.0", "UD", "Boboe 1 still there?", thread="400.0")]); assert ("boboe1", True) in full  # people always pass
 print("ok")

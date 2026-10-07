@@ -31,11 +31,12 @@ RETRY_AFTER = 240    # a person named an agent and it hasn't posted since: deliv
 RETRIES = 2          # ...at most this many times
 # Muse sometimes wakes the hook but never starts the helper turn, and the hook has
 # already filed the message as done. Slack shows whether the agent answered, so the
-# receiver re-sends unanswered mentions. ponytail: in memory, a receiver restart forgets them.
-awaiting = {}        # (agent, channel, ts) -> {"item", "tries", "at"}
+# receiver re-sends unanswered mentions and logs each one's outcome (state["mentions"]).
+KEEP_MENTIONS = 1000
+AGENT_THREAD_CAP = 12  # agent-to-agent mentions delivered per thread per hour; past it they're dropped (loop guard)
 
 lock = threading.Lock()
-state = {"messages": {}, "cursor": {}, "threads": {}, "users": {}, "channels": {}}
+state = {"messages": {}, "cursor": {}, "threads": {}, "users": {}, "channels": {}, "mentions": []}
 _deliver = None   # fleet_receiver.deliver(agent, item), set by start()
 AGENT_NAME = re.compile(r"^boboe ?(\d+|prime)$", re.I)
 EVERYONE = re.compile(r"<!(channel|here|everyone)\b|(^|\s)@(channel|here|everyone)\b")
@@ -155,10 +156,28 @@ def route(new):
             item["thread"] = [{"user_name": names.get(x["user"], x["user"]), "ts": x["ts"],
                                "text": x["text"][:1500]} for x in keep_]
             item["thread_skipped"] = len(earlier) - len(keep_)
+        author, thread, now = who.get(m["user"]), m["thread"] or m["ts"], time.time()
         for agent, why in targets.items():
-            _deliver(agent, dict(item, why=why))
-            if why == "mentioned" and m["user"] not in who:
-                awaiting[(agent, ch, m["ts"])] = {"item": dict(item, why=why), "tries": 0, "at": time.time()}
+            # being named needs an answer -- from a person or an agent. Loop guards for agents:
+            # naming someone who just named you in this thread is an answer (no reply needed),
+            # and past AGENT_THREAD_CAP agent mentions in a thread per hour, nothing is delivered.
+            required = why == "mentioned"
+            if required and author:
+                with lock:
+                    recent = [w for w in state["mentions"] if w["ch"] == ch and w.get("thread") == thread
+                              and w.get("from") and now - w["delivered"] < 3600]
+                if len(recent) >= AGENT_THREAD_CAP:
+                    continue
+                if any(w["agent"] == author and w["from"] == agent for w in recent):
+                    required = False
+            _deliver(agent, dict(item, why=why, reply_required=required))
+            if why == "mentioned":
+                with lock:
+                    state["mentions"].append({"agent": agent, "from": author, "ch": ch, "ts": m["ts"],
+                                              "thread": thread, "item": dict(item, why=why, reply_required=required),
+                                              "required": required, "delivered": now, "at": now, "tries": 0,
+                                              "answered": None, "gave_up": False})
+                    del state["mentions"][:-KEEP_MENTIONS]
 
 
 def retry_unanswered(now):
@@ -174,17 +193,30 @@ def retry_unanswered(now):
             if a:
                 k = (a, m["ch"], m["thread"])
                 posted[k] = max(posted.get(k, 0.0), float(m["ts"]))
-    for key, w in list(awaiting.items()):
-        agent, ch, ts = key
+        opened = [w for w in state["mentions"] if w.get("required", True) and not w["answered"] and not w["gave_up"]]
+    for w in opened:
+        agent, ch, ts = w["agent"], w["ch"], w["ts"]
         # answered = a post after it in its thread (a top-level mention: its new thread, or top level)
         th = w["item"].get("thread_ts")
         spots = [(agent, ch, th)] if th else [(agent, ch, ts), (agent, ch, None)]
-        if max(posted.get(k, 0.0) for k in spots) > float(ts) or w["tries"] >= RETRIES:
-            del awaiting[key]
+        reply = max(posted.get(k, 0.0) for k in spots)
+        if reply > float(ts):
+            w["answered"] = reply
         elif now - w["at"] >= RETRY_AFTER:
-            w["tries"] += 1
-            w["at"] = now
-            _deliver(agent, dict(w["item"], why="no reply yet", retry=w["tries"]))
+            if w["tries"] >= RETRIES:
+                w["gave_up"] = True
+            else:
+                w["tries"] += 1
+                w["at"] = now
+                _deliver(agent, dict(w["item"], why="no reply yet", retry=w["tries"]))
+
+
+def mentions_for(agent, since):
+    """This agent's log of people naming it: delivered, re-sent, answered or not."""
+    with lock:
+        return [{k: v for k, v in w.items() if k != "item"} | {"user_name": w["item"].get("user_name"),
+                "text": (w["item"].get("text") or "")[:300], "thread_ts": w["item"].get("thread_ts")}
+                for w in state["mentions"] if w["agent"] == agent and w["delivered"] >= since]
 
 
 def refresh_names(tok):

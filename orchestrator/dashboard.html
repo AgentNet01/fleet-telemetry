@@ -628,6 +628,7 @@ function tile(a) {
     <div class="tile-foot">
       <span>Disk ${disk.total_gb ? fmtPct(disk.used_gb / disk.total_gb * 100) : "—"}</span>
       ${hookFoot(p)}
+      ${p.missed_mentions ? html`<span class="warn" title="Someone named this agent in Slack in the last 24h and got no answer, even after re-sending">${plural(p.missed_mentions, "unanswered mention")}</span>` : ""}
       ${daemonTag(p)}
       <span class="push">${agoEl(a.last_seen)}</span>
     </div></a>`;
@@ -718,8 +719,20 @@ function overviewTab(a) {
       <section class="sec"><div class="sec-head"><h2>Recent activity</h2><a class="lnk" href="${hrefM(a.name, "activity")}">All activity</a></div>
         <div class="panel list">${act.length ? actList(act.slice(0, 5)) : html`<p class="empty">${actEmpty(p)}</p>`}</div></section>
     </div>
+    <section class="sec"><div class="sec-head"><h2>Named in Slack</h2><span class="sec-sub">Last 7 days · answered = it posted in that thread afterwards · unanswered ones are re-sent after 4 minutes, twice</span></div>${mentionsPanel(a)}</section>
     <section class="sec"><div class="sec-head"><h2>Connection &amp; hooks</h2><span class="sec-sub">Counted on the machine since the daemon started · hooks over the last hour</span></div>${healthPanel(p)}</section>
     <section class="sec"><div class="sec-head"><h2>Machine</h2></div>${machinePanel(a)}</section>`;
+}
+function mentionsPanel(a) {
+  const ms = (a.mentions || []).slice().reverse().slice(0, 8);
+  if (!ms.length) return html`<div class="panel"><p class="empty">Nobody has named ${a.name} in Slack in the last 7 days.</p></div>`;
+  const state = w => w.required === false ? html`<span>reply optional (an agent answering it)</span>`
+    : w.answered ? html`<span class="s-success">answered in ${dur(w.answered - +w.ts)}</span>`
+    : w.gave_up ? html`<span class="warn">no answer, re-sent ${plural(w.tries, "time")}</span>`
+    : html`<span class="mut">waiting${w.tries ? ` · re-sent ${plural(w.tries, "time")}` : ""}</span>`;
+  return html`<div class="panel list"><ul class="acts">${ms.map(w => html`<li class="act"><span class="s-slack">${I.chat}</span>
+    <div><p class="act-title">${w.user_name || "someone"}: ${w.text}</p><p class="act-sub">${state(w)}</p></div>
+    <div class="act-time">${agoEl(+w.ts)}<span class="act-type">slack</span></div></li>`)}</ul></div>`;
 }
 function healthPanel(p) {
   const h = p.health;
