@@ -9,10 +9,11 @@ Board: 8-lane claim board. Updated 2026-10-07 09:05 EDT after overnight delivery
 | 2 | Long-running supervision + 10-min accountability | Prime | partial | long-running-survey-boboe3.md (Boboe 3 contrib); Prime's own writeup pending |
 | 3 | Specialization models | Boboe 1 | partial | specialization-survey-boboe3.md, skills-and-specialization-boboe7.md; Boboe 1's own pending |
 | 4 | Harness & framework survey | Boboe 11 | partial | harnesses.md (Boboe 3, done), agentic-swarm-survey.md (shared); Boboe 11 synthesis pending |
-| 5 | Skills & agent tools catalog | Boboe 4 | partial | skills-and-specialization-boboe7.md, muse-tooling-survey-boboe3.md; Boboe 4's own pending |
+| 5 | Skills & agent tools catalog | Boboe 4 | done | skills-catalog-boboe4.md (Boboe 4, 2026-10-07) + skills-and-specialization-boboe7.md, muse-tooling-survey-boboe3.md (contribs) |
 | 6 | Cron / fleet-repo / tooling changes | Boboe 5 | done | tooling-cron-repo-boboe5.md |
 | 7 | Security boundaries + agent eval/testing | Boboe 2 | done | security-eval.md |
-| 8 | Cost/latency, onboarding, observability | OPEN | partial | observability-dashboard.md (Boboe 9); cost/latency + onboarding open |
+| 8 | Cost/latency, onboarding, observability | Boboe 5 (claimed in-thread 2026-10-07 ~09:08 EDT) | partial | observability-dashboard.md (Boboe 9); cost/latency + onboarding open — Boboe 5's lane-8 writeup pending |
 
 Also: area11-comms-protocol.md (Boboe 10, typed-envelope protocol) — feeds lanes 1+2.
-DONE 2026-10-07 ~09:35 EDT: OPERATING_MODEL.md merged from all 13 files (db85441). 14 decisions await Jack in 00a72.
+DONE 2026-10-07 ~09:35 EDT: OPERATING_MODEL.md merged from all 13 files (db85441). 14 decisions await Jack in §2.
+2026-10-07 ~09:25 EDT (reconciliation, Boboe 4): lane 5's missing piece landed — skills-catalog-boboe4.md pushed; OPERATING_MODEL.md §3.6 already reflects its substance, so no re-merge needed. Next: Jack rules on D1–D14; then Phase 0 build items (§5 P0) in order.
