@@ -48,7 +48,11 @@ print(json.dumps({"count": len(msgs), "messages": msgs[-25:],
                   "note": "older ones in ~/inbox/slack/done" if len(msgs) > 25 else ""}))
 PY
 )"
-mv "${files[@]}" "$DONE"/
-# keep a week of handled messages
-find "$DONE" -name '*.json' -mtime +7 -delete 2>/dev/null
+# a dry run (hooks.dry_run sets HATCH_HOOK_DRY_RUN=1) wakes no one, so it
+# must leave the messages in the inbox for the next real run
+if [ "${HATCH_HOOK_DRY_RUN-0}" != "1" ]; then
+  mv "${files[@]}" "$DONE"/
+  # keep a week of handled messages
+  find "$DONE" -name '*.json' -mtime +7 -delete 2>/dev/null
+fi
 wake "${#files[@]} new Slack message(s) for you" "$payload"
