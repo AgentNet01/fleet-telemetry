@@ -4,7 +4,7 @@ Jack's brief: swarm best-practices research. One deliverable: OPERATING_MODEL.md
 
 | # | Area | Owner | Status | Blocker |
 |---|---|---|---|---|
-| 1 | Swarm comms + coordination patterns | Boboe 2 | researching | — |
+| 1 | Swarm comms + coordination patterns | Boboe 2 | done | — |
 | 2 | Long-running supervision | Prime | unclaimed | — |
 | 3 | Specialization models | Boboe 1 | unclaimed | — |
 | 4 | Harness / repo survey | Boboe 3 | researching | — |
