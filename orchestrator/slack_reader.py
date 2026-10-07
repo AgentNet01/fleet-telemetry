@@ -49,7 +49,7 @@ def wall_send(name, text):
         with open(WALL_CONTROL) as f:
             c = json.load(f)
         req = urllib.request.Request("http://127.0.0.1:%d/send" % c["port"], method="POST",
-                                     data=json.dumps({"to": [name], "text": text, "by": "Slack"}).encode(),
+                                     data=json.dumps({"to": [name], "text": text, "by": "Slack", "replace": True}).encode(),
                                      headers={"X-Wall-Token": c["token"], "Content-Type": "application/json"})
         with _wall_lock, urllib.request.urlopen(req, timeout=60) as r:   # one send at a time
             return all(x.get("ok") for x in json.load(r))
