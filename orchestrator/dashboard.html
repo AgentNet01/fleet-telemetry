@@ -212,7 +212,7 @@ main{padding:24px}
 .legend span{display:inline-flex;align-items:center;gap:6px}
 .legend .sq{width:8px;height:8px;border-radius:2px}
 .runs{list-style:none;margin:16px 0 0;padding:0}
-.run{display:grid;grid-template-columns:96px 168px 56px minmax(0,1fr);gap:12px;align-items:baseline;padding:8px 0;border-top:1px solid var(--line)}
+.run{display:grid;grid-template-columns:96px 230px 56px minmax(0,1fr);gap:12px;align-items:baseline;padding:8px 0;border-top:1px solid var(--line)}
 .run-state{display:inline-flex;align-items:center;gap:8px;font-weight:500}
 .run-time,.run-dur{font-size:12px;color:var(--ink-3)}
 .run-what{color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -369,7 +369,7 @@ button.fx-row:hover,.fx-row.is-open{background:var(--raised-2);color:var(--ink)}
 const TOKEN = "%%TOKEN%%";
 const STALE = 120;   // s without a heartbeat before a machine counts as offline
 const GAP = 95;      // s between samples that counts as a hole in the history
-const TABS = [["overview", "Overview"], ["activity", "Activity"], ["processes", "Processes"], ["files", "Files"], ["crons", "Crons"]];
+const TABS = [["overview", "Overview"], ["activity", "Activity"], ["processes", "Processes"], ["files", "Files"], ["hooks", "Hooks"]];
 
 // ---------- safe HTML: every interpolation is escaped unless wrapped in raw() ----------
 class Raw { constructor(s) { this.s = s; } }
@@ -571,7 +571,7 @@ function strip(rs, t0, t1) {
 }
 const runList = (rs, n) => html`<ol class="runs">${rs.slice().reverse().slice(0, n).map(r => html`<li class="run">
   <span class="run-state"><i class="dot d-${r.state}"></i>${STATE_LABEL[r.state]}</span>
-  <span class="run-time">${clock(r.start)} – ${clock(r.end)}</span>
+  <span class="run-time">${clock(r.start)} – ${clock(r.end)} · ${agoEl(r.end)}</span>
   <span class="run-dur">${dur(r.end - r.start)}</span>
   <span class="run-what">${r.labels.join(" · ")}</span></li>`)}</ol>`;
 
@@ -627,7 +627,7 @@ function tile(a) {
     </div>
     <div class="tile-foot">
       <span>Disk ${disk.total_gb ? fmtPct(disk.used_gb / disk.total_gb * 100) : "—"}</span>
-      ${cronFoot(p)}
+      ${hookFoot(p)}
       ${daemonTag(p)}
       <span class="push">${agoEl(a.last_seen)}</span>
     </div></a>`;
@@ -660,7 +660,7 @@ function detailView() {
 }
 function tabCount(a, k) {
   const p = a.latest || {};
-  const n = k === "processes" ? ((p.mem || {}).all || []).length : k === "files" ? (p.files || {}).count : k === "crons" ? null : null;
+  const n = k === "processes" ? ((p.mem || {}).all || []).length : k === "files" ? (p.files || {}).count : null;
   return n ? html`<span class="n">${n}</span>` : "";
 }
 function paneHead(a, d) {
@@ -693,7 +693,7 @@ function tabBody(a, r) {
   if (r.tab === "activity") return activityTab(a);
   if (r.tab === "processes") return processesTab(a);
   if (r.tab === "files") return filesTab(a, r);
-  if (r.tab === "crons") return cronsTab(a);
+  if (r.tab === "hooks") return html`<section class="sec" style="margin-top:0"><div class="sec-head"><h2>Connection &amp; hooks</h2><span class="sec-sub">A hook wake starts a background helper turn. It doesn’t show as “Working”, which tracks the main chat only.</span></div>${healthPanel(a.latest || {})}</section>`;
   return overviewTab(a);
 }
 
@@ -725,14 +725,14 @@ function healthPanel(p) {
   const h = p.health;
   if (!h) return html`<div class="panel"><p class="empty">Arrives with telemetry daemon v11 on this machine.</p></div>`;
   const row = (k, v) => html`<div class="mc-row"><dt>${k}</dt><dd>${v}</dd></div>`;
-  const link = c => html`${c.ok} ok · <span class="${c.fail ? "warn" : ""}">${c.fail} failed</span>${c.last_ok ? html`<span class="mc-sub">last ok ${agoEl(c.last_ok)} ago</span>` : ""}`;
+  const link = c => html`${c.ok} ok · <span class="${c.fail ? "warn" : ""}">${c.fail} failed</span>${c.last_ok ? html`<span class="mc-sub">last ok ${agoEl(c.last_ok)}</span>` : ""}`;
   const e = h.last_error, hooks = Object.entries(h.hooks || {});
   return html`<div class="panel"><dl class="mc">
-    ${row("Daemon started", html`${agoEl(h.started)} ago`)}
+    ${row("Daemon started", html`${agoEl(h.started)}`)}
     ${row("Reports sent", link(h.post))}
     ${row("Mailbox line", link(h.mailbox))}
-    ${row("Last error", e ? html`${e.text}<span class="mc-sub">${e.where} · ${agoEl(e.ts)} ago</span>` : "none")}
-    ${hooks.map(([id, k]) => row(`Hook ${id}`, html`${k.runs} runs · ${k.wakes} wakes · <span class="${k.errors ? "warn" : ""}">${k.errors} errors</span>${k.last_event ? html`<span class="mc-sub">last ${k.last_event.outcome}: ${k.last_event.reason || "—"} · ${agoEl(k.last_event.ts)} ago</span>` : ""}`))}
+    ${row("Last error", e ? html`${e.text}<span class="mc-sub">${e.where} · ${agoEl(e.ts)}</span>` : "none")}
+    ${hooks.map(([id, k]) => row(`Hook ${id}`, html`${k.runs} runs · ${k.wakes} wakes · <span class="${k.errors ? "warn" : ""}">${k.errors} errors</span>${k.last_event ? html`<span class="mc-sub">last ${k.last_event.outcome}: ${k.last_event.reason || "—"} · ${agoEl(k.last_event.ts)}</span>` : ""}`))}
   </dl></div>`;
 }
 const fmtRate = b => b == null ? "—" : b >= 1048576 ? (b / 1048576).toFixed(1) + " MB/s" : b >= 1024 ? Math.round(b / 1024) + " KB/s" : Math.round(b) + " B/s";
@@ -826,7 +826,7 @@ function slackRow(a, ms) {
   const sl = a.slack || {}, id = ms[0].ch + "|" + ms[0].ts, newest = +ms[ms.length - 1].ts;
   const chans = [...new Set(ms.map(m => "#" + ((sl.channels || {})[m.ch] || m.ch)))].join(", ");
   return html`<li class="act slk"><span class="s-slack">${I.chat}</span>
-    <details data-slk="${id}"${raw(S.openSlk.has(id) ? " open" : "")}><summary>${plural(ms.length, "Slack message")} in ${chans}</summary>
+    <details data-slk="${id}"${raw(S.openSlk.has(id) ? " open" : "")}><summary>${plural(ms.length, "Slack message")} from others in ${chans}</summary>
       <ul class="slk-list">${ms.map(m => html`<li><div class="slk-meta"><b>${slackName(sl, m.user)}</b><span>${clock(+m.ts)}</span>${m.thread ? html`<span>in a thread</span>` : ""}</div><p>${slackText(sl, m.text)}</p></li>`)}</ul></details>
     <div class="act-time">${agoEl(newest)}<span class="act-type">slack</span></div></li>`;
 }
@@ -998,20 +998,9 @@ async function pollFile(v) {
 }
 const sizeCell = (kb, max) => html`<span class="fx-size"><span class="bar"><i style="width:${(kb / max * 100).toFixed(1)}%"></i></span><span class="r">${fmtKB(kb)}</span></span>`;
 
-// ---------- crons: passive evidence only ----------
-// No agent writes reports for the dashboard. The Slack watch rewrites its
-// checkpoint only when a run finds new messages (quiet runs leave it alone), so
-// its modified time says when new messages last arrived -- not the last run.
-const slackSeen = p => { const e = ((p.files || {}).entries || []).find(x => x[0] === "slack-watch/seen.json"); return p.slack_seen || (e && e[2]) || null; };
-const cronFoot = p => { const t = slackSeen(p); return t ? html`<span title="When the Slack watch last found new messages (slack-watch/seen.json changed)">Slack msgs ${agoEl(t)}</span>` : ""; };
-function cronsTab(a) {
-  const t = slackSeen(a.latest || {});
-  return html`<section class="sec" style="margin-top:0"><div class="sec-head"><h2>Slack watch</h2></div>
-    <div class="panel">${t ? html`<p>Last found new messages <b>${agoEl(t)}</b> <span class="mut">· ${stamp(t)}</span></p>
-      <p class="note">Read from when <code>slack-watch/seen.json</code> last changed. The watch updates that checkpoint only when a run finds new messages, so quiet runs don’t show here.</p>`
-      : html`<p class="empty">No Slack watch checkpoint (<code>slack-watch/seen.json</code>) on this machine.</p>`}</div></section>
-    <p class="note">Every run, this machine’s other crons, and what each run did need a passive source the agent doesn’t have to write. That’s still being looked into.</p>`;
-}
+// newest Slack-hook wake, from the hook runtime's own run log (daemon v11)
+const hookFoot = p => { const e = ((((p.health || {}).hooks || {})["slack-inbox"]) || {}).last_event;
+  return e ? html`<span title="Last time the Slack hook woke a background helper: ${e.reason || ""}">Slack wake ${agoEl(e.ts)}</span>` : ""; };
 
 // ---------- render loop ----------
 function renderKey() {
