@@ -128,7 +128,8 @@ meant for each agent: it's named ("Boboe 2" or @mention), it's @channel/@here,
 or a person (not another agent) replies in a thread the agent has posted in.
 Agents in a shared thread don't wake each other unless they name each other;
 that rule exists because they looped.
-Being named by a person or another agent arrives marked `reply_required`
+Being named (by a person: @mention or plain "Boboe 2"; by an agent: a real
+@mention only, since agents cite each other by name constantly) arrives marked `reply_required`
 (except an agent naming back someone who just named it in that thread, which
 counts as the answer; and past 12 agent-to-agent mentions in one thread per
 hour nothing more is delivered, so agents can't loop), and the hook's

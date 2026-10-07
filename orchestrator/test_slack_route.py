@@ -31,7 +31,7 @@ assert who(msg("208.0", "UD", "email me@channel.com")) == []
 # agents talking in a shared thread don't wake each other (that looped: every post woke the other 11)
 msg("210.0", "U1", "Boboe 1 joining", thread="150.0")
 assert who(msg("211.0", "U10", "status update", thread="150.0")) == []
-assert who(msg("212.0", "U10", "Boboe 1, can you take this?", thread="150.0")) == [("boboe1", "mentioned")]
+assert who(msg("212.0", "U10", "<@U1> can you take this?", thread="150.0")) == [("boboe1", "mentioned")]
 assert who(msg("213.0", "UD", "thanks both", thread="150.0")) == [("boboe1", "your thread"), ("boboe10", "your thread")]
 assert who(msg("50.0", "UD", "Boboe 1 old news")) == []                               # before the reader started
 assert who(msg("206.0", "UD", "unrelated chatter")) == []
@@ -54,12 +54,15 @@ sent.clear(); s.retry_unanswered(t0 + s.RETRY_AFTER); assert sent == [("boboe1",
 msg("303.0", "U1", "yes, here", thread="302.0")                                    # it answered in the mention's thread
 sent.clear(); s.retry_unanswered(t0 + 2 * s.RETRY_AFTER); assert sent == [] and s.state["mentions"][-1]["answered"] == 303.0
 log = s.mentions_for("boboe1", 0); assert [(x["ts"], bool(x["answered"]), x["gave_up"]) for x in log] == [("300.0", False, True), ("302.0", True, False)], log
+# an agent citing another by plain name isn't addressing it; an @mention is
+assert who(msg("390.0", "U10", "same as Boboe 1 saw")) == []
+assert who(msg("391.0", "U10", "<@U1> can you look?")) == [("boboe1", "mentioned")]
 # agents: being named needs an answer too, but naming back is an answer, and a thread caps out
 s.state["mentions"].clear(); full = []; s._deliver = lambda agent, item: full.append((agent, item["reply_required"]))
-s.route([msg("400.0", "U10", "Boboe 1, can you check the build?")]); assert full == [("boboe1", True)]
-full.clear(); s.route([msg("401.0", "U1", "Boboe 10 done, it's green", thread="400.0")]); assert full == [("boboe10", False)]
-full.clear(); s.route([msg("402.0", "U10", "thanks Boboe 1", thread="400.0")]); assert full == [("boboe1", False)]
-for i in range(20): s.route([msg("41%d.0" % i, "U10" if i % 2 else "U1", "Boboe %s again" % ("1" if i % 2 else "10"), thread="400.0")])
+s.route([msg("400.0", "U10", "<@U1> can you check the build?")]); assert full == [("boboe1", True)]
+full.clear(); s.route([msg("401.0", "U1", "<@U10> done, it's green", thread="400.0")]); assert full == [("boboe10", False)]
+full.clear(); s.route([msg("402.0", "U10", "thanks <@U1>", thread="400.0")]); assert full == [("boboe1", False)]
+for i in range(20): s.route([msg("41%d.0" % i, "U10" if i % 2 else "U1", "<@U%s> again" % ("1" if i % 2 else "10"), thread="400.0")])
 assert sum(1 for w in s.state["mentions"] if w["thread"] == "400.0") == s.AGENT_THREAD_CAP          # loop guard
 full.clear(); s.route([msg("450.0", "UD", "Boboe 1 still there?", thread="400.0")]); assert ("boboe1", True) in full  # people always pass
 print("ok")

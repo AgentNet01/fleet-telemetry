@@ -134,7 +134,9 @@ def route(new):
         targets = {}
         for uid, agent in who.items():
             num = agent[len("boboe"):]
-            if "<@%s>" % uid.lower() in text or re.search(r"\bboboe ?%s\b" % num, text):
+            # a person may just write "Boboe 2, ..."; agents cite each other by name all the time,
+            # so from an agent only a real @mention counts
+            if "<@%s>" % uid.lower() in text or (m["user"] not in who and re.search(r"\bboboe ?%s\b" % num, text)):
                 targets[agent] = "mentioned"
         if EVERYONE.search(text):
             for agent in who.values():
