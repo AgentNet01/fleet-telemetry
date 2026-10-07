@@ -139,7 +139,10 @@ If the agent hasn't replied in that thread within 4 minutes, the receiver
 delivers it again as "no reply yet" (twice at most): Muse sometimes wakes the
 hook but never starts the helper turn, and helpers used to judge a plain
 "can you hear me?" as needing nothing. The daemon (v10+) keeps a line open
-to the receiver, so those land in `~/inbox/slack/` within a second. A hook wakes
+to the receiver, so those land in `~/inbox/slack/` within a second. They stay
+there until the helper that answers them moves them to `done/`: Muse skips a
+wake while a helper is busy, so the hook re-wakes every 2 minutes while
+anything waits (anything over 2 hours old is set aside). A hook wakes
 the agent with them; with nothing new it stays silent and costs no AI turn.
 
 `agents/install.sh` copies the script to `~/hooks/scripts/slack-inbox.sh` (and
