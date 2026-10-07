@@ -79,6 +79,19 @@ with tempfile.TemporaryDirectory() as logs:
 t.note("mailbox", OSError("Remote end closed"))
 assert t.HEALTH["mailbox"]["fail"] == 1 and "Remote end" in t.HEALTH["last_error"]["text"]
 
+# a corrupt spool file is dropped instead of blocking everything behind it
+with tempfile.TemporaryDirectory() as sp:
+    t.SPOOL_DIR = sp
+    open(os.path.join(sp, "1.json"), "w").close()
+    with open(os.path.join(sp, "2.json"), "w") as f:
+        json.dump({"n": 2}, f)
+    posted = []
+    real = t.post
+    t.post = lambda op, tok, payload: (posted.append(payload), (True, {}))[1]
+    t.flush_spool(None, "tok")
+    t.post = real
+    assert posted == [{"n": 2}] and os.listdir(sp) == [], (posted, os.listdir(sp))
+
 # burst caps still hold against hostile input
 assert t.handle_cmd({"burst": True, "interval": 0, "until": 1e12}, 100.0) == (2, 400.0)
 print("ok")

@@ -543,7 +543,7 @@ def build_payload(token_note_replaced=False):
     now = time.time()
     return {
         "agent": AGENT,
-        "daemon": 11,              # payload version; dashboard flags older ones
+        "daemon": 12,              # payload version; dashboard flags older ones
         "ts": now,
         "boot_id": bid,
         "vm_replaced": vm_replaced,
@@ -647,6 +647,15 @@ def flush_spool(op, token):
         try:
             with open(p) as f:
                 payload = json.load(f)
+        except (OSError, ValueError):
+            # a half-written file (crash mid-write) used to block the queue forever
+            log("spool: dropping unreadable %s" % fn)
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+            continue
+        try:
             ok, _cmd = post(op, token, payload)
             if ok:
                 os.remove(p)
