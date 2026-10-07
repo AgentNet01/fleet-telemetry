@@ -121,34 +121,32 @@ interval, prompt as in the script header), `dry_run` it, and `enable` it. Once
 it has been running fine, remove the old 15-minute watchdog cron, which spends
 an AI turn on every tick.
 
-## Slack hook
+## Slack: answering when named
 
 Jack's receiver reads Slack (see Orchestrator setup) and picks out the messages
-meant for each agent: it's named ("Boboe 2" or @mention), it's @channel/@here,
-or a person (not another agent) replies in a thread the agent has posted in.
-Agents in a shared thread don't wake each other unless they name each other;
-that rule exists because they looped.
-Being named (by a person: @mention or plain "Boboe 2"; by an agent: a real
-@mention only, since agents cite each other by name constantly) arrives marked `reply_required`
-(except an agent naming back someone who just named it in that thread, which
-counts as the answer; and past 12 agent-to-agent mentions in one thread per
-hour nothing more is delivered, so agents can't loop), and the hook's
-prompt (the `PROMPT:` line in `agents/slack_hook.sh`, the single source for
-every agent's registration) says those always get an answer in their thread.
-If the agent hasn't replied in that thread within 4 minutes, the receiver
-delivers it again as "no reply yet" (twice at most): Muse sometimes wakes the
-hook but never starts the helper turn, and helpers used to judge a plain
-"can you hear me?" as needing nothing. The daemon (v10+) keeps a line open
-to the receiver, so those land in `~/inbox/slack/` within a second. They stay
-there until the helper that answers them moves them to `done/`: Muse skips a
-wake while a helper is busy, so the hook re-wakes every 2 minutes while
-anything waits (anything over 2 hours old is set aside). A hook wakes
-the agent with them; with nothing new it stays silent and costs no AI turn.
+meant for each agent: it's named, it's @channel/@here, or a person (not another
+agent) replies in a thread the agent has posted in. Being named (by a person:
+@mention or plain "Boboe 2"; by an agent: a real @mention only, since agents
+cite each other by name constantly) is `reply_required`. Loop guards: an agent
+@mentioning back someone who just @mentioned it in that thread is the answer
+(not required), and past 12 agent-to-agent mentions in one thread per hour
+nothing more is delivered.
 
-`agents/install.sh` copies the script to `~/hooks/scripts/slack-inbox.sh` (and
-keeps it current on every upgrade). Registering it is a one-time `hooks.add` (id `slack-inbox`, that script, 15s interval, prompt as in the
-script header), `dry_run`, `enable`. Once it works, turn off the old Slack-watch
-cron.
+The daemon (v13+) keeps a line open to the receiver and writes each message to
+`~/inbox/slack/<channel>-<ts>.json` within a second (one file per message, so a
+repeat replaces it). Each agent's **slack-watch cron runs every minute** with the
+instruction in `agents/slack_cron.txt` (the single source; re-register when it
+changes): if the inbox is empty it stops at once; otherwise it answers
+`reply_required` messages in their thread (checking it hasn't already) and moves
+the files to `done/`. When the receiver sees the agent's reply in Slack it tells
+the daemon to file that message away too, so no later run answers it twice.
+
+Why a cron and not a hook: Muse hook wakes start a background worker that was
+skipped whenever one was already busy and rarely reported back (Oct 6: of ~14
+wakes across three agents, almost none produced a reply), and the old cron
+scanned all of Slack itself and timed out at ~300s. Reading a local file is fast
+and the cron runs reliably. Each agent's Overview logs every mention: answered
+in how long, or missed after 30 minutes.
 
 ## Connection & hooks health
 

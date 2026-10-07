@@ -27,11 +27,10 @@ THREAD_DAYS = 3      # threads with a reply this recent are watched
 KEEP_DAYS = 30       # messages older than this are dropped
 FIRST_DAYS = 3       # how far back to read on the very first run
 THREAD_CONTEXT = 20  # earlier replies sent with a thread message (plus the original post)
-RETRY_AFTER = 240    # a person named an agent and it hasn't posted since: deliver again after this many seconds
-RETRIES = 2          # ...at most this many times
-# Muse sometimes wakes the hook but never starts the helper turn, and the hook has
-# already filed the message as done. Slack shows whether the agent answered, so the
-# receiver re-sends unanswered mentions and logs each one's outcome (state["mentions"]).
+LATE_AFTER = 1800    # a required mention unanswered this long counts as missed on the dashboard
+# Each agent's 1-minute cron answers what's in its inbox. Slack shows when it has answered,
+# so the receiver logs each mention's outcome (state["mentions"]) and tells the agent's daemon
+# to drop the answered message from its inbox, so no later run answers it again.
 KEEP_MENTIONS = 1000
 AGENT_THREAD_CAP = 12  # agent-to-agent mentions delivered per thread per hour; past it they're dropped (loop guard)
 
@@ -182,8 +181,8 @@ def route(new):
                     del state["mentions"][:-KEEP_MENTIONS]
 
 
-def retry_unanswered(now):
-    """Re-send a person's mention to an agent that hasn't posted in that channel since."""
+def check_answered(now):
+    """Log when each agent answered a mention, and clear it from that agent's inbox."""
     if not _deliver:
         return
     with lock:
@@ -195,9 +194,7 @@ def retry_unanswered(now):
             if a:
                 k = (a, m["ch"], m["thread"])
                 posted[k] = max(posted.get(k, 0.0), float(m["ts"]))
-        # gave-up ones stay checked so a late answer (e.g. from the 5-minute cron) is still logged
-        opened = [w for w in state["mentions"] if w.get("required", True) and not w["answered"]
-                  and now - w["delivered"] < 86400]
+        opened = [w for w in state["mentions"] if not w["answered"] and now - w["delivered"] < 86400]
     for w in opened:
         agent, ch, ts = w["agent"], w["ch"], w["ts"]
         # answered = a post after it in its thread (a top-level mention: its new thread, or top level)
@@ -206,13 +203,9 @@ def retry_unanswered(now):
         reply = max(posted.get(k, 0.0) for k in spots)
         if reply > float(ts):
             w["answered"] = reply
-        elif not w["gave_up"] and now - w["at"] >= RETRY_AFTER:
-            if w["tries"] >= RETRIES:
-                w["gave_up"] = True
-            else:
-                w["tries"] += 1
-                w["at"] = now
-                _deliver(agent, dict(w["item"], why="no reply yet", retry=w["tries"]))
+            _deliver(agent, {"kind": "answered", "channel_id": ch, "ts": ts})
+        elif w.get("required", True) and now - w["delivered"] >= LATE_AFTER:
+            w["gave_up"] = True
 
 
 def mentions_for(agent, since):
@@ -303,7 +296,7 @@ def run(tok):
             if now - last_threads > THREAD_EVERY:
                 last_threads = now
                 prune()
-            retry_unanswered(now)
+            check_answered(now)
             save()
         except Exception as e:
             print("slack reader: %s" % e)

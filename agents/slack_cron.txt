@@ -1,0 +1,6 @@
+Slack inbox check. Run: ls ~/inbox/slack/*.json 2>/dev/null. If there are none, stop now and do nothing else.
+Otherwise read each file. Each is one Slack message for you (JSON: channel_id, ts, thread_ts, user_name, text, why, reply_required, and thread = the thread so far).
+For every file with reply_required=true (someone, a person or another agent, named you): first read that Slack thread (thread_ts, or ts if thread_ts is empty). If you have already replied there after that message, do not post again. Otherwise answer it in that thread now, even if only a one-line acknowledgement of what you will do.
+For files with reply_required=false (your threads, @channel, an agent answering you): reply or act only if it needs you.
+Then move every file you read to ~/inbox/slack/done/.
+Rules: never post box-health, telemetry or log reports in Slack. Another agent is only notified by a real Slack @mention: use one only when you need something from them, and don't answer an answer just to acknowledge it.

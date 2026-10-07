@@ -543,7 +543,7 @@ def build_payload(token_note_replaced=False):
     now = time.time()
     return {
         "agent": AGENT,
-        "daemon": 12,              # payload version; dashboard flags older ones
+        "daemon": 13,              # payload version; dashboard flags older ones
         "ts": now,
         "boot_id": bid,
         "vm_replaced": vm_replaced,
@@ -686,6 +686,23 @@ def write_atomic(path, text):
     os.replace(tmp, path)
 
 
+def inbox_name(it):
+    # one file per Slack message: delivering it again replaces it instead of adding a copy
+    return "%s-%s.json" % (it.get("channel_id") or "c", it.get("ts"))
+
+
+def handle_mail(it):
+    kind = it.get("kind")
+    if kind == "slack":
+        os.makedirs(INBOX, exist_ok=True)
+        write_atomic(os.path.join(INBOX, inbox_name(it)), json.dumps(it))
+    elif kind == "answered":   # the receiver saw this agent's reply in Slack: nothing left to do
+        src = os.path.join(INBOX, inbox_name(it))
+        if os.path.exists(src):
+            os.makedirs(os.path.join(INBOX, "done"), exist_ok=True)
+            os.replace(src, os.path.join(INBOX, "done", inbox_name(it)))
+
+
 def mailbox_loop(token):
     op = opener()
     base = RECEIVER_URL.rsplit("/ingest", 1)[0]
@@ -704,9 +721,7 @@ def mailbox_loop(token):
             items = reply.get("items") or []
             after = int(reply.get("after", after))   # receiver may reset a stale cursor
             for it in items:
-                if it.get("kind") == "slack":
-                    os.makedirs(INBOX, exist_ok=True)
-                    write_atomic(os.path.join(INBOX, "%010d.json" % int(it["id"])), json.dumps(it))
+                handle_mail(it)
                 after = max(after, int(it["id"]))
             # saved only after the files are written: a crash re-fetches, never skips
             write_atomic(CURSOR_FILE, str(after))

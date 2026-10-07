@@ -40,22 +40,19 @@ sent.clear(); full = []
 s._deliver = lambda agent, item: full.append(item)
 s.route([msg("209.0", "UD", "Boboe 10 thoughts?", thread="150.0")])
 assert [x["text"] for x in full[0]["thread"]][:2] == ["starting H26", "reply in H26"]
-# a person's mention the agent never answers is re-sent, at most RETRIES times; an answer stops it
-s.state["mentions"].clear(); sent.clear(); s._deliver = lambda agent, item: sent.append((agent, item["why"], item["ts"]))
-s.route([msg("300.0", "UD", "Boboe 1, can you hear me?")])
-t0 = s.state["mentions"][-1]["at"]; assert len(s.state["mentions"]) == 1
-sent.clear(); s.retry_unanswered(t0 + 10); assert sent == []                        # too soon
-s.retry_unanswered(t0 + s.RETRY_AFTER); assert sent == [("boboe1", "no reply yet", "300.0")]
-s.retry_unanswered(t0 + 2 * s.RETRY_AFTER); s.retry_unanswered(t0 + 3 * s.RETRY_AFTER)
-assert len(sent) == 2 and s.state["mentions"][-1]["gave_up"], sent                # gives up after RETRIES
-s.route([msg("302.0", "UD", "Boboe 1 again?")]); t0 = s.state["mentions"][-1]["at"]
-msg("302.5", "U1", "busy elsewhere", thread="150.0")                              # a post in another thread isn't an answer
-sent.clear(); s.retry_unanswered(t0 + s.RETRY_AFTER); assert sent == [("boboe1", "no reply yet", "302.0")]
-msg("303.0", "U1", "yes, here", thread="302.0")                                    # it answered in the mention's thread
-sent.clear(); s.retry_unanswered(t0 + 2 * s.RETRY_AFTER); assert sent == [] and s.state["mentions"][-1]["answered"] == 303.0
-msg("304.0", "U1", "late answer", thread="300.0"); s.retry_unanswered(t0 + 3 * s.RETRY_AFTER)
-assert s.state["mentions"][0]["answered"] == 304.0 and s.state["mentions"][0]["gave_up"]   # a late answer is still logged
-log = s.mentions_for("boboe1", 0); assert [(x["ts"], bool(x["answered"]), x["gave_up"]) for x in log] == [("300.0", True, True), ("302.0", True, False)], log
+# answered mentions are logged and cleared from the agent's inbox; unanswered ones are flagged late
+s.state["mentions"].clear(); out = []; s._deliver = lambda agent, item: out.append((agent, item.get("kind", "slack"), item["ts"]))
+s.route([msg("300.0", "UD", "Boboe 1, can you hear me?")]); t0 = s.state["mentions"][-1]["delivered"]
+msg("300.5", "U1", "busy elsewhere", thread="150.0")                              # a post in another thread isn't an answer
+out.clear(); s.check_answered(t0 + 60); assert out == [] and not s.state["mentions"][-1]["answered"]
+s.check_answered(t0 + s.LATE_AFTER); assert s.state["mentions"][-1]["gave_up"]   # missed
+msg("301.0", "U1", "yes, here", thread="300.0")                                  # a late answer in its thread
+s.check_answered(t0 + s.LATE_AFTER + 60)
+assert out == [("boboe1", "answered", "300.0")] and s.state["mentions"][-1]["answered"] == 301.0
+out.clear(); s.check_answered(t0 + s.LATE_AFTER + 120); assert out == []             # cleared once
+log = s.mentions_for("boboe1", 0); assert [(x["ts"], bool(x["answered"])) for x in log] == [("300.0", True)], log
+s._deliver = lambda agent, item: sent.append((agent, item["why"], item["ts"]))
+
 # an agent citing another by plain name isn't addressing it; an @mention is
 assert who(msg("390.0", "U10", "same as Boboe 1 saw")) == []
 assert who(msg("391.0", "U10", "<@U1> can you look?")) == [("boboe1", "mentioned")]

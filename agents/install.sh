@@ -26,8 +26,7 @@ if [ "$SRC" != "$TDIR" ] && [ -f "$SRC/telemetryd.py" ]; then
   HOOKS="$(dirname "$(dirname "$TDIR")")/hooks/scripts"
   mkdir -p "$HOOKS"
   cp "$SRC/watchdog_hook.sh" "$HOOKS/telemetry-watchdog.sh"
-  cp "$SRC/slack_hook.sh" "$HOOKS/slack-inbox.sh"
-  chmod +x "$HOOKS/telemetry-watchdog.sh" "$HOOKS/slack-inbox.sh"
+  chmod +x "$HOOKS/telemetry-watchdog.sh"
   echo "Installed daemon and hook scripts from $SRC."
 fi
 [ -f "$TDIR/telemetryd.py" ] || { echo "ERROR: $TDIR/telemetryd.py missing; run this from the repo's agents/ folder." >&2; exit 1; }
