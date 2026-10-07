@@ -64,7 +64,18 @@ full.clear(); s.route([msg("402.0", "U10", "thanks <@U1>", thread="400.0")]); as
 for i in range(20): s.route([msg("41%d.0" % i, "U10" if i % 2 else "U1", "<@U%s> again" % ("1" if i % 2 else "10"), thread="400.0")])
 assert sum(1 for w in s.state["mentions"] if w["thread"] == "400.0") == s.AGENT_THREAD_CAP          # loop guard
 full.clear(); s.route([msg("450.0", "UD", "Boboe 1 still there?", thread="400.0")]); assert ("boboe1", True) in full  # people always pass
-# a required mention is also typed into the agent's wall tile (by its Slack display name)
+# a required mention is typed into the agent's wall tile (by its Slack display name) only when its
+# front door is down; a down front door gets a rate-limited reminder
+s.listener_up = lambda agent: agent == "boboe1"
+walled = []; s.to_wall = lambda name, item: walled.append((name, item["ts"]))
+s._deliver = lambda agent, item: None
+s.route([msg("499.0", "UD", "Boboe 1 status?")]); import time as _t; _t.sleep(0.2); assert walled == [], walled
+nudged = []; s.wall_send = lambda name, text: nudged.append(name)
+s.check_listeners(1000.0); s.check_listeners(1000.0 + 60); _t.sleep(0.2)
+assert sorted(nudged) == ["Boboe 10", "Boboe Prime"], nudged                       # once each, not boboe1
+s.check_listeners(1000.0 + s.LISTENER_NUDGE); _t.sleep(0.2); assert len(nudged) == 4
+s.listener_up = lambda agent: False
+# (old check, front door down for everyone)
 walled = []; s.to_wall = lambda name, item: walled.append((name, item["ts"]))
 s._deliver = lambda agent, item: None
 s.route([msg("500.0", "UD", "Boboe 10 status?")]); s.route([msg("501.0", "UD", "<!here> fyi")])
