@@ -107,8 +107,8 @@ def agents():
 
 def route(new):
     """Hand each new message to the agents it's for: named (@mention or plain
-    "Boboe 2"), everyone (@channel/@here), or in a thread the agent has posted
-    in. Never the author itself, never messages from before the reader started."""
+    "Boboe 2"), everyone (@channel/@here), or a person (not another agent) posting in a
+    thread the agent has posted in. Never the author itself, never messages from before the reader started."""
     if not _deliver:
         return
     with lock:
@@ -132,8 +132,9 @@ def route(new):
         if EVERYONE.search(text):
             for agent in who.values():
                 targets.setdefault(agent, "everyone")
-        for agent in threads.get((ch, m["thread"] or m["ts"]), ()):
-            targets.setdefault(agent, "your thread")
+        if m["user"] not in who:   # agents replying in a shared thread woke each other in a loop
+            for agent in threads.get((ch, m["thread"] or m["ts"]), ()):
+                targets.setdefault(agent, "your thread")
         targets.pop(who.get(m["user"]), None)
         item = {"kind": "slack", "channel": chans.get(ch, ch), "channel_id": ch, "ts": m["ts"],
                 "thread_ts": m["thread"], "user": m["user"], "user_name": names.get(m["user"], m["user"]),

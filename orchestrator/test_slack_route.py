@@ -28,6 +28,11 @@ assert who(msg("204.0", "U10", "done, Boboe 10 here", thread="150.0")) == []    
 assert who(msg("205.0", "UD", "<!here> standup")) == [("boboe1", "everyone"), ("boboe10", "everyone"), ("boboeprime", "everyone")]
 assert who(msg("207.0", "UD", "@channel", thread="150.0")) == [("boboe1", "everyone"), ("boboe10", "everyone"), ("boboeprime", "everyone")]  # typed, not <!channel>
 assert who(msg("208.0", "UD", "email me@channel.com")) == []
+# agents talking in a shared thread don't wake each other (that looped: every post woke the other 11)
+msg("210.0", "U1", "Boboe 1 joining", thread="150.0")
+assert who(msg("211.0", "U10", "status update", thread="150.0")) == []
+assert who(msg("212.0", "U10", "Boboe 1, can you take this?", thread="150.0")) == [("boboe1", "mentioned")]
+assert who(msg("213.0", "UD", "thanks both", thread="150.0")) == [("boboe1", "your thread"), ("boboe10", "your thread")]
 assert who(msg("50.0", "UD", "Boboe 1 old news")) == []                               # before the reader started
 assert who(msg("206.0", "UD", "unrelated chatter")) == []
 # a thread message carries the thread so far: the original post, then earlier replies

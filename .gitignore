@@ -13,3 +13,4 @@ file_cache/
 .env
 slack_messages.json
 mailbox.json
+receiver.log

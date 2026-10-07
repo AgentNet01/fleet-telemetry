@@ -140,6 +140,9 @@ def mail_load():
             mail.update(json.load(f))
     except (OSError, ValueError):
         pass
+    for log in mail["delivered"].values():
+        for i in log:
+            i.pop("thread", None)
 
 
 def mail_save():
@@ -173,7 +176,9 @@ def mail_wait(agent, after):
             now = time.time()
             mail["queue"][agent] = [i for i in q if i["id"] > after]
             log = mail["delivered"].setdefault(agent, [])
-            log.extend(dict(i, delivered=now) for i in done)
+            # the thread copy is 90% of a record and nothing reads it after delivery;
+            # keeping it made every save rewrite ~50 MB while all agents waited on the lock
+            log.extend({**{k: v for k, v in i.items() if k != "thread"}, "delivered": now} for i in done)
             del log[:-MAX_DELIVERED]
             mail_save()
         while True:
