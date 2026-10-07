@@ -53,7 +53,9 @@ msg("302.5", "U1", "busy elsewhere", thread="150.0")                            
 sent.clear(); s.retry_unanswered(t0 + s.RETRY_AFTER); assert sent == [("boboe1", "no reply yet", "302.0")]
 msg("303.0", "U1", "yes, here", thread="302.0")                                    # it answered in the mention's thread
 sent.clear(); s.retry_unanswered(t0 + 2 * s.RETRY_AFTER); assert sent == [] and s.state["mentions"][-1]["answered"] == 303.0
-log = s.mentions_for("boboe1", 0); assert [(x["ts"], bool(x["answered"]), x["gave_up"]) for x in log] == [("300.0", False, True), ("302.0", True, False)], log
+msg("304.0", "U1", "late answer", thread="300.0"); s.retry_unanswered(t0 + 3 * s.RETRY_AFTER)
+assert s.state["mentions"][0]["answered"] == 304.0 and s.state["mentions"][0]["gave_up"]   # a late answer is still logged
+log = s.mentions_for("boboe1", 0); assert [(x["ts"], bool(x["answered"]), x["gave_up"]) for x in log] == [("300.0", True, True), ("302.0", True, False)], log
 # an agent citing another by plain name isn't addressing it; an @mention is
 assert who(msg("390.0", "U10", "same as Boboe 1 saw")) == []
 assert who(msg("391.0", "U10", "<@U1> can you look?")) == [("boboe1", "mentioned")]

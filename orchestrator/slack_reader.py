@@ -195,7 +195,9 @@ def retry_unanswered(now):
             if a:
                 k = (a, m["ch"], m["thread"])
                 posted[k] = max(posted.get(k, 0.0), float(m["ts"]))
-        opened = [w for w in state["mentions"] if w.get("required", True) and not w["answered"] and not w["gave_up"]]
+        # gave-up ones stay checked so a late answer (e.g. from the 5-minute cron) is still logged
+        opened = [w for w in state["mentions"] if w.get("required", True) and not w["answered"]
+                  and now - w["delivered"] < 86400]
     for w in opened:
         agent, ch, ts = w["agent"], w["ch"], w["ts"]
         # answered = a post after it in its thread (a top-level mention: its new thread, or top level)
@@ -204,7 +206,7 @@ def retry_unanswered(now):
         reply = max(posted.get(k, 0.0) for k in spots)
         if reply > float(ts):
             w["answered"] = reply
-        elif now - w["at"] >= RETRY_AFTER:
+        elif not w["gave_up"] and now - w["at"] >= RETRY_AFTER:
             if w["tries"] >= RETRIES:
                 w["gave_up"] = True
             else:

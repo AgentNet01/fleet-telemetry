@@ -727,7 +727,7 @@ function mentionsPanel(a) {
   const ms = (a.mentions || []).slice().reverse().slice(0, 8);
   if (!ms.length) return html`<div class="panel"><p class="empty">Nobody has named ${a.name} in Slack in the last 7 days.</p></div>`;
   const state = w => w.required === false ? html`<span>reply optional (an agent answering it)</span>`
-    : w.answered ? html`<span class="s-success">answered in ${dur(w.answered - +w.ts)}</span>`
+    : w.answered ? html`<span class="${w.gave_up ? "warn" : "s-success"}">answered in ${dur(w.answered - +w.ts)}${w.gave_up ? " (late, after re-sends)" : ""}</span>`
     : w.gave_up ? html`<span class="warn">no answer, re-sent ${plural(w.tries, "time")}</span>`
     : html`<span class="mut">waiting${w.tries ? ` · re-sent ${plural(w.tries, "time")}` : ""}</span>`;
   return html`<div class="panel list"><ul class="acts">${ms.map(w => html`<li class="act"><span class="s-slack">${I.chat}</span>
