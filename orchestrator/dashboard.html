@@ -718,7 +718,22 @@ function overviewTab(a) {
       <section class="sec"><div class="sec-head"><h2>Recent activity</h2><a class="lnk" href="${hrefM(a.name, "activity")}">All activity</a></div>
         <div class="panel list">${act.length ? actList(act.slice(0, 5)) : html`<p class="empty">${actEmpty(p)}</p>`}</div></section>
     </div>
+    <section class="sec"><div class="sec-head"><h2>Connection &amp; hooks</h2><span class="sec-sub">Counted on the machine since the daemon started · hooks over the last hour</span></div>${healthPanel(p)}</section>
     <section class="sec"><div class="sec-head"><h2>Machine</h2></div>${machinePanel(a)}</section>`;
+}
+function healthPanel(p) {
+  const h = p.health;
+  if (!h) return html`<div class="panel"><p class="empty">Arrives with telemetry daemon v11 on this machine.</p></div>`;
+  const row = (k, v) => html`<div class="mc-row"><dt>${k}</dt><dd>${v}</dd></div>`;
+  const link = c => html`${c.ok} ok · <span class="${c.fail ? "warn" : ""}">${c.fail} failed</span>${c.last_ok ? html`<span class="mc-sub">last ok ${agoEl(c.last_ok)} ago</span>` : ""}`;
+  const e = h.last_error, hooks = Object.entries(h.hooks || {});
+  return html`<div class="panel"><dl class="mc">
+    ${row("Daemon started", html`${agoEl(h.started)} ago`)}
+    ${row("Reports sent", link(h.post))}
+    ${row("Mailbox line", link(h.mailbox))}
+    ${row("Last error", e ? html`${e.text}<span class="mc-sub">${e.where} · ${agoEl(e.ts)} ago</span>` : "none")}
+    ${hooks.map(([id, k]) => row(`Hook ${id}`, html`${k.runs} runs · ${k.wakes} wakes · <span class="${k.errors ? "warn" : ""}">${k.errors} errors</span>${k.last_event ? html`<span class="mc-sub">last ${k.last_event.outcome}: ${k.last_event.reason || "—"} · ${agoEl(k.last_event.ts)} ago</span>` : ""}`))}
+  </dl></div>`;
 }
 const fmtRate = b => b == null ? "—" : b >= 1048576 ? (b / 1048576).toFixed(1) + " MB/s" : b >= 1024 ? Math.round(b / 1024) + " KB/s" : Math.round(b) + " B/s";
 function machinePanel(a) {

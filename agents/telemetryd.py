@@ -56,6 +56,63 @@ BOOTID_FILE = os.path.join(TDIR, ".boot_id")
 LOG = os.path.join(TDIR, "telemetryd.log")
 
 
+# Connection health, shipped with every push so a flaky link shows on the
+# dashboard instead of only in this box's log.
+HEALTH = {"started": time.time(), "post": {"ok": 0, "fail": 0}, "mailbox": {"ok": 0, "fail": 0},
+          "last_error": None}
+
+
+def note(kind, err=None):
+    h = HEALTH[kind]
+    if err is None:
+        h["ok"] += 1
+        h["last_ok"] = time.time()
+    else:
+        h["fail"] += 1
+        HEALTH["last_error"] = {"where": kind, "text": str(err)[:300], "ts": time.time()}
+
+
+HOOK_LOGS = os.path.join(HOME, "hooks", "logs")
+
+
+def hook_stats(now, window=3600):
+    """Per hook, from the runtime's own run logs: runs/wakes/other outcomes in
+    the last hour, plus the newest non-silent result."""
+    out = {}
+    try:
+        names = [n for n in os.listdir(HOOK_LOGS) if n.endswith(".jsonl")]
+    except OSError:
+        return out
+    for n in names:
+        s = {"runs": 0, "wakes": 0, "errors": 0, "last_run": None, "last_event": None}
+        try:
+            with open(os.path.join(HOOK_LOGS, n), "rb") as f:
+                f.seek(0, 2)
+                f.seek(max(0, f.tell() - 512 * 1024))   # ponytail: last 512 KB covers an hour at 5s polls
+                lines = f.read().decode("utf-8", "replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                e = json.loads(line)
+                t = (e.get("started_at_ms") or 0) / 1000
+            except (ValueError, AttributeError):
+                continue
+            if t < now - window:
+                continue
+            s["runs"] += 1
+            s["last_run"] = max(s["last_run"] or 0, t)
+            outcome = e.get("outcome")
+            if outcome == "wake":
+                s["wakes"] += 1
+            elif outcome != "silent":
+                s["errors"] += 1
+            if outcome != "silent":
+                s["last_event"] = {"ts": t, "outcome": outcome, "reason": str(e.get("reason") or "")[:200]}
+        out[n[:-len(".jsonl")]] = s
+    return out
+
+
 def log(msg):
     line = "%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg)
     try:
@@ -486,7 +543,7 @@ def build_payload(token_note_replaced=False):
     now = time.time()
     return {
         "agent": AGENT,
-        "daemon": 10,              # payload version; dashboard flags older ones
+        "daemon": 11,              # payload version; dashboard flags older ones
         "ts": now,
         "boot_id": bid,
         "vm_replaced": vm_replaced,
@@ -500,6 +557,7 @@ def build_payload(token_note_replaced=False):
         "observed": observed(walked, mem["all"], now, os.getpid()),
         "system": system(now),    # OS, CPU, shared-host memory, network, IP
         "capabilities": CAPABILITIES,   # static: what this agent can do
+        "health": dict(HEALTH, hooks=hook_stats(now)),
     }
 
 
@@ -643,8 +701,10 @@ def mailbox_loop(token):
                 after = max(after, int(it["id"]))
             # saved only after the files are written: a crash re-fetches, never skips
             write_atomic(CURSOR_FILE, str(after))
+            note("mailbox")
             backoff = 1
         except Exception as e:
+            note("mailbox", e)
             log("mailbox: %s" % e)
             time.sleep(backoff)
             backoff = min(30, backoff * 2)
@@ -682,6 +742,7 @@ def main():
                 payload["burst"] = bursting
                 try:
                     ok, cmd = post(op, token, payload)
+                    note("post", None if ok else "HTTP not 200")
                     if ok:
                         handle_cmd(cmd, time.time())
                         send_fetches(op, token, cmd.get("fetch") if isinstance(cmd, dict) else None)
@@ -689,6 +750,7 @@ def main():
                     else:
                         spool(payload)
                 except Exception as e:
+                    note("post", e)
                     log("post failed: %s" % e)
                     spool(payload)
                 last_push = time.time()

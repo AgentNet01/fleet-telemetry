@@ -1,4 +1,5 @@
 """Run: python3 agents/test_telemetryd.py  (no deps, exits non-zero on failure)."""
+import json
 import os
 import sys
 
@@ -63,6 +64,20 @@ with tempfile.TemporaryDirectory() as home:
             refused[rel] = str(e)
     assert len(refused) == 9, refused
     assert refused["innocent.txt"] == "hidden files aren't shared", refused
+
+# hook health: last hour from the runtime's run logs; old runs and junk lines ignored
+with tempfile.TemporaryDirectory() as logs:
+    t.HOOK_LOGS = logs
+    now = 10000.0
+    rows = [{"started_at_ms": 9000e3, "outcome": "silent"}, {"started_at_ms": 9500e3, "outcome": "wake", "reason": "2 messages"},
+            {"started_at_ms": 9600e3, "outcome": "error", "reason": "boom"}, {"started_at_ms": 1000e3, "outcome": "wake"}]
+    with open(os.path.join(logs, "slack-inbox.jsonl"), "w") as f:
+        f.write("\n".join(map(json.dumps, rows)) + "\nnot json\n")
+    h = t.hook_stats(now)["slack-inbox"]
+    assert (h["runs"], h["wakes"], h["errors"], h["last_run"]) == (3, 1, 1, 9600.0), h
+    assert h["last_event"]["reason"] == "boom", h
+t.note("mailbox", OSError("Remote end closed"))
+assert t.HEALTH["mailbox"]["fail"] == 1 and "Remote end" in t.HEALTH["last_error"]["text"]
 
 # burst caps still hold against hostile input
 assert t.handle_cmd({"burst": True, "interval": 0, "until": 1e12}, 100.0) == (2, 400.0)

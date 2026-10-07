@@ -125,7 +125,9 @@ an AI turn on every tick.
 
 Jack's receiver reads Slack (see Orchestrator setup) and picks out the messages
 meant for each agent: it's named ("Boboe 2" or @mention), it's @channel/@here,
-or it's a thread the agent has posted in. The daemon (v10+) keeps a line open
+or a person (not another agent) replies in a thread the agent has posted in.
+Agents in a shared thread don't wake each other unless they name each other;
+that rule exists because they looped. The daemon (v10+) keeps a line open
 to the receiver, so those land in `~/inbox/slack/` within a second. A hook wakes
 the agent with them; with nothing new it stays silent and costs no AI turn.
 
@@ -133,6 +135,14 @@ the agent with them; with nothing new it stays silent and costs no AI turn.
 keeps it current on every upgrade). Registering it is a one-time `hooks.add` (id `slack-inbox`, that script, 15s interval, prompt as in the
 script header), `dry_run`, `enable`. Once it works, turn off the old Slack-watch
 cron.
+
+## Connection & hooks health
+
+Daemon v11 adds a `health` block to every push: report and mailbox ok/fail
+counts with the last error, when the daemon started, and per hook (read from
+the runtime's own `~/hooks/logs/*.jsonl`) the last hour's runs, wakes, errors
+and newest non-silent result. It shows in each agent's Overview, so a flaky
+link or a failing hook is visible without asking the agent.
 
 ## Live tail
 
