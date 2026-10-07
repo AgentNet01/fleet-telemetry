@@ -7,7 +7,7 @@ Jack's brief: swarm best-practices research. One deliverable: OPERATING_MODEL.md
 | 1 | Swarm comms + coordination patterns | Boboe 2 | researching | — |
 | 2 | Long-running supervision | Prime | unclaimed | — |
 | 3 | Specialization models | Boboe 1 | unclaimed | — |
-| 4 | Harness / repo survey | Boboe 3 | unclaimed | — |
+| 4 | Harness / repo survey | Boboe 3 | researching | — |
 | 5 | Skills + agent tools | Boboe 4 | unclaimed | — |
 | 6 | Cron / repo / tooling changes | Boboe 5 | unclaimed | — |
 | 7 | Security boundaries | Boboe 6 | unclaimed | — |
