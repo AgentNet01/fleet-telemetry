@@ -27,6 +27,33 @@ THREAD_DAYS = 3      # threads with a reply this recent are watched
 KEEP_DAYS = 30       # messages older than this are dropped
 FIRST_DAYS = 3       # how far back to read on the very first run
 THREAD_CONTEXT = 20  # earlier replies sent with a thread message (plus the original post)
+# Muse's background runs (hooks, crons) take minutes and often time out without posting; the
+# agent's main chat answers in seconds. So a mention that needs an answer is also typed into
+# that agent's Muse Wall tile (Jack's Mac, 127.0.0.1); the cron is the backstop if the wall is shut.
+WALL_CONTROL = os.path.expanduser("~/Library/Application Support/muse-wall/control.json")
+_wall_lock = threading.Lock()
+
+
+def to_wall(name, item):
+    """Type a Slack mention into the agent's main chat via the Muse Wall. False if it couldn't."""
+    th = item.get("thread_ts") or item["ts"]
+    text = ("Slack: %s named you in #%s%s:\n\n%s\n\nAnswer in Slack, in that thread (channel %s, thread_ts %s). "
+            "Then move ~/inbox/slack/%s-%s.json to ~/inbox/slack/done/ if it's there.") % (
+        item.get("user_name"), item.get("channel"), " (in a thread)" if item.get("thread_ts") else "",
+        item.get("text", "")[:3000], item["channel_id"], th, item["channel_id"], item["ts"])
+    try:
+        with open(WALL_CONTROL) as f:
+            c = json.load(f)
+        req = urllib.request.Request("http://127.0.0.1:%d/send" % c["port"], method="POST",
+                                     data=json.dumps({"to": [name], "text": text, "by": "Slack"}).encode(),
+                                     headers={"X-Wall-Token": c["token"], "Content-Type": "application/json"})
+        with _wall_lock, urllib.request.urlopen(req, timeout=60) as r:   # one send at a time
+            return all(x.get("ok") for x in json.load(r))
+    except Exception as e:
+        print("slack reader: wall send to %s failed: %s" % (name, e))
+        return False
+
+
 LATE_AFTER = 1800    # a required mention unanswered this long counts as missed on the dashboard
 # Each agent's 1-minute cron answers what's in its inbox. Slack shows when it has answered,
 # so the receiver logs each mention's outcome (state["mentions"]) and tells the agent's daemon
@@ -158,6 +185,7 @@ def route(new):
                                "text": x["text"][:1500]} for x in keep_]
             item["thread_skipped"] = len(earlier) - len(keep_)
         author, thread, now = who.get(m["user"]), m["thread"] or m["ts"], time.time()
+        agent_uid = {a: u for u, a in who.items()}   # boboe2 -> its Slack id -> "Boboe 2" (its wall tile)
         for agent, why in targets.items():
             # being named needs an answer -- from a person or an agent. Loop guards for agents:
             # naming someone who just named you in this thread is an answer (no reply needed),
@@ -172,6 +200,8 @@ def route(new):
                 if any(w["agent"] == author and w["from"] == agent for w in recent):
                     required = False
             _deliver(agent, dict(item, why=why, reply_required=required))
+            if required:
+                threading.Thread(target=to_wall, args=(names.get(agent_uid.get(agent), agent), item), daemon=True).start()
             if why == "mentioned":
                 with lock:
                     state["mentions"].append({"agent": agent, "from": author, "ch": ch, "ts": m["ts"],

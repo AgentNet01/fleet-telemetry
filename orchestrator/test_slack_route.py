@@ -64,4 +64,10 @@ full.clear(); s.route([msg("402.0", "U10", "thanks <@U1>", thread="400.0")]); as
 for i in range(20): s.route([msg("41%d.0" % i, "U10" if i % 2 else "U1", "<@U%s> again" % ("1" if i % 2 else "10"), thread="400.0")])
 assert sum(1 for w in s.state["mentions"] if w["thread"] == "400.0") == s.AGENT_THREAD_CAP          # loop guard
 full.clear(); s.route([msg("450.0", "UD", "Boboe 1 still there?", thread="400.0")]); assert ("boboe1", True) in full  # people always pass
+# a required mention is also typed into the agent's wall tile (by its Slack display name)
+walled = []; s.to_wall = lambda name, item: walled.append((name, item["ts"]))
+s._deliver = lambda agent, item: None
+s.route([msg("500.0", "UD", "Boboe 10 status?")]); s.route([msg("501.0", "UD", "<!here> fyi")])
+import time as _t; _t.sleep(0.2)
+assert walled == [("Boboe 10", "500.0")], walled
 print("ok")

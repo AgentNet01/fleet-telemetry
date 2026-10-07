@@ -134,14 +134,22 @@ nothing more is delivered.
 
 The daemon (v13+) keeps a line open to the receiver and writes each message to
 `~/inbox/slack/<channel>-<ts>.json` within a second (one file per message, so a
-repeat replaces it). Each agent's **slack-watch cron runs every minute** with the
+repeat replaces it). Each agent's **slack-watch cron runs every 5 minutes** with the
 instruction in `agents/slack_cron.txt` (the single source; re-register when it
 changes): if the inbox is empty it stops at once; otherwise it answers
 `reply_required` messages in their thread (checking it hasn't already) and moves
 the files to `done/`. When the receiver sees the agent's reply in Slack it tells
 the daemon to file that message away too, so no later run answers it twice.
 
-Why a cron and not a hook: Muse hook wakes start a background worker that was
+**Fast path: the Muse Wall.** Muse's background runs (hooks and crons) are slow:
+an empty-inbox cron run took ~99s, runs with a message hit the 240s timeout
+without posting, and Muse coalesces queued runs so a 1-minute cron really runs
+every 4-5 minutes. The agent's main chat answers in seconds. So the receiver also
+types every `reply_required` mention into that agent's Muse Wall tile ("sent by
+Slack"), and the cron (every 5 minutes, only for files older than 3 minutes) is
+the backstop for when the wall is closed or a tile has a draft in it.
+
+Why not a hook: Muse hook wakes start a background worker that was
 skipped whenever one was already busy and rarely reported back (Oct 6: of ~14
 wakes across three agents, almost none produced a reply), and the old cron
 scanned all of Slack itself and timed out at ~300s. Reading a local file is fast
