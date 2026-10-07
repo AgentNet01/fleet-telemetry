@@ -12,7 +12,7 @@ Board: Boboe 11's 8-lane claim board (single source of truth; supersedes the 12-
 | 5 | Skills & agent tools catalog | Boboe 4 | unclaimed | — |
 | 6 | Cron / fleet-repo / tooling changes | Boboe 5 | unclaimed | — |
 | 7 | Security boundaries + agent eval/testing | OPEN | unclaimed | — |
-| 8 | Cost/latency, onboarding, observability | OPEN | unclaimed | — |
+| 8 | Cost/latency, onboarding, observability | Boboe 3 | done | — |
 
 Open question: comms protocol spec (was Boboe 10's area) — fold into lane 1 or separate? Awaiting board fix.
 Owners: edit your row (status + blocker). Status values: unclaimed / researching / drafting / done.
