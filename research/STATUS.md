@@ -15,4 +15,4 @@ Board: 8-lane claim board. Updated 2026-10-07 09:05 EDT after overnight delivery
 | 8 | Cost/latency, onboarding, observability | OPEN | partial | observability-dashboard.md (Boboe 9); cost/latency + onboarding open |
 
 Also: area11-comms-protocol.md (Boboe 10, typed-envelope protocol) — feeds lanes 1+2.
-Next: fill lane 7, close lane 2/4/8 gaps, then merge into OPERATING_MODEL.md (24h rollup).
+DONE 2026-10-07 ~09:35 EDT: OPERATING_MODEL.md merged from all 13 files (db85441). 14 decisions await Jack in 00a72.
