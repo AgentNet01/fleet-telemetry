@@ -75,6 +75,18 @@ def note(kind, err=None):
 HOOK_LOGS = os.path.join(HOME, "hooks", "logs")
 
 
+def listener_alive():
+    """Is the agent's front door (listen.py, started from its main chat) waiting right now?"""
+    for pid in os.listdir("/proc") if os.path.isdir("/proc") else []:
+        try:
+            with open("/proc/%s/cmdline" % pid, "rb") as f:
+                if b"listen.py" in f.read():
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 def hook_stats(now, window=3600):
     """Per hook, from the runtime's own run logs: runs/wakes/other outcomes in
     the last hour, plus the newest non-silent result."""
@@ -543,7 +555,7 @@ def build_payload(token_note_replaced=False):
     now = time.time()
     return {
         "agent": AGENT,
-        "daemon": 13,              # payload version; dashboard flags older ones
+        "daemon": 14,              # payload version; dashboard flags older ones
         "ts": now,
         "boot_id": bid,
         "vm_replaced": vm_replaced,
@@ -557,7 +569,7 @@ def build_payload(token_note_replaced=False):
         "observed": observed(walked, mem["all"], now, os.getpid()),
         "system": system(now),    # OS, CPU, shared-host memory, network, IP
         "capabilities": CAPABILITIES,   # static: what this agent can do
-        "health": dict(HEALTH, hooks=hook_stats(now)),
+        "health": dict(HEALTH, hooks=hook_stats(now), listener=listener_alive()),
     }
 
 

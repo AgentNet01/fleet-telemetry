@@ -27,20 +27,24 @@ THREAD_DAYS = 3      # threads with a reply this recent are watched
 KEEP_DAYS = 30       # messages older than this are dropped
 FIRST_DAYS = 3       # how far back to read on the very first run
 THREAD_CONTEXT = 20  # earlier replies sent with a thread message (plus the original post)
-# Muse's background runs (hooks, crons) take minutes and often time out without posting; the
-# agent's main chat answers in seconds. So a mention that needs an answer is also typed into
-# that agent's Muse Wall tile (Jack's Mac, 127.0.0.1); the cron is the backstop if the wall is shut.
+# Each agent keeps a "front door" open: agents/listen.py, run by its main chat in background
+# exec, exits when a message lands in its inbox and the runtime turns that into a main-chat
+# turn in seconds. When an agent's front door is down (VM replaced, turn died) the Muse Wall on
+# Jack's Mac types required mentions into its main chat instead, and reminds it to reopen the
+# door at most every LISTENER_NUDGE seconds. Muse's own background runs are too slow for either.
 WALL_CONTROL = os.path.expanduser("~/Library/Application Support/muse-wall/control.json")
+LISTENER_NUDGE = 900
 _wall_lock = threading.Lock()
+listener_up = lambda agent: False   # the receiver replaces this with a check of the agent's health
+_nudged = {}
+RESTART = ("Your Slack front door isn't running. Start it now with background exec (muse.exec, background=true): "
+           "python3 ~/workspace/telemetry/listen.py -- and end your turn. Keep it running: when it wakes you, "
+           "follow its instructions, then start it again. If that file doesn't exist yet, first cd into your "
+           "fleet-telemetry checkout, git pull, and bash agents/install.sh.")
 
 
-def to_wall(name, item):
-    """Type a Slack mention into the agent's main chat via the Muse Wall. False if it couldn't."""
-    th = item.get("thread_ts") or item["ts"]
-    text = ("Slack: %s named you in #%s%s:\n\n%s\n\nAnswer in Slack, in that thread (channel %s, thread_ts %s). "
-            "Then move ~/inbox/slack/%s-%s.json to ~/inbox/slack/done/ if it's there.") % (
-        item.get("user_name"), item.get("channel"), " (in a thread)" if item.get("thread_ts") else "",
-        item.get("text", "")[:3000], item["channel_id"], th, item["channel_id"], item["ts"])
+def wall_send(name, text):
+    """Type text into the agent's main chat via the Muse Wall. False if it couldn't."""
     try:
         with open(WALL_CONTROL) as f:
             c = json.load(f)
@@ -52,6 +56,27 @@ def to_wall(name, item):
     except Exception as e:
         print("slack reader: wall send to %s failed: %s" % (name, e))
         return False
+
+
+def to_wall(name, item):
+    """A required Slack mention, typed into the agent's main chat (its front door is down)."""
+    th = item.get("thread_ts") or item["ts"]
+    return wall_send(name, ("Slack: %s named you in #%s%s:\n\n%s\n\nAnswer in Slack, in that thread (channel %s, "
+                            "thread_ts %s). Then move ~/inbox/slack/%s-%s.json to ~/inbox/slack/done/ if it's there. "
+                            "Then restart your front door: background exec python3 ~/workspace/telemetry/listen.py") % (
+        item.get("user_name"), item.get("channel"), " (in a thread)" if item.get("thread_ts") else "",
+        item.get("text", "")[:3000], item["channel_id"], th, item["channel_id"], item["ts"]))
+
+
+def check_listeners(now):
+    """Remind an agent whose front door is down to reopen it (rate-limited)."""
+    with lock:
+        names = dict(state["users"])
+        who = agents()
+    for uid, agent in who.items():
+        if not listener_up(agent) and now - _nudged.get(agent, 0) >= LISTENER_NUDGE:
+            _nudged[agent] = now
+            threading.Thread(target=wall_send, args=(names.get(uid, agent), RESTART), daemon=True).start()
 
 
 LATE_AFTER = 1800    # a required mention unanswered this long counts as missed on the dashboard
@@ -200,7 +225,7 @@ def route(new):
                 if any(w["agent"] == author and w["from"] == agent for w in recent):
                     required = False
             _deliver(agent, dict(item, why=why, reply_required=required))
-            if required:
+            if required and not listener_up(agent):
                 threading.Thread(target=to_wall, args=(names.get(agent_uid.get(agent), agent), item), daemon=True).start()
             if why == "mentioned":
                 with lock:
@@ -327,6 +352,7 @@ def run(tok):
                 last_threads = now
                 prune()
             check_answered(now)
+            check_listeners(now)
             save()
         except Exception as e:
             print("slack reader: %s" % e)

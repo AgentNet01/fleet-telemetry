@@ -463,7 +463,14 @@ if __name__ == "__main__":
     os.makedirs(FILE_CACHE)
     srv = ThreadingHTTPServer((BIND_IP, PORT), Handler)
     mail_load()
-    slack_reader.DATA_FILE = os.path.join(HERE, "slack_messages.json")   # beside this receiver's other data
+    slack_reader.DATA_FILE = os.path.join(HERE, "slack_messages.json")
+
+    def listener_up(agent):
+        with lock:
+            r = store.get(agent) or {}
+            h = (r.get("latest") or {}).get("health") or {}
+            return bool(h.get("listener")) and time.time() - r.get("last_seen", 0) < 90
+    slack_reader.listener_up = listener_up   # beside this receiver's other data
     print("slack reader: %s" % ("on" if slack_reader.start(deliver) else "off (no SLACK_BOT_TOKEN in .env)"))
     print("fleet receiver listening on http://%s:%d  (dashboard + ingest)" % (BIND_IP, PORT))
     print("waiting for agents... (Ctrl-C to stop)")

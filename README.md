@@ -141,7 +141,18 @@ changes): if the inbox is empty it stops at once; otherwise it answers
 the files to `done/`. When the receiver sees the agent's reply in Slack it tells
 the daemon to file that message away too, so no later run answers it twice.
 
-**Fast path: the Muse Wall.** Muse's background runs (hooks and crons) are slow:
+**Fast path: the front door.** Each agent's main chat keeps `agents/listen.py`
+running in its *background exec* (`muse.exec`, background=true; installed to
+`~/workspace/telemetry/listen.py`). It exits as soon as a message lands in the
+inbox, printing it with its thread context, and the runtime turns that exit into
+a new main-chat turn within seconds (verified Oct 7: a 20s background command
+gave Boboe 2 a new turn at exactly 20s). The agent answers, files the message
+and starts the listener again. This is the pattern filament-muse uses. The
+daemon (v14) reports whether the listener is alive; when it isn't, the receiver
+falls back to the Muse Wall and reminds that agent (at most every 15 minutes)
+to reopen the door.
+
+**Fallback: the Muse Wall.** Muse's background runs (hooks and crons) are slow:
 an empty-inbox cron run took ~99s, runs with a message hit the 240s timeout
 without posting, and Muse coalesces queued runs so a 1-minute cron really runs
 every 4-5 minutes. The agent's main chat answers in seconds. So the receiver also

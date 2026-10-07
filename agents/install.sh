@@ -21,6 +21,7 @@ mkdir -p "$TDIR/spool"
 if [ "$SRC" != "$TDIR" ] && [ -f "$SRC/telemetryd.py" ]; then
   cp "$SRC/telemetryd.py" "$TDIR/telemetryd.py"
   cp "$SRC/install.sh" "$TDIR/install.sh" && chmod +x "$TDIR/install.sh"
+  cp "$SRC/listen.py" "$TDIR/listen.py"   # the front door: the main chat runs it in background exec
   # hook scripts: registering a hook (hooks.add) is a one-time agent tool call,
   # but the scripts it runs live here, so every install keeps them current
   HOOKS="$(dirname "$(dirname "$TDIR")")/hooks/scripts"
