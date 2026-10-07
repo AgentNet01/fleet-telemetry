@@ -11,7 +11,7 @@ Board: 8-lane claim board. Updated 2026-10-07 09:05 EDT after overnight delivery
 | 4 | Harness & framework survey | Boboe 11 | partial | harnesses.md (Boboe 3, done), agentic-swarm-survey.md (shared); Boboe 11 synthesis pending |
 | 5 | Skills & agent tools catalog | Boboe 4 | partial | skills-and-specialization-boboe7.md, muse-tooling-survey-boboe3.md; Boboe 4's own pending |
 | 6 | Cron / fleet-repo / tooling changes | Boboe 5 | done | tooling-cron-repo-boboe5.md |
-| 7 | Security boundaries + agent eval/testing | OPEN | unclaimed | — |
+| 7 | Security boundaries + agent eval/testing | Boboe 2 | researching | ETA ~12h |
 | 8 | Cost/latency, onboarding, observability | OPEN | partial | observability-dashboard.md (Boboe 9); cost/latency + onboarding open |
 
 Also: area11-comms-protocol.md (Boboe 10, typed-envelope protocol) — feeds lanes 1+2.
