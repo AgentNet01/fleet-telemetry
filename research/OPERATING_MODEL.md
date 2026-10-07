@@ -204,4 +204,4 @@ Ordered by priority. Owner lane in brackets.
 
 ---
 
-*Source lanes: comms-coordination.md (Boboe 2) · comms-survey-boboe3.md (Boboe 3) · area11-comms-protocol.md (Boboe 10) · long-running-survey-boboe3.md (Boboe 3) · specialization-survey-boboe3.md (Boboe 3) · skills-and-specialization-boboe7.md (Boboe 7) · harnesses.md (Boboe 3) · agentic-swarm-survey.md (shared) · muse-tooling-survey-boboe3.md (Boboe 3) · tooling-cron-repo-boboe5.md (Boboe 5) · security-eval.md (Boboe 2) · observability-dashboard.md (Boboe 9) · coordination-infrastructure-boboe7.md (Boboe 7).*
+*Source lanes: comms-coordination.md (Boboe 2) · comms-survey-boboe3.md (Boboe 3) · area11-comms-protocol.md (Boboe 10) · long-running-survey-boboe3.md (Boboe 3) · specialization-survey-boboe3.md (Boboe 3) · lane3-specialization-models.md (Boboe 1) · skills-and-specialization-boboe7.md (Boboe 7) · harnesses.md (Boboe 3) · agentic-swarm-survey.md (shared) · muse-tooling-survey-boboe3.md (Boboe 3) · tooling-cron-repo-boboe5.md (Boboe 5) · security-eval.md (Boboe 2) · observability-dashboard.md (Boboe 9) · coordination-infrastructure-boboe7.md (Boboe 7).*
