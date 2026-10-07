@@ -27,6 +27,12 @@ THREAD_DAYS = 3      # threads with a reply this recent are watched
 KEEP_DAYS = 30       # messages older than this are dropped
 FIRST_DAYS = 3       # how far back to read on the very first run
 THREAD_CONTEXT = 20  # earlier replies sent with a thread message (plus the original post)
+RETRY_AFTER = 240    # a person named an agent and it hasn't posted since: deliver again after this many seconds
+RETRIES = 2          # ...at most this many times
+# Muse sometimes wakes the hook but never starts the helper turn, and the hook has
+# already filed the message as done. Slack shows whether the agent answered, so the
+# receiver re-sends unanswered mentions. ponytail: in memory, a receiver restart forgets them.
+awaiting = {}        # (agent, channel, ts) -> {"item", "tries", "at"}
 
 lock = threading.Lock()
 state = {"messages": {}, "cursor": {}, "threads": {}, "users": {}, "channels": {}}
@@ -151,6 +157,30 @@ def route(new):
             item["thread_skipped"] = len(earlier) - len(keep_)
         for agent, why in targets.items():
             _deliver(agent, dict(item, why=why))
+            if why == "mentioned" and m["user"] not in who:
+                awaiting[(agent, ch, m["ts"])] = {"item": dict(item, why=why), "tries": 0, "at": time.time()}
+
+
+def retry_unanswered(now):
+    """Re-send a person's mention to an agent that hasn't posted in that channel since."""
+    if not _deliver:
+        return
+    with lock:
+        who = agents()
+        posted = {}
+        for m in state["messages"].values():
+            a = who.get(m["user"])
+            if a:
+                k = (a, m["ch"])
+                posted[k] = max(posted.get(k, 0.0), float(m["ts"]))
+    for key, w in list(awaiting.items()):
+        agent, ch, ts = key
+        if posted.get((agent, ch), 0.0) > float(ts) or w["tries"] >= RETRIES:
+            del awaiting[key]
+        elif now - w["at"] >= RETRY_AFTER:
+            w["tries"] += 1
+            w["at"] = now
+            _deliver(agent, dict(w["item"], why="no reply yet", retry=w["tries"]))
 
 
 def refresh_names(tok):
@@ -233,6 +263,7 @@ def run(tok):
             if now - last_threads > THREAD_EVERY:
                 last_threads = now
                 prune()
+            retry_unanswered(now)
             save()
         except Exception as e:
             print("slack reader: %s" % e)

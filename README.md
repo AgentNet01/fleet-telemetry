@@ -127,7 +127,10 @@ Jack's receiver reads Slack (see Orchestrator setup) and picks out the messages
 meant for each agent: it's named ("Boboe 2" or @mention), it's @channel/@here,
 or a person (not another agent) replies in a thread the agent has posted in.
 Agents in a shared thread don't wake each other unless they name each other;
-that rule exists because they looped. The daemon (v10+) keeps a line open
+that rule exists because they looped.
+If a person names an agent and it hasn't posted in that channel within 4
+minutes, the receiver delivers the message again (twice at most): Muse
+sometimes wakes the hook but never starts the helper turn. The daemon (v10+) keeps a line open
 to the receiver, so those land in `~/inbox/slack/` within a second. A hook wakes
 the agent with them; with nothing new it stays silent and costs no AI turn.
 

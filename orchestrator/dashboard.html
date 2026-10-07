@@ -830,7 +830,7 @@ function slackRow(a, ms) {
       <ul class="slk-list">${ms.map(m => html`<li><div class="slk-meta"><b>${slackName(sl, m.user)}</b><span>${clock(+m.ts)}</span>${m.thread ? html`<span>in a thread</span>` : ""}</div><p>${slackText(sl, m.text)}</p></li>`)}</ul></details>
     <div class="act-time">${agoEl(newest)}<span class="act-type">slack</span></div></li>`;
 }
-const WHY = { mentioned: "named", "your thread": "its thread", everyone: "@channel / @here" };
+const WHY = { mentioned: "named", "your thread": "its thread", everyone: "@channel / @here", "no reply yet": "re-sent: no reply yet" };
 function sentRow(a, m, d) {
   const sl = a.slack || {};
   return html`<li class="act"><span class="s-pending">${I.chat}</span>

@@ -40,4 +40,16 @@ sent.clear(); full = []
 s._deliver = lambda agent, item: full.append(item)
 s.route([msg("209.0", "UD", "Boboe 10 thoughts?", thread="150.0")])
 assert [x["text"] for x in full[0]["thread"]][:2] == ["starting H26", "reply in H26"]
+# a person's mention the agent never answers is re-sent, at most RETRIES times; an answer stops it
+s.awaiting.clear(); sent.clear(); s._deliver = lambda agent, item: sent.append((agent, item["why"], item["ts"]))
+s.route([msg("300.0", "UD", "Boboe 1, can you hear me?")])
+s.route([msg("301.0", "U10", "Boboe 1 ping from an agent")])      # agents' mentions aren't tracked
+t0 = s.awaiting[("boboe1", "C", "300.0")]["at"]
+sent.clear(); s.retry_unanswered(t0 + 10); assert sent == []                        # too soon
+s.retry_unanswered(t0 + s.RETRY_AFTER); assert sent == [("boboe1", "no reply yet", "300.0")]
+s.retry_unanswered(t0 + 2 * s.RETRY_AFTER); s.retry_unanswered(t0 + 3 * s.RETRY_AFTER)
+assert len(sent) == 2 and not s.awaiting, sent                                     # gives up after RETRIES
+s.route([msg("302.0", "UD", "Boboe 1 again?")]); t0 = s.awaiting[("boboe1", "C", "302.0")]["at"]
+msg("303.0", "U1", "yes, here")                                                    # it answered
+sent.clear(); s.retry_unanswered(t0 + s.RETRY_AFTER); assert sent == [] and not s.awaiting
 print("ok")
