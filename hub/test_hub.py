@@ -28,6 +28,9 @@ class FakeMuse:
         self.seq += 1
         self.pending.setdefault(agent, []).append((self.seq, text))
 
+    def session(self, agent):
+        return "fleet-" + agent                 # one stable fleet side chat per agent, like the real transport
+
 
 def new_hub():
     clock, muse = Clock(), FakeMuse()

@@ -399,3 +399,23 @@ the CEO seat; Neo and Pericles are signed in on the PC.
 Shopify revenue (add when there's a Shopify store), Muse custom connector for
 `fleet` (the CLI works; revisit if agents struggle with it), Gadgets, the Opus
 video connector, using the 3090, cost tracking, per-agent rate limits.
+
+## Oct 8 build status (overnight)
+
+Milestones 1–3 are **built, tested (12 test suites green), and deployed** to the PC hub:
+coordination bus, products→projects→tasks with dependencies, role-per-task assignment, the
+brain switch (hash-verified), the vault, revenue from Stripe+Etsy (shows $0 until keys added),
+council answers, and the full dashboard (revenue, portfolio, agents, vault, council).
+A code review hardened the tick loop for weeks-unattended running: per-agent error isolation,
+muse-cli I/O moved out of the lock, no stranded tasks/councils on failure, locked DB reads,
+idempotent ask-all.
+
+**Parked (never messaged): Boboe 4 and Boboe 1** (both spiralled; Jack's call).
+
+**Still needs Jack (live, supervised):**
+- Onboarding Boboe 2 live didn't complete — the agent was flaky overnight and hub restarts raced
+  its callback. The mechanism (curl-based install over the fleet chat) is built and delivery is
+  proven; one `cutover`/onboard with Jack nudging the agent should finish it.
+- The fleet-wide cutover of the other working agents (`hub.py <cfg> cutover --go`) is Jack's to run.
+- Retiring the Mac's Slack receiver code is coupled to the cutover; left until then.
+- Add Stripe/Etsy keys to the vault to turn on revenue.
