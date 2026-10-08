@@ -1049,7 +1049,9 @@ def main(cfg_path, *args):
                 log.write(time.strftime("%F %T ") + traceback.format_exc())
             time.sleep(15)
 
-    threading.Thread(target=loop, daemon=True).start()
+    sys.stdout = sys.stderr = log           # never block on a dead console (hidden window / service with no stdout)
+    if cfg.get("loop", True):               # the muse-pushing background loop; off = pure server (no Muse-wall pushes)
+        threading.Thread(target=loop, daemon=True).start()
     log.write(time.strftime("%F %T ") + f"hub up on {cfg.get('host', '127.0.0.1')}:{cfg['port']}\n")
     serve(h, cfg.get("host", "127.0.0.1"), cfg["port"], cfg["password"]).serve_forever()
 
