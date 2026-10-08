@@ -53,6 +53,27 @@ def idempotent_ask_all():
     print("idempotent OK")
 
 
+def transient_errors_dont_page():
+    # a single network blip must not reach Jack; only sustained failure does, and only once.
+    h, muse, clock = new_hub()
+    open_items = lambda: h.db.execute("select text from needs_jack where done=0").fetchall()
+    def boom():
+        raise RuntimeError("curl_cffi perform")
+    h._guarded("X", boom)
+    assert not open_items(), "one transient failure must not page Jack"
+    for _ in range(hub.Hub.FAIL_ESCALATE):
+        h._guarded("X", boom)
+    rows = open_items()
+    assert len(rows) == 1 and "X" in rows[0]["text"], f"sustained failure pages once: {rows}"
+    for _ in range(4):
+        h._guarded("X", boom)                   # still stuck
+    assert len(open_items()) == 1, "a stuck agent pages once, not every tick"
+    h._guarded("X", lambda: None)               # recovers
+    assert h._fails.get("X", 0) == 0, "recovery resets the counter"
+    print("transient OK")
+
+
 if __name__ == "__main__":
     stranding()
     idempotent_ask_all()
+    transient_errors_dont_page()

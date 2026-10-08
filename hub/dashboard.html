@@ -1,78 +1,113 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>Fleet Hub</title>
 <style>
 :root{
-  --bg:#0d0f14; --panel:#161922; --panel2:#1c2029; --line:#272c38; --fg:#e9ecf3; --dim:#8b93a7;
+  --bg:#0b0d12; --panel:#141821; --panel2:#1b2029; --panel3:#222835; --line:#2a303d;
+  --fg:#e9ecf3; --dim:#9aa2b4; --faint:#868fa2;
   --ok:#3fb950; --idle:#6b7280; --warn:#d6a333; --bad:#f05d57; --accent:#5aa2ff; --money:#44d07b;
 }
-@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){
-  --bg:#f3f5f8; --panel:#fff; --panel2:#f6f8fb; --line:#e3e7ee; --fg:#1a1e27; --dim:#5c6473; --accent:#0a66d6; --money:#13914f;
-}}
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,sans-serif;-webkit-font-smoothing:antialiased}
-main{max-width:980px;margin:0 auto;padding:16px 16px 60px}
+html,body{background:var(--bg)}
+body{margin:0;color:var(--fg);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,sans-serif;-webkit-font-smoothing:antialiased}
+main{max-width:1040px;margin:0 auto;padding:16px 16px 72px}
 .top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px}
-h1{font-size:17px;margin:0;letter-spacing:.2px}
-.fresh{color:var(--dim);font-size:12px}
-.hero{background:linear-gradient(160deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:14px}
-.hero .lbl{color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
-.hero .big{font-size:40px;font-weight:700;color:var(--money);line-height:1.1;margin:2px 0 8px;font-variant-numeric:tabular-nums}
+h1{font-size:17px;margin:0;letter-spacing:.2px;display:flex;align-items:center;gap:8px}
+h1 .live{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.fresh{color:var(--faint);font-size:12px;font-variant-numeric:tabular-nums}
+.hero{background:linear-gradient(150deg,#16222a,#141821 60%);border:1px solid var(--line);border-radius:16px;padding:20px 22px;margin-bottom:14px}
+.hero .lbl{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.1em}
+.hero .big{font-size:44px;font-weight:700;color:var(--money);line-height:1.05;margin:4px 0 10px;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
-.chip{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px;color:var(--dim)}
+.chip{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--dim)}
 .chip b{color:var(--fg);font-variant-numeric:tabular-nums}
-.tabs{display:flex;gap:4px;margin-bottom:12px;overflow-x:auto;-webkit-overflow-scrolling:touch}
-.tab{flex:0 0 auto;background:none;border:0;color:var(--dim);font:inherit;font-size:13px;font-weight:600;padding:8px 12px;border-radius:9px;cursor:pointer;white-space:nowrap}
+.tabs{position:sticky;top:0;z-index:5;display:flex;gap:4px;margin-bottom:6px;padding:6px 0;background:var(--bg);overflow-x:auto;-webkit-overflow-scrolling:touch}
+.tab{flex:0 0 auto;background:none;border:0;color:var(--dim);font:inherit;font-size:13px;font-weight:600;padding:8px 13px;border-radius:9px;cursor:pointer;white-space:nowrap}
 .tab[aria-selected=true]{background:var(--panel);color:var(--fg);border:1px solid var(--line)}
-h2{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim);margin:18px 2px 8px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
-.row{display:block;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);color:inherit;font:inherit;padding:12px 14px;cursor:pointer}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:18px 2px 4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.hint{color:var(--faint);font-size:12px;margin:0 2px 8px;line-height:1.4}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:13px;overflow:hidden}
+.row{display:block;width:100%;text-align:left;background:none;border:0;border-top:1px solid var(--line);color:inherit;font:inherit;padding:12px 14px}
 .row:first-child{border-top:0}
-.nj .row{cursor:default}
-.nj .empty,.muted{color:var(--dim)}
+button.row{cursor:pointer}button.row:hover{background:var(--panel2)}
+.muted,.empty{color:var(--dim)} .faint{color:var(--faint)}
 .agent{display:grid;grid-template-columns:12px 1fr auto;gap:11px;align-items:start}
-.dot{width:10px;height:10px;border-radius:50%;margin-top:4px}
+.dot{width:10px;height:10px;border-radius:50%;margin-top:4px;flex:0 0 auto}
 .s-working{background:var(--ok)} .s-idle{background:var(--idle)} .s-unresponsive{background:var(--bad)}
-.s-login{background:var(--warn)} .s-parked{background:transparent;border:2px solid var(--idle);width:8px;height:8px}
+.s-login{background:var(--warn)} .s-parked{background:transparent;border:2px solid var(--faint);width:8px;height:8px}
 .nm{font-weight:600} .nm .tag{font-weight:500;color:var(--accent);font-size:12px;margin-left:6px}
 .what{color:var(--dim);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ages{color:var(--dim);font-size:12px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
-.prod{padding:14px}
-.prod .phead{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
-.prod .pname{font-weight:600;font-size:15px}
-.prod .prev{color:var(--money);font-variant-numeric:tabular-nums}
-.prod .brief{color:var(--dim);font-size:13px;margin:2px 0 10px}
-.proj{margin:10px 0 0}
-.proj .pj{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
-.task{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:14px;border-top:1px solid var(--line)}
-.task .st{font-size:11px;padding:1px 7px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);color:var(--dim);white-space:nowrap}
-.st.working{color:var(--ok)} .st.done{color:var(--money)} .st.blocked{color:var(--warn)} .st.ready{color:var(--accent)} .st.verifying{color:var(--accent)}
-.task .blk{color:var(--warn);font-size:12px}
-.ev{border-left:3px solid var(--line);padding:6px 10px;margin:8px 0;white-space:pre-wrap;word-break:break-word;font-size:14px}
-.ev.in{border-color:var(--accent)} .ev.out{border-color:var(--ok)} .ev.waiting{border-style:dashed}
-.ev small{display:block;color:var(--dim);font-size:12px;margin-bottom:2px}
-.coun{padding:13px 14px}
-.coun .q{font-weight:600;margin-bottom:6px}
+.ages{color:var(--faint);font-size:12px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.njrow{display:flex;gap:10px;align-items:flex-start}
+.njrow .t{flex:1;min-width:0;word-break:break-word;font-size:14px}
+.njrow .when{color:var(--faint);font-size:12px;white-space:nowrap}
+.njrow details summary{color:var(--faint);font-size:12px;cursor:pointer;margin-top:4px}
+.njrow pre{white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:8px;margin:6px 0 0;overflow:auto}
+.btn{background:var(--panel3);border:1px solid var(--line);color:var(--fg);font:inherit;font-size:13px;font-weight:600;padding:7px 13px;border-radius:9px;cursor:pointer}
+.btn:hover{border-color:var(--accent)} .btn.sm{padding:4px 10px;font-size:12px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#06101f} .btn.primary:hover{filter:brightness(1.08)}
+.btn:disabled{opacity:.5;cursor:default}
+.prodcard{padding:16px;margin-bottom:12px;cursor:pointer}.prodcard:hover{border-color:var(--accent)}
+.phead{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.pname{font-weight:650;font-size:16px}.prev{color:var(--money);font-variant-numeric:tabular-nums;font-weight:600}
+.brief{color:var(--dim);font-size:13px;margin:4px 0 0}
+.pmeta{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.proj{margin-top:18px}
+.projname{font-size:13px;font-weight:600;margin:0 2px 8px;display:flex;justify-content:space-between;align-items:center}
+.kan{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:8px;overflow-x:auto}
+.col{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:8px;min-width:150px}
+.colh{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin:2px 4px 8px;display:flex;justify-content:space-between}
+.tcard{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--idle);border-radius:8px;padding:8px 9px;margin-bottom:6px;font-size:13px}
+.tcard.blocked{border-left-color:var(--warn)} .tcard.ready{border-left-color:var(--accent)}
+.tcard.working{border-left-color:var(--ok)} .tcard.verifying{border-left-color:var(--accent)} .tcard.done{border-left-color:var(--money)}
+.tcard .tt{font-weight:550}.tcard .tm{color:var(--faint);font-size:12px;margin-top:3px}
+.tcard .blk{color:var(--warn);font-size:12px;margin-top:3px;cursor:help}
+.colempty{color:var(--faint);font-size:12px;padding:4px}
+/* agent cockpit */
+.stathead{display:flex;align-items:center;gap:10px;padding:14px;border-bottom:1px solid var(--line)}
+.stathead .big{font-weight:600}.stathead .sub{color:var(--dim);font-size:13px}
+.strip{display:flex;flex-wrap:wrap;gap:6px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.stat{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:5px 10px;font-size:12px;color:var(--dim)}
+.stat b{color:var(--fg);font-variant-numeric:tabular-nums}
+details.sec{border-bottom:1px solid var(--line)}
+details.sec>summary{padding:11px 14px;cursor:pointer;font-size:13px;font-weight:600;color:var(--fg);list-style:none;display:flex;justify-content:space-between}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary::after{content:"▸";color:var(--faint)}details.sec[open]>summary::after{content:"▾"}
+.secbody{padding:4px 14px 12px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.ln{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-top:1px solid var(--line);font-size:13px}
+.ln:first-child{border-top:0}.ln .r{color:var(--faint);white-space:nowrap;font-variant-numeric:tabular-nums}
+.chat{padding:14px;max-height:52vh;overflow:auto}
+.bub{max-width:82%;padding:9px 12px;border-radius:13px;margin:3px 0;white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.4}
+.bub small{display:block;color:var(--faint);font-size:11px;margin-bottom:3px;white-space:normal}
+.to{background:var(--panel2);border:1px solid var(--line);border-top-left-radius:4px;margin-right:auto}
+.from{background:#13331f;border:1px solid #1f5235;border-top-right-radius:4px;margin-left:auto}.from small{text-align:right}
+.pending{background:var(--panel2);border:1px dashed var(--line);border-top-left-radius:4px;margin-right:auto;opacity:.8}
+.aside{background:none;border:0;border-left:3px solid var(--line);color:var(--dim);max-width:100%;font-size:13px;margin:3px 0 3px 4px;padding:3px 10px}
+.err{background:#2a1416;border:1px solid #5a2327;color:#f0a9a4;max-width:100%}
+.compose{display:flex;gap:8px;padding:12px 14px;border-top:1px solid var(--line)}
+textarea,input,select{background:var(--panel2);border:1px solid var(--line);color:var(--fg);font:inherit;font-size:14px;border-radius:9px;padding:9px 11px;width:100%}
+textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus{outline:none;border-color:var(--accent)}
+.form{display:grid;gap:8px;padding:14px}.form .r2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.vrow{display:grid;grid-template-columns:1fr auto;gap:10px;font-size:14px}.vrow .sc{color:var(--dim);font-size:12px;margin-left:4px}
+.sct{display:inline-block;font-size:11px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:1px 8px;margin-left:6px}
+.back{background:none;border:0;color:var(--accent);font:inherit;padding:0;margin-bottom:12px;cursor:pointer}
+.coun{padding:14px}.coun .q{font-weight:600;margin-bottom:6px}
 .coun .ans{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;white-space:pre-wrap;font-size:14px}
-.coun .view{font-size:13px;color:var(--dim);padding:2px 0}
-.coun .view b{color:var(--fg)}
-.back{background:none;border:0;color:var(--accent);font:inherit;padding:0;margin-bottom:10px;cursor:pointer}
-.vrow{display:grid;grid-template-columns:1fr auto;gap:10px;font-size:14px}
-.vrow .sc{color:var(--dim);font-size:12px}
-@media(max-width:430px){.hero .big{font-size:34px}}
+.coun .view{font-size:13px;color:var(--dim);padding:2px 0}.coun .view b{color:var(--fg)}
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--panel3);border:1px solid var(--line);color:var(--fg);padding:9px 16px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:20}
+.toast.show{opacity:1}
+@media(max-width:560px){.hero .big{font-size:36px}.form .r2{grid-template-columns:1fr}.kan{grid-template-columns:repeat(5,74vw)}}
 </style>
 </head>
 <body>
 <main>
-  <div class="top"><h1>Fleet Hub</h1><span class="fresh" id="fresh">Loading…</span></div>
-  <div class="hero">
-    <div class="lbl">Revenue · made so far</div>
-    <div class="big" id="money">$0.00</div>
-    <div class="chips" id="revchips"></div>
-  </div>
+  <div class="top"><h1><span class="live"></span>Fleet Hub</h1><span class="fresh" id="fresh">Loading…</span></div>
+  <div class="hero"><div class="lbl">Revenue · made so far</div><div class="big" id="money">$0.00</div><div class="chips" id="revchips"></div></div>
   <div class="tabs" id="tabs">
     <button class="tab" data-tab="overview" aria-selected="true">Overview</button>
     <button class="tab" data-tab="portfolio">Portfolio</button>
@@ -81,121 +116,261 @@ h2{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--dim)
   </div>
   <section id="overview">
     <h2>Needs Jack <span id="njn"></span></h2>
+    <div class="hint">Only you can do these — approvals, logins, payment keys. Dismiss when handled.</div>
     <div class="card nj" id="nj"></div>
     <h2>Agents</h2>
+    <div class="hint">Click an agent for its machine, files, activity, current task, and to message it.</div>
     <div class="card" id="agents"></div>
   </section>
-  <section id="portfolio" hidden><div id="products"></div></section>
-  <section id="council" hidden><div id="councils"></div></section>
+  <section id="portfolio" hidden>
+    <h2>Portfolio <button class="btn sm" id="addprod">+ Product</button></h2>
+    <div class="hint">A product is a small business. Open one to see its projects (phases) and tasks (the work). The CEO and PMs create tasks — you can too.</div>
+    <div id="prodform"></div>
+    <div id="products"></div>
+  </section>
+  <section id="product" hidden>
+    <button class="back" data-back="portfolio">← Portfolio</button>
+    <div id="productbody"></div>
+  </section>
+  <section id="council" hidden>
+    <h2>Council</h2>
+    <div class="hint">Ask the whole fleet one question. Every working agent answers; a chair weighs the views into one labelled answer.</div>
+    <div class="card"><form class="form" id="askform">
+      <textarea id="ask_q" placeholder="Ask the fleet a question…" rows="2"></textarea>
+      <div class="r2"><select id="ask_chair"></select><button class="btn primary" type="submit">Ask the fleet</button></div>
+    </form></div>
+    <div id="councils" style="margin-top:12px"></div>
+  </section>
   <section id="vault" hidden>
+    <h2>Add a secret</h2>
+    <div class="hint">Agents read these instead of Muse's keychain. Scope limits who can read it; every read is logged below.</div>
+    <div class="card"><form class="form" id="secretform">
+      <div class="r2"><input id="sk_name" placeholder="name  e.g. STRIPE_API_KEY" autocomplete="off"><select id="sk_scope"></select></div>
+      <input id="sk_val" placeholder="value" autocomplete="off">
+      <div><button class="btn primary" type="submit">Store in vault</button></div>
+    </form></div>
     <h2>Secrets</h2><div class="card" id="secrets"></div>
     <h2>Read log</h2><div class="card" id="reads"></div>
   </section>
   <section id="detail" hidden>
-    <button class="back" id="back">← All agents</button>
-    <h2 id="dname"></h2><div class="card" style="padding:4px 14px" id="tl"></div>
+    <button class="back" data-back="overview">← All agents</button>
+    <h2 id="dname"></h2>
+    <div class="card" id="cockpit"></div>
   </section>
 </main>
+<div class="toast" id="toast"></div>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const money = n => "$" + (n || 0).toLocaleString("en-US", {minimumFractionDigits: 2, maximumFractionDigits: 2});
-let now = Date.now() / 1000, openAgent = null, tab = "overview";
+const money = n => "$" + (n || 0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+let now = Date.now()/1000, openAgent=null, openProduct=null, tab="overview", board=null;
 function ago(t){ if(!t) return "never"; const s=Math.max(0,now-t);
   return s<90?`${Math.round(s)}s ago`:s<5400?`${Math.round(s/60)}m ago`:s<129600?`${Math.round(s/3600)}h ago`:`${Math.round(s/86400)}d ago`; }
-function stateOf(a){ if(["unresponsive","login","parked"].includes(a.state)) return a.state; return a.current?"working":"idle"; }
-function label(a){ const s=stateOf(a);
+function dur(s){ if(!s) return "—"; s=Math.round(s); const d=s/86400|0,h=s%86400/3600|0,m=s%3600/60|0; return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`; }
+function toast(m){ const t=$("toast"); t.textContent=m; t.classList.add("show"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),2400); }
+async function jget(p){ const r=await fetch(p,{cache:"no-store"}); return r.ok?r.json():null; }
+async function jpost(p,body){ const r=await fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || ("HTTP "+r.status)); return r.json(); }
+
+// ---- status: prefer the agent's real machine report, fall back to the bus ----
+function stateOf(a){ if(["unresponsive","login","parked"].includes(a.state)) return a.state;
+  const f=a.focus||{}; if(f.reporting) return (f.task||f.doing)?"working":"idle";
+  return a.current?"working":"idle"; }
+function label(a){ const s=stateOf(a), f=a.focus||{};
   if(s==="login") return "Login needs renewing"; if(s==="unresponsive") return "Unresponsive";
-  if(s==="parked") return a.queue?`Parked · ${a.queue} held`:"Parked";
+  if(s==="parked") return a.queue?`Parked · ${a.queue} held`:"Parked (not messaged)";
+  if(f.task) return `working on “${f.task.title}”`;
+  if(f.doing) return f.doing;
   if(a.current) return `#${a.current.id}: ${a.current.text}`;
   return a.queue?`Idle · ${a.queue} waiting`:"Idle"; }
 
-async function jget(p){ const r=await fetch(p,{cache:"no-store"}); return r.ok?r.json():null; }
-
 async function load(){
-  const b = await jget("api/board"); if(!b) return;
-  now = b.now;
-  $("fresh").textContent = "Updated " + new Date(b.now*1000).toLocaleTimeString();
+  const b = await jget("api/board"); if(!b) return; board=b; now=b.now;
+  $("fresh").textContent = "updated " + new Date(b.now*1000).toLocaleTimeString();
   $("money").textContent = money(b.revenue && b.revenue.total);
-  const by = (b.revenue && b.revenue.by_product) || {};
+  const by=(b.revenue&&b.revenue.by_product)||{};
   $("revchips").innerHTML = Object.keys(by).length
     ? Object.entries(by).map(([k,v])=>`<span class="chip">${esc(k||"unassigned")} <b>${money(v)}</b></span>`).join("")
     : `<span class="chip muted">no sales yet</span>`;
 
-  const nj = b.needs_jack || [];
-  $("njn").innerHTML = nj.length ? `<span style="color:var(--warn)">(${nj.length})</span>` : "";
-  $("nj").innerHTML = nj.length
-    ? nj.map(n=>`<div class="row"><div>${esc(n.text)}</div><div class="what">${ago(n.at)}</div></div>`).join("")
-    : `<div class="row"><span class="empty">Nothing needs you.</span></div>`;
+  const nj=b.needs_jack||[];
+  $("njn").innerHTML = nj.length?`<span style="color:var(--warn)">(${nj.length})</span>`:"";
+  $("nj").innerHTML = nj.length ? nj.map(n=>{
+    const [head,...rest]=String(n.text).split("\n"); const more=rest.join("\n").trim();
+    return `<div class="row njrow"><div class="t">${esc(head)}
+      ${more?`<details><summary>details</summary><pre>${esc(more)}</pre></details>`:""}</div>
+      <div class="when">${ago(n.at)}</div><button class="btn sm" data-dismiss="${n.id}">Dismiss</button></div>`;}).join("")
+    : `<div class="row empty">Nothing needs you right now.</div>`;
+  document.querySelectorAll("[data-dismiss]").forEach(el=>el.onclick=async()=>{
+    el.disabled=true; try{ await jpost("api/jack/dismiss",{id:+el.dataset.dismiss}); toast("Dismissed"); load(); }catch(e){ el.disabled=false; toast(e.message); }});
 
-  const ags = (b.agents||[]).slice().sort((x,y)=>x.name.localeCompare(y.name,undefined,{numeric:true}));
+  const ags=(b.agents||[]).slice().sort((x,y)=>x.name.localeCompare(y.name,undefined,{numeric:true}));
   $("agents").innerHTML = ags.map(a=>{
-    const tag = a.product ? `<span class="tag">${esc(a.product)} · ${esc(a.role||"")}</span>` : "";
-    return `<button class="row agent" data-agent="${esc(a.name)}">
-      <span class="dot s-${stateOf(a)}"></span>
+    const tag=a.product?`<span class="tag">${esc(a.product)} · ${esc(a.role||"")}</span>`:"";
+    return `<button class="row agent" data-agent="${esc(a.name)}"><span class="dot s-${stateOf(a)}"></span>
       <span style="min-width:0"><div class="nm">${esc(a.name)}${tag}</div><div class="what">${esc(label(a))}</div></span>
-      <span class="ages">${a.last_in?"msg "+ago(a.last_in):"never"}<br>${a.last_out?"said "+ago(a.last_out):"—"}</span>
-    </button>`;}).join("");
+      <span class="ages">${a.last_in?"msg "+ago(a.last_in):"never"}<br>${a.last_out?"said "+ago(a.last_out):"—"}</span></button>`;}).join("");
   document.querySelectorAll(".agent").forEach(el=>el.onclick=()=>showAgent(el.dataset.agent));
 
   renderPortfolio(b.products||[]);
+  if(openProduct) renderProduct(openProduct, true);
   if(tab==="council") renderCouncil();
   if(tab==="vault") renderVault();
   if(openAgent) showAgent(openAgent, true);
 }
 
+// ---- portfolio ----
 function renderPortfolio(products){
-  $("products").innerHTML = products.length ? products.map(p=>`
-    <div class="card prod" style="margin-bottom:12px">
+  $("products").innerHTML = products.length ? products.map(p=>{
+    const nt=(p.projects||[]).reduce((n,pr)=>n+(pr.tasks||[]).length,0);
+    return `<button class="card prodcard" data-product="${p.id}">
       <div class="phead"><span class="pname">${esc(p.name)}</span><span class="prev">${money(p.revenue)}</span></div>
-      <div class="brief">${esc(p.brief||"")}${p.metric?` · goal: ${esc(p.metric)}`:""}${p.pm?` · PM ${esc(p.pm)}`:""}</div>
-      ${(p.projects||[]).map(pr=>`<div class="proj"><div class="pj">${esc(pr.name)}</div>
-        ${(pr.tasks||[]).map(t=>`<div class="task">
-          <span class="st ${t.status}">${esc(t.status)}</span>
-          <span style="flex:1;min-width:0">${esc(t.title)} <span class="muted">· ${esc(t.role)}${t.owner?" · "+esc(t.owner):""}</span></span>
-          ${t.blocked_by&&t.blocked_by.length?`<span class="blk">blocked by #${t.blocked_by.join(", #")}</span>`:""}
-        </div>`).join("")||'<div class="task muted">no tasks yet</div>'}</div>`).join("")||'<div class="muted" style="font-size:13px">no projects yet</div>'}
-    </div>`).join("") : `<div class="card"><div class="row muted">No products yet.</div></div>`;
+      <div class="brief">${esc(p.brief||"")}</div>
+      <div class="pmeta">${p.metric?`<span class="chip">goal · ${esc(p.metric)}</span>`:""}
+        <span class="chip">${(p.projects||[]).length} projects</span><span class="chip">${nt} tasks</span>
+        ${p.pm?`<span class="chip">PM ${esc(p.pm)}</span>`:""}</div></button>`;}).join("")
+    : `<div class="card"><div class="row muted">No products yet — add one above.</div></div>`;
+  document.querySelectorAll("[data-product]").forEach(el=>el.onclick=()=>renderProduct(+el.dataset.product));
 }
+$("addprod").onclick=()=>{ const h=$("prodform"); if(h.dataset.open){h.innerHTML="";h.dataset.open="";return;} h.dataset.open="1";
+  h.innerHTML=`<div class="card" style="margin-bottom:12px"><form class="form">
+    <input name="name" placeholder="product name  e.g. Notion templates" required autocomplete="off">
+    <input name="brief" placeholder="one line: what it sells, why it's low-overhead" autocomplete="off">
+    <div class="r2"><input name="metric" placeholder="first goal  e.g. first sale" autocomplete="off"><button class="btn primary" type="submit">Create product</button></div></form></div>`;
+  h.querySelector("form").onsubmit=async e=>{ e.preventDefault(); const f=e.target;
+    try{ await jpost("api/jack/product",{name:f.name.value.trim(),brief:f.brief.value.trim(),metric:f.metric.value.trim()});
+      h.innerHTML="";h.dataset.open=""; toast("Product created"); load(); }catch(err){ toast(err.message); }}; };
 
+const COLS=[["blocked","Blocked"],["ready","Ready"],["working","Working"],["verifying","Verifying"],["done","Done"]];
+const bucket=s=>s==="open"?"ready":(COLS.some(c=>c[0]===s)?s:"ready");
+function renderProduct(pid, quiet){
+  const p=(board&&board.products||[]).find(x=>x.id===pid); if(!p) return; openProduct=pid;
+  $("productbody").innerHTML=`<h2>${esc(p.name)} <span class="sct">${money(p.revenue)}</span>
+      <button class="btn sm" id="addproj">+ Project</button></h2>
+    <div class="brief" style="margin:0 2px 6px">${esc(p.brief||"")}${p.metric?` · goal: ${esc(p.metric)}`:""}</div>
+    <div id="projform"></div>
+    ${(p.projects||[]).map(pr=>`<div class="proj">
+      <div class="projname"><span>${esc(pr.name)}</span><button class="btn sm" data-addtask="${pr.id}">+ task</button></div>
+      <div class="kan">${COLS.map(([k,lbl])=>{ const ts=(pr.tasks||[]).filter(t=>bucket(t.status)===k);
+        return `<div class="col"><div class="colh"><span>${lbl}</span><span>${ts.length||""}</span></div>
+          ${ts.map(t=>`<div class="tcard ${k}"><div class="tt">${esc(t.title)}</div>
+            <div class="tm">${esc(t.role||"")}${t.owner?" · "+esc(t.owner):""}</div>
+            ${t.blocked_by&&t.blocked_by.length?`<div class="blk" title="can't start until these tasks are done">⛔ waits on #${t.blocked_by.join(", #")}</div>`:""}</div>`).join("")
+          ||`<div class="colempty">—</div>`}</div>`;}).join("")}</div>
+      <div id="addtask-${pr.id}"></div></div>`).join("")||`<div class="muted" style="padding:8px 2px">No projects yet — add one.</div>`}`;
+  $("addproj").onclick=()=>{ const h=$("projform"); if(h.dataset.open){h.innerHTML="";h.dataset.open="";return;} h.dataset.open="1";
+    h.innerHTML=`<div class="card" style="margin:0 0 12px"><form class="form"><div class="r2">
+      <input name="name" placeholder="project (phase)  e.g. launch" required autocomplete="off">
+      <button class="btn primary" type="submit">Add project</button></div></form></div>`;
+    h.querySelector("form").onsubmit=async e=>{ e.preventDefault();
+      try{ await jpost("api/jack/project",{product:pid,name:e.target.name.value.trim()}); toast("Project added"); load(); }catch(err){ toast(err.message); }}; };
+  document.querySelectorAll("[data-addtask]").forEach(el=>el.onclick=()=>taskForm(+el.dataset.addtask));
+  if(!quiet) showOnly("product");
+}
+function taskForm(projectId){ const host=$("addtask-"+projectId);
+  if(host.dataset.open){host.innerHTML="";host.dataset.open="";return;} host.dataset.open="1";
+  host.innerHTML=`<div class="card" style="margin-top:8px"><form class="form">
+    <input name="title" placeholder="what needs doing" required autocomplete="off">
+    <div class="r2"><select name="role">${["pm","developer","designer","marketing","sales"].map(r=>`<option>${r}</option>`).join("")}</select>
+      <input name="done_def" placeholder="done when… (evidence)" autocomplete="off"></div>
+    <div><button class="btn primary" type="submit">Add task</button> <span class="faint" style="font-size:12px">a free agent in that role picks it up</span></div></form></div>`;
+  host.querySelector("form").onsubmit=async e=>{ e.preventDefault(); const f=e.target;
+    try{ await jpost("api/jack/task",{project:projectId,title:f.title.value.trim(),role:f.role.value,done_def:f.done_def.value.trim()});
+      host.innerHTML="";host.dataset.open=""; toast("Task added"); load(); }catch(err){ toast(err.message); }}; }
+
+// ---- council ----
 async function renderCouncil(){
-  const d = await jget("api/councils"); const cs = (d&&d.councils)||[];
-  $("councils").innerHTML = cs.length ? cs.map(c=>`
-    <div class="card coun" style="margin-bottom:12px">
-      <div class="q">${esc(c.question)}</div>
-      ${c.answer?`<div class="ans">${esc(c.answer)}</div>`:`<div class="muted" style="font-size:13px">collecting views… (${(c.views||[]).length} in)</div>`}
-      ${(c.views||[]).map(v=>`<div class="view"><b>${esc(v.agent)}</b>: ${esc(v.view)}</div>`).join("")}
-    </div>`).join("") : `<div class="card"><div class="row muted">No council questions yet.</div></div>`;
+  $("ask_chair").innerHTML=`<option value="">chair: auto (CEO)</option>`+(board&&board.agents||[]).filter(a=>a.state!=="parked").map(a=>`<option value="${esc(a.name)}">chair: ${esc(a.name)}</option>`).join("");
+  const d=await jget("api/councils"); const cs=(d&&d.councils)||[];
+  $("councils").innerHTML = cs.length ? cs.map(c=>`<div class="card coun" style="margin-bottom:12px">
+    <div class="q">${esc(c.question)}</div>
+    ${c.answer?`<div class="ans">${esc(c.answer)}</div>`:`<div class="muted" style="font-size:13px">collecting views… (${(c.views||[]).length} in)</div>`}
+    ${(c.views||[]).map(v=>`<div class="view"><b>${esc(v.agent)}</b>: ${esc(v.view)}</div>`).join("")}
+  </div>`).join("") : `<div class="card"><div class="row muted">No questions yet — ask one above.</div></div>`;
 }
+$("askform").onsubmit=async e=>{ e.preventDefault(); const q=$("ask_q").value.trim(); if(!q) return;
+  try{ await jpost("api/jack/ask",{question:q,chair:$("ask_chair").value}); $("ask_q").value=""; toast("Asked the fleet"); renderCouncil(); }catch(err){ toast(err.message); }};
 
+// ---- vault ----
+function scopeOptions(){
+  const prods=(board&&board.products||[]).map(p=>`<option value="product:${esc(p.name)}">product · ${esc(p.name)}</option>`).join("");
+  const ags=(board&&board.agents||[]).filter(a=>a.state!=="parked").map(a=>`<option value="agent:${esc(a.name)}">agent · ${esc(a.name)}</option>`).join("");
+  return `<option value="fleet">fleet (any agent)</option>${prods}${ags}`;
+}
 async function renderVault(){
-  const d = await jget("api/vault"); if(!d) return;
-  $("secrets").innerHTML = (d.secrets||[]).length ? d.secrets.map(s=>`
-    <div class="row vrow"><div>${esc(s.name)} <span class="sc">${esc(s.scope)}</span></div><div class="what">updated ${ago(s.updated)}</div></div>`).join("")
-    : `<div class="row muted">No secrets stored.</div>`;
-  $("reads").innerHTML = (d.reads||[]).length ? d.reads.map(r=>`
-    <div class="row vrow"><div><b>${esc(r.agent)}</b> read ${esc(r.secret)}</div><div class="what">${ago(r.at)}</div></div>`).join("")
-    : `<div class="row muted">No reads yet.</div>`;
+  $("sk_scope").innerHTML=scopeOptions();
+  const d=await jget("api/vault"); if(!d) return;
+  $("secrets").innerHTML=(d.secrets||[]).length?d.secrets.map(s=>`<div class="row vrow"><div>${esc(s.name)}<span class="sc">${esc(s.scope)}</span></div><div class="what">updated ${ago(s.updated)}</div></div>`).join("")
+    :`<div class="row muted">No secrets stored.</div>`;
+  $("reads").innerHTML=(d.reads||[]).length?d.reads.map(r=>`<div class="row vrow"><div><b>${esc(r.agent)}</b> read ${esc(r.secret)}</div><div class="what">${ago(r.at)}</div></div>`).join("")
+    :`<div class="row muted">No reads yet.</div>`;
 }
+$("secretform").onsubmit=async e=>{ e.preventDefault();
+  const name=$("sk_name").value.trim(), val=$("sk_val").value, scope=$("sk_scope").value; if(!name||!val) return;
+  try{ await jpost("api/jack/secret",{name,value:val,scope}); $("sk_name").value="";$("sk_val").value=""; toast("Stored "+name); renderVault(); }catch(err){ toast(err.message); }};
 
+// ---- agent cockpit ----
+function telemetrySections(t){
+  if(!t || !t.ts){ return `<div class="secbody muted" style="padding:12px 14px">No machine report yet. This agent's telemetry isn't reaching the hub — once its telemetryd points here you'll see CPU, files and activity.</div>`; }
+  const sys=t.system||{}, cpu=t.cpu||{}, disk=t.disk||{}, mem=t.mem||{}, obs=t.observed||{}, act=t.activity||{}, files=t.files||{}, hl=t.health||{};
+  const strip=`<div class="strip">
+    ${sys.os?`<span class="stat">${esc(sys.os)}</span>`:""}
+    ${cpu.load1!=null?`<span class="stat">load <b>${cpu.load1}</b> · ${cpu.count||"?"} cpu</span>`:""}
+    ${sys.limit_mb?`<span class="stat">mem cap <b>${(sys.limit_mb/1024).toFixed(1)}G</b></span>`:""}
+    ${disk.total_gb?`<span class="stat">disk <b>${disk.used_gb}</b>/${disk.total_gb}G</span>`:""}
+    ${t.uptime_s?`<span class="stat">up <b>${dur(t.uptime_s)}</b></span>`:""}
+    ${sys.tailscale_ip?`<span class="stat mono">${esc(sys.tailscale_ip)}</span>`:""}
+    <span class="stat">reported <b>${ago(t._at||t.ts)}</b></span></div>`;
+  const procs=(mem.all||mem.top||[]);
+  const procSec=`<details class="sec"><summary>Processes <span class="faint">${procs.length}</span></summary><div class="secbody">
+    ${procs.slice(0,20).map(p=>`<div class="ln"><span class="mono">${esc(p[0])}</span><span class="r">${p[2]!=null?p[2].toFixed(0)+"% · ":""}${p[1]!=null?Math.round(p[1])+" MB":""}</span></div>`).join("")||'<div class="muted">none</div>'}</div></details>`;
+  const ents=files.entries||[];
+  const filesSec=`<details class="sec"><summary>Files <span class="faint">${files.count||0} · ${files.mb||0} MB</span></summary><div class="secbody">
+    ${ents.slice(0,60).map(e=>`<div class="ln"><span class="mono">${esc(e[0])}</span><span class="r">${e[1]} KB · ${ago(e[2])}</span></div>`).join("")||'<div class="muted">workspace empty</div>'}
+    ${ents.length>60?`<div class="faint" style="margin-top:6px">+${ents.length-60} more</div>`:""}</div></details>`;
+  const feed=act.entries||[];
+  const actSec=`<details class="sec"><summary>Activity ${act.current?`<span class="faint">${esc(act.current)}</span>`:""}</summary><div class="secbody">
+    ${feed.map(e=>`<div class="ln"><span>${esc(e.title||e.status_title||e.activity_type||"—")}</span><span class="r">${esc(e.status||"")}</span></div>`).join("")||'<div class="muted">no recent activity</div>'}</div></details>`;
+  const sysSec=`<details class="sec"><summary>System & health</summary><div class="secbody">
+    ${Object.entries({host:sys.hostname,kernel:sys.kernel,cpu:sys.cpu_model,listener:hl.listener,"telemetry posts":hl.post&&`${hl.post.ok} ok / ${hl.post.fail} fail`}).filter(([,v])=>v!=null&&v!==false).map(([k,v])=>`<div class="ln"><span>${k}</span><span class="r mono">${esc(String(v))}</span></div>`).join("")}
+    ${(obs.signals||[]).map(s=>`<div class="ln"><span class="faint">signal</span><span class="r">${esc(s)}</span></div>`).join("")}</div></details>`;
+  return strip+procSec+filesSec+actSec+sysSec;
+}
 async function showAgent(name, quiet){
-  openAgent = name;
-  const evs = await jget("api/timeline?agent="+encodeURIComponent(name)) || [];
-  $("dname").textContent = name;
-  $("tl").innerHTML = evs.length ? evs.map(e=>`<div class="ev ${e.dir}">
-    <small>${({in:"→ "+esc(name),out:"← "+esc(name),waiting:"queued for "+esc(name),asked:esc(name)+" asked"})[e.dir]||esc(e.dir)} · #${e.item||"-"} · ${ago(e.at)}</small>${esc(e.text)}</div>`).join("")
-    : `<div class="ev muted">No messages yet.</div>`;
-  if(!quiet){ document.querySelectorAll("section").forEach(s=>s.hidden=true); $("detail").hidden=false; }
+  openAgent=name;
+  const a=(board&&board.agents||[]).find(x=>x.name===name)||{}, f=a.focus||{}, st=stateOf(a);
+  const [evs,tel]=await Promise.all([jget("api/timeline?agent="+encodeURIComponent(name)), jget("api/telemetry?agent="+encodeURIComponent(name))]);
+  $("dname").textContent=name;
+  const statusLine = f.task?`working on “${f.task.title}” (#${f.task.id})`:(f.doing||(st==="working"?"working":st==="parked"?"parked — not messaged":"idle"));
+  const head=`<div class="stathead"><span class="dot s-${st}"></span>
+    <span><div class="big">${esc(statusLine)}</div><div class="sub">${a.product?esc(a.product)+" · "+esc(a.role||""):"no product assigned"}${f.reporting?" · reporting live":" · no live report"}</div></span></div>`;
+  const chat=`<div class="chat" id="tl">${(evs||[]).length?(evs).map(e=>{ const t=esc(e.text);
+    if(e.dir==="out") return `<div class="bub from"><small>${esc(name)} · ${ago(e.at)}</small>${t}</div>`;
+    if(e.dir==="in") return `<div class="bub to"><small>→ ${esc(name)} · #${e.item||"-"} · ${ago(e.at)}</small>${t}</div>`;
+    if(e.dir==="waiting") return `<div class="bub pending"><small>queued · ${ago(e.at)}</small>${t}</div>`;
+    if(e.dir==="asked") return `<div class="bub aside"><small>${esc(name)} asked · ${ago(e.at)}</small>${t}</div>`;
+    if(e.dir==="err") return `<div class="bub err"><small>error · ${ago(e.at)}</small>${t}</div>`;
+    return `<div class="bub aside"><small>${esc(e.dir)} · ${ago(e.at)}</small>${t}</div>`; }).join("")
+    :`<div class="muted" style="padding:8px">No messages yet.</div>`}</div>`;
+  const compose = a.state==="parked"
+    ? `<div class="compose muted" style="font-size:13px">${esc(name)} is parked — not messaged.</div>`
+    : `<div class="compose"><textarea id="msg" placeholder="Message ${esc(name)} (you can message it any time, even while it works)…" rows="1"></textarea><button class="btn primary" id="sendbtn">Send</button></div>`;
+  $("cockpit").innerHTML = head + telemetrySections(tel) + chat + compose;
+  if(a.state!=="parked"){
+    $("sendbtn").onclick=async()=>{ const text=$("msg").value.trim(); if(!text) return; $("sendbtn").disabled=true;
+      try{ await jpost("api/jack/send",{to:name,text}); $("msg").value=""; toast("Sent to "+name); await showAgent(name,true); }
+      catch(err){ toast(err.message); }finally{ $("sendbtn").disabled=false; }};
+    $("msg").onkeydown=e=>{ if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)) $("sendbtn").click(); };
+  }
+  if(!quiet){ showOnly("detail"); const tl=$("tl"); if(tl) tl.scrollTop=tl.scrollHeight; }
 }
 
-function selectTab(name){
-  tab = name; openAgent = null;
+function showOnly(id){ ["overview","portfolio","product","council","vault","detail"].forEach(s=>$(s).hidden=s!==id); }
+function selectTab(name){ tab=name; openAgent=null; openProduct=null;
   document.querySelectorAll(".tab").forEach(t=>t.setAttribute("aria-selected", t.dataset.tab===name));
-  ["overview","portfolio","council","vault","detail"].forEach(s=>$(s).hidden = s!==name);
-  if(name==="council") renderCouncil(); if(name==="vault") renderVault();
-}
+  showOnly(name); if(name==="council") renderCouncil(); if(name==="vault") renderVault(); }
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>selectTab(t.dataset.tab));
-$("back").onclick = ()=>selectTab("overview");
+document.querySelectorAll("[data-back]").forEach(b=>b.onclick=()=>selectTab(b.dataset.back));
 load(); setInterval(load, 10000);
 </script>
 </body>

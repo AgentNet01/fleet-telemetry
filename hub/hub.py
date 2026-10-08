@@ -99,6 +99,7 @@ create table if not exists sales(
   currency text, at real, unique(source, external_id));
 create table if not exists switches(
   agent text primary key, product text, role text, expect text, issued real, status text);
+create table if not exists telemetry(agent text primary key, blob text, at real);
 """
 # Columns added to agents/items after milestone 1; harmless on a fresh DB, needed on the PC's.
 MIGRATIONS = [
@@ -109,6 +110,7 @@ MIGRATIONS = [
     "alter table items add column council integer",
     "alter table items add column ref integer",
     "alter table councils add column ckey text",
+    "create table if not exists telemetry(agent text primary key, blob text, at real)",
 ]
 
 
@@ -122,6 +124,7 @@ class Hub:
         self.evidence_ok = evidence_ok or _evidence_ok
         self.db = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
+        self._fails = {}                 # agent -> consecutive servicing failures (transient blips don't page Jack)
         self.db.executescript(SCHEMA)
         for m in MIGRATIONS:
             try:
@@ -266,13 +269,25 @@ class Hub:
         for a in agents:
             self._guarded(a["name"], lambda a=a: self._deliver_agent(a["name"], a["kind"], now))
 
+    FAIL_ESCALATE = 5                    # consecutive failures before an agent's trouble reaches Jack
+
     def _guarded(self, name, fn):
         try:
             fn()
+            if self._fails.pop(name, 0):     # it was failing and just recovered
+                with self.lock:
+                    self.db.execute("insert into events(agent, dir, text, at) values(?,'err',?,?)",
+                                    (name, "recovered", self.clock()))
         except Exception as e:
+            n = self._fails[name] = self._fails.get(name, 0) + 1
             try:
                 with self.lock:
-                    self._needs_jack_once(f"servicing {name} failed: {str(e)[:160]}")
+                    # every error is logged for transparency; only sustained failure pages Jack, and
+                    # the headline is stable per agent so a stuck account files exactly one open item.
+                    self.db.execute("insert into events(agent, dir, text, at) values(?,'err',?,?)",
+                                    (name, f"#{n} {str(e)[:160]}", self.clock()))
+                    if n >= self.FAIL_ESCALATE:
+                        self._needs_jack_once(f"{name} keeps failing to service — check the agent/login")
             except Exception:
                 pass
 
@@ -686,6 +701,37 @@ class Hub:
         with self.lock:
             return [dict(r) for r in self.db.execute("select * from needs_jack where done=0 order by id desc")]
 
+    def resolve_need(self, nid):
+        with self.lock:
+            self.db.execute("update needs_jack set done=1 where id=?", (nid,))
+
+    # ---- telemetry (machine heartbeat from each agent's telemetryd) ---------------------
+    def ingest(self, name, blob):
+        with self.lock:
+            self.db.execute("insert into telemetry(agent, blob, at) values(?,?,?) "
+                            "on conflict(agent) do update set blob=excluded.blob, at=excluded.at",
+                            (name, json.dumps(blob), self.clock()))
+
+    def telemetry(self, name):
+        with self.lock:
+            r = self.db.execute("select blob, at from telemetry where agent=?", (name,)).fetchone()
+            if not r:
+                return None
+            d = json.loads(r["blob"]); d["_at"] = r["at"]; return d
+
+    def _focus(self, name):
+        """What an agent is doing right now: its active task, and its live activity title if reporting."""
+        t = self.db.execute("select id, title from tasks where owner=? and status in ('working','verifying') "
+                            "order by touched desc limit 1", (name,)).fetchone()
+        r = self.db.execute("select blob, at from telemetry where agent=?", (name,)).fetchone()
+        doing, fresh = None, False
+        if r:
+            b = json.loads(r["blob"])
+            act = b.get("activity") or {}
+            doing = act.get("current") if isinstance(act, dict) else None
+            fresh = (self.clock() - (r["at"] or 0)) < 120
+        return {"task": ({"id": t["id"], "title": t["title"]} if t else None), "doing": doing, "reporting": fresh}
+
     def board(self):
         with self.lock:
             out = []
@@ -695,7 +741,8 @@ class Hub:
                 out.append({"name": a["name"], "kind": a["kind"], "state": a["state"], "queue": queue,
                             "current": {"id": cur["id"], "text": cur["text"][:200], "sent_at": cur["sent_at"]} if cur else None,
                             "last_in": a["last_in"], "last_out": a["last_out"], "login_expires": a["login_expires"],
-                            "product": a["current_product"], "role": a["current_role"], "onboarded": a["onboarded"]})
+                            "product": a["current_product"], "role": a["current_role"], "onboarded": a["onboarded"],
+                            "focus": self._focus(a["name"])})
             return {"now": self.clock(), "agents": out, "needs_jack": self.needs_jack(),
                     "revenue": self.revenue(), "products": self.portfolio()}
 
@@ -747,7 +794,8 @@ def serve(hub, host, port, password):
 
         def _agent(self):
             auth = self.headers.get("Authorization", "")
-            name = hub.agent_by_token(auth[7:]) if auth.startswith("Bearer ") else None
+            tok = auth[7:] if auth.startswith("Bearer ") else self.headers.get("X-Agent-Token", "")
+            name = hub.agent_by_token(tok) if tok else None
             if not name:
                 self._json(401, {"error": "401: bad or missing token"})
             else:
@@ -762,8 +810,11 @@ def serve(hub, host, port, password):
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             try:
-                if u.path == "/fleet.py":
-                    body = open(os.path.join(HERE, "fleet.py"), "rb").read()   # the agent CLI; not secret
+                if u.path in ("/fleet.py", "/telemetryd.py"):   # agent code (CLI + telemetry daemon); not secret
+                    src = os.path.join(HERE, u.path.lstrip("/"))
+                    if not os.path.exists(src):
+                        src = os.path.join(HERE, "..", "agents", u.path.lstrip("/"))
+                    body = open(src, "rb").read()
                     self.send_response(200)
                     self.send_header("Content-Type", "text/x-python; charset=utf-8")
                     self.send_header("Content-Length", str(len(body)))
@@ -781,6 +832,8 @@ def serve(hub, host, port, password):
                     self._jack() and self._json(200, hub.board())
                 elif u.path == "/api/timeline":
                     self._jack() and self._json(200, hub.timeline(q.get("agent", "")))
+                elif u.path == "/api/telemetry":
+                    self._jack() and self._json(200, hub.telemetry(q.get("agent", "")) or {})
                 elif u.path == "/api/item":
                     self._jack() and self._json(200, hub.item(int(q.get("id", 0))) or {})
                 elif u.path == "/api/inbox":
@@ -844,6 +897,46 @@ def serve(hub, host, port, password):
                     if name:
                         b = self._body()
                         self._json(200, {"ok": hub.record_switch(name, b["product"], b["role"], b["hash"])})
+                elif u.path == "/api/ingest":              # an agent's telemetryd pushes its machine heartbeat
+                    name = self._agent()
+                    if name:
+                        hub.ingest(name, self._body())
+                        self._json(200, {"ok": True})
+                elif u.path == "/api/jack/send":           # Jack messages an agent straight from the dashboard
+                    if self._jack():
+                        b = self._body()
+                        a = hub._agent(b.get("to", ""))
+                        if not a or a["state"] == "parked":
+                            self._json(400, {"error": "unknown or parked agent"})
+                        else:
+                            self._json(200, {"id": hub.ask("jack", b["to"], b["text"])})
+                elif u.path == "/api/jack/secret":
+                    if self._jack():
+                        b = self._body()
+                        hub.secret_put(b["name"], b["value"], b.get("scope", "fleet"), by="jack")
+                        self._json(200, {"ok": True})
+                elif u.path == "/api/jack/dismiss":
+                    if self._jack():
+                        hub.resolve_need(int(self._body()["id"]))
+                        self._json(200, {"ok": True})
+                elif u.path == "/api/jack/task":
+                    if self._jack():
+                        b = self._body()
+                        self._json(200, {"id": hub.add_task(int(b["project"]), b["title"], b.get("role", "developer"),
+                                                            b.get("done_def", ""), blocked_by=b.get("blocked_by") or [])})
+                elif u.path == "/api/jack/product":
+                    if self._jack():
+                        b = self._body()
+                        self._json(200, {"id": hub.add_product(b["name"], brief=b.get("brief", ""),
+                                                               metric=b.get("metric") or None, pm=b.get("pm") or None)})
+                elif u.path == "/api/jack/project":
+                    if self._jack():
+                        b = self._body()
+                        self._json(200, {"id": hub.add_project(int(b["product"]), b["name"])})
+                elif u.path == "/api/jack/ask":            # Jack asks the whole fleet a question (council)
+                    if self._jack():
+                        b = self._body()
+                        self._json(200, {"council": hub.ask_all("jack", b["question"], chair=b.get("chair") or None)})
                 else:
                     self._json(404, {"error": "not found"})
             except (ValueError, KeyError) as e:
@@ -863,12 +956,15 @@ def _onboard_message(h, cfg, name):
         "[trusted: your fleet hub] You're joining the fleet bus; this replaces the Slack listener.\n"
         "Run exactly this, then reply with the final line it prints:\n\n"
         f"mkdir -p ~/.fleet && curl -fsS {url}/fleet.py -o ~/.fleet/fleet.py && "
+        f"curl -fsS {url}/telemetryd.py -o ~/.fleet/telemetryd.py && "
         f"printf '%s' '{token}' > ~/.fleet/token && printf '%s' '{url}' > ~/.fleet/hub && "
-        "chmod 600 ~/.fleet/token && "
+        f"printf '%s' '{name}' > ~/.fleet/agent && chmod 600 ~/.fleet/token && "
         "( crontab -l 2>/dev/null | grep -vi slack-watch | crontab - ) 2>/dev/null; "
-        "python3 ~/.fleet/fleet.py status\n\n"
-        "Feel free to read ~/.fleet/fleet.py first — it's a small stdlib script that talks to me over "
-        "HTTPS. From now on I reach you here, not through Slack, so you no longer need to run listen.py.")
+        "pkill -f telemetryd.py 2>/dev/null; nohup python3 ~/.fleet/telemetryd.py >/dev/null 2>&1 & "
+        "sleep 2; python3 ~/.fleet/fleet.py status\n\n"
+        "Feel free to read either file first — small stdlib scripts that talk to me over HTTPS. "
+        "fleet.py is the message bus; telemetryd.py reports your machine health to the dashboard. "
+        "From now on I reach you here, not through Slack, so you no longer need to run listen.py.")
 
 
 def _revenue_fetch(h, cfg):
