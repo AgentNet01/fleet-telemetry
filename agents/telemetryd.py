@@ -135,7 +135,9 @@ def log(msg):
 
 
 def read_token():
-    with open(TOKEN_FILE) as f:
+    d = _fleet_dir()
+    path = os.path.join(d, "token") if d else TOKEN_FILE   # same token fleet.py uses; hub maps it to our name
+    with open(path) as f:
         return f.read().strip()
 
 
@@ -677,74 +679,31 @@ def flush_spool(op, token):
             break
 
 
+def _fleet_dir():
+    # The ~/.fleet install, found regardless of where this script is run from (the real home
+    # via expanduser, or the home derived from the script path). "" if no install is present.
+    for h in (os.path.expanduser("~"), HOME):
+        d = os.path.join(h, ".fleet")
+        if os.path.exists(os.path.join(d, "hub")):
+            return d
+    return ""
+
+
 def read_config():
+    # Prefer the fleet install (~/.fleet/hub, written by onboarding) so every agent runs the
+    # identical committed code with no per-VM config. The hub maps our token -> agent name, so
+    # "agent" here is only a label. Fall back to the legacy per-VM config.json otherwise.
+    d = _fleet_dir()
+    if d:
+        url = open(os.path.join(d, "hub")).read().strip().rstrip("/") + "/api/ingest"
+        namefile = os.path.join(d, "agent")
+        name = open(namefile).read().strip() if os.path.exists(namefile) else os.uname().nodename
+        return {"agent": name, "receiver_url": url}
     with open(CONFIG_FILE) as f:
         return json.load(f)
 
 
-# ---- mailbox: things Jack's Mac sends this machine (v10) ----
-# The VM can't accept connections, so it keeps one open to the receiver: the
-# receiver answers as soon as something is queued for this agent, or after
-# ~25s with nothing, and the daemon asks again. Slack messages for this agent
-# land in INBOX, where the slack hook (agents/slack_hook.sh) picks them up.
-INBOX = os.path.join(HOME, "inbox", "slack")
-CURSOR_FILE = os.path.join(TDIR, ".mailbox_cursor")
-
-
-def write_atomic(path, text):
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        f.write(text)
-    os.replace(tmp, path)
-
-
-def inbox_name(it):
-    # one file per Slack message: delivering it again replaces it instead of adding a copy
-    return "%s-%s.json" % (it.get("channel_id") or "c", it.get("ts"))
-
-
-def handle_mail(it):
-    kind = it.get("kind")
-    if kind == "slack":
-        os.makedirs(INBOX, exist_ok=True)
-        write_atomic(os.path.join(INBOX, inbox_name(it)), json.dumps(it))
-    elif kind == "answered":   # the receiver saw this agent's reply in Slack: nothing left to do
-        src = os.path.join(INBOX, inbox_name(it))
-        if os.path.exists(src):
-            os.makedirs(os.path.join(INBOX, "done"), exist_ok=True)
-            os.replace(src, os.path.join(INBOX, "done", inbox_name(it)))
-
-
-def mailbox_loop(token):
-    op = opener()
-    base = RECEIVER_URL.rsplit("/ingest", 1)[0]
-    try:
-        with open(CURSOR_FILE) as f:
-            after = int(f.read().strip() or 0)
-    except (OSError, ValueError):
-        after = 0
-    backoff = 1
-    while True:
-        try:
-            url = "%s/api/wait?%s" % (base, urllib.parse.urlencode({"agent": AGENT, "after": after}))
-            req = urllib.request.Request(url, headers={"X-Agent-Token": token})
-            with op.open(req, timeout=60) as r:
-                reply = json.loads(r.read())
-            items = reply.get("items") or []
-            after = int(reply.get("after", after))   # receiver may reset a stale cursor
-            for it in items:
-                handle_mail(it)
-                after = max(after, int(it["id"]))
-            # saved only after the files are written: a crash re-fetches, never skips
-            write_atomic(CURSOR_FILE, str(after))
-            note("mailbox")
-            backoff = 1
-        except Exception as e:
-            note("mailbox", e)
-            log("mailbox: %s" % e)
-            time.sleep(backoff)
-            backoff = min(30, backoff * 2)
-
+# (the Slack mailbox was removed with the receiver; the hub's fleet bus carries messages now)
 
 def main():
     global AGENT, RECEIVER_URL
@@ -754,7 +713,7 @@ def main():
     token = read_token()
     op = opener()
     log("telemetryd starting for %s -> %s" % (AGENT, RECEIVER_URL))
-    threading.Thread(target=mailbox_loop, args=(token,), daemon=True).start()
+    # The old Slack mailbox is retired — the hub's fleet bus (fleet.py) carries messages now.
     last_push = 0.0
     last_activity = None
     while True:
