@@ -810,7 +810,7 @@ def serve(hub, host, port, password):
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             try:
-                if u.path in ("/fleet.py", "/telemetryd.py"):   # agent code (CLI + telemetry daemon); not secret
+                if u.path in ("/fleet.py", "/telemetryd.py", "/setup.py"):   # agent code (self-serve); not secret
                     src = os.path.join(HERE, u.path.lstrip("/"))
                     if not os.path.exists(src):
                         src = os.path.join(HERE, "..", "agents", u.path.lstrip("/"))
@@ -902,6 +902,12 @@ def serve(hub, host, port, password):
                     if name:
                         hub.ingest(name, self._body())
                         self._json(200, {"ok": True})
+                elif u.path == "/api/claim":                # an agent registers itself (Jack's code), no hub push
+                    b = self._body()
+                    if hmac.compare_digest(b.get("code", ""), password):
+                        self._json(200, {"token": hub.add_agent(b["name"], "muse")})
+                    else:
+                        self._json(403, {"error": "bad claim code"})
                 elif u.path == "/api/jack/send":           # Jack messages an agent straight from the dashboard
                     if self._jack():
                         b = self._body()
