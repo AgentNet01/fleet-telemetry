@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet Hub</title>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--line:#262b36;--fg:#e8eaf0;--dim:#8a93a6;--ok:#3fb950;--idle:#8a93a6;--warn:#d29922;--bad:#f85149;--accent:#58a6ff}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--bg:#f6f7f9;--card:#fff;--line:#e3e6eb;--fg:#1b1f27;--dim:#5d6677;--accent:#0969da}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+main{max-width:860px;margin:0 auto;padding:16px}
+h1{font-size:18px;margin:0 0 4px} .sub{color:var(--dim);font-size:13px;margin-bottom:16px}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin:20px 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px}
+.nj{padding:4px 0} .nj div{padding:10px 14px;border-top:1px solid var(--line)} .nj div:first-child{border-top:0}
+.nj .empty{color:var(--dim)}
+.agent{display:grid;grid-template-columns:12px 1fr auto;gap:10px;align-items:center;padding:12px 14px;border-top:1px solid var(--line);cursor:pointer;width:100%;background:none;border-left:0;border-right:0;border-bottom:0;color:inherit;font:inherit;text-align:left}
+.agent:first-child{border-top:0}
+.dot{width:10px;height:10px;border-radius:50%}
+.s-working{background:var(--ok)} .s-idle{background:var(--idle)} .s-unresponsive{background:var(--bad)} .s-login{background:var(--warn)} .s-parked{background:transparent;border:2px solid var(--idle)}
+.name{font-weight:600} .what{color:var(--dim);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.ages{color:var(--dim);font-size:12px;text-align:right;white-space:nowrap}
+.tl{padding:12px 14px} .ev{border-left:3px solid var(--line);padding:6px 10px;margin:8px 0;white-space:pre-wrap;word-break:break-word;font-size:14px}
+.ev.in{border-color:var(--accent)} .ev.waiting{border-style:dashed} .ev.out{border-color:var(--ok)} .ev small{display:block;color:var(--dim);font-size:12px}
+button.back{background:none;border:0;color:var(--accent);font:inherit;padding:0;cursor:pointer;margin-bottom:8px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Fleet Hub</h1>
+  <div class="sub" id="fresh">Loading…</div>
+  <section id="home">
+    <h2>Needs Jack</h2>
+    <div class="card nj" id="nj"></div>
+    <h2>Agents</h2>
+    <div class="card" id="agents"></div>
+  </section>
+  <section id="detail" hidden>
+    <button class="back" id="back">← All agents</button>
+    <h2 id="dname"></h2>
+    <div class="card tl" id="tl"></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let now = Date.now() / 1000, open = null;
+function ago(t) {
+  if (!t) return "never";
+  const s = Math.max(0, now - t);
+  return s < 90 ? `${Math.round(s)}s ago` : s < 5400 ? `${Math.round(s / 60)}m ago` : s < 129600 ? `${Math.round(s / 3600)}h ago` : `${Math.round(s / 86400)}d ago`;
+}
+function state(a) {
+  if (["unresponsive", "login", "parked"].includes(a.state)) return a.state;
+  return a.current ? "working" : "idle";
+}
+function label(a) {
+  const s = state(a);
+  if (s === "login") return "Login needs renewing";
+  if (s === "unresponsive") return "Unresponsive";
+  if (s === "parked") return a.queue ? `Parked, ${a.queue} held until it's woken` : "Parked";
+  if (a.current) return `Working on #${a.current.id}: ${a.current.text}`;
+  return a.queue ? `Idle, ${a.queue} waiting` : "Idle, nothing waiting";
+}
+async function load() {
+  const r = await fetch("api/board", {cache: "no-store"});
+  const b = await r.json();
+  now = b.now;
+  $("fresh").textContent = `Updated ${new Date(b.now * 1000).toLocaleTimeString()}`;
+  $("nj").innerHTML = b.needs_jack.length
+    ? b.needs_jack.map(n => `<div>${esc(n.text)} <small class="what">${ago(n.at)}</small></div>`).join("")
+    : `<div class="empty">Nothing needs you.</div>`;
+  b.agents.sort((x, y) => x.name.localeCompare(y.name, undefined, {numeric: true}));
+  $("agents").innerHTML = b.agents.map(a => `
+    <button class="agent" data-name="${esc(a.name)}">
+      <span class="dot s-${state(a)}" title="${state(a)}"></span>
+      <span style="min-width:0"><div class="name">${esc(a.name)}</div><div class="what">${esc(label(a))}</div></span>
+      <span class="ages">${a.last_in ? "messaged " + ago(a.last_in) : "never messaged"}<br>${a.last_out ? "replied " + ago(a.last_out) : "never replied"}</span>
+    </button>`).join("");
+  document.querySelectorAll(".agent").forEach(el => el.onclick = () => show(el.dataset.name));
+  if (open) show(open);
+}
+async function show(name) {
+  open = name;
+  const evs = await (await fetch("api/timeline?agent=" + encodeURIComponent(name), {cache: "no-store"})).json();
+  $("dname").textContent = name;
+  $("tl").innerHTML = evs.length ? evs.map(e => `<div class="ev ${e.dir}"><small>${e.dir === "in" ? "to " + esc(name) : e.dir === "waiting" ? "waiting for " + esc(name) : "from " + esc(name)} · #${e.item} · ${ago(e.at)}</small>${esc(e.text)}</div>`).join("")
+                                 : `<div class="what">No messages yet.</div>`;
+  $("home").hidden = true; $("detail").hidden = false;
+}
+$("back").onclick = () => { open = null; $("home").hidden = false; $("detail").hidden = true; };
+load(); setInterval(load, 10000);
+</script>
+</body>
+</html>
