@@ -1,0 +1,150 @@
+"""Nudges keep task holders moving without repeating themselves; the CEO owns inactivity.
+
+    python3 test_nudge.py              # every case
+    python3 test_nudge.py <case>       # cadence rotate content idle_silent reset
+                                       # ceo_threshold ceo_once ceo_only ceo_parked
+"""
+import os
+import sys
+import tempfile
+
+import hub
+from test_hub import Clock, FakeMuse
+
+H = 3600
+
+
+def world(workers=("Ada",)):
+    clock, muse = Clock(), FakeMuse()
+    h = hub.Hub(os.path.join(tempfile.mkdtemp(), "hub.db"), muse, clock, evidence_ok=lambda link: True)
+    pid = h.add_product("Shop", brief="b")
+    prj = h.add_project(pid, "launch")
+    for n in workers:
+        h.add_agent(n, "muse"); h.place(n, "Shop", "engineer")
+    return h, muse, clock, prj
+
+
+def nudges(muse, agent, title):
+    """Messages after the task itself that mention the task."""
+    return [m for m in muse.sent.get(agent, []) if title in m][1:]
+
+
+def hours(h, clock, n):
+    for _ in range(n):
+        clock.go(H); h.tick()
+
+
+def cadence():
+    h, muse, clock, prj = world()
+    h.add_task(prj, "write the listing", role="engineer", done_def="x")
+    h.tick()
+    hours(h, clock, 11)
+    assert nudges(muse, "Ada", "write the listing") == [], "nudge: none before 12 h"
+    hours(h, clock, 1)
+    assert len(nudges(muse, "Ada", "write the listing")) == 1, "nudge: exactly one at 12 h"
+    hours(h, clock, 11)
+    assert len(nudges(muse, "Ada", "write the listing")) == 1, "nudge: not again before another 12 h"
+    hours(h, clock, 1)
+    assert len(nudges(muse, "Ada", "write the listing")) == 2, "nudge: again after 12 more hours"
+    print("cadence OK")
+
+
+def rotate():
+    h, muse, clock, prj = world()
+    h.add_task(prj, "write the listing", role="engineer", done_def="x")
+    h.tick()
+    hours(h, clock, 12 * 5)
+    got = nudges(muse, "Ada", "write the listing")
+    assert len(got) == 5, f"nudge: five in 60 h, got {len(got)}"
+    firsts = [m.splitlines()[0] for m in got]
+    assert all(a != b for a, b in zip(firsts, firsts[1:])), f"nudge: never the same wording twice in a row: {firsts}"
+    assert len(set(firsts[:4])) == 4, f"nudge: four different phrasings: {firsts}"
+    print("rotate OK")
+
+
+def content():
+    h, muse, clock, prj = world()
+    t = h.add_task(prj, "write the listing", role="engineer", done_def="x")
+    h.tick()
+    hours(h, clock, 12)
+    n = nudges(muse, "Ada", "write the listing")[0]
+    for part in (f"#{t}", "write the listing", "Shop", "engineer", "fleet task"):
+        assert part in n, f"nudge: missing {part!r} in {n!r}"
+    print("content OK")
+
+
+def idle_silent():
+    h, muse, clock, prj = world()
+    h.tick()
+    hours(h, clock, 48)
+    assert not muse.sent.get("Ada"), f"nudge: an agent with no task is never messaged: {muse.sent.get('Ada')}"
+    print("idle_silent OK")
+
+
+def reset():
+    h, muse, clock, prj = world()
+    t = h.add_task(prj, "write the listing", role="engineer", done_def="x")
+    h.tick()
+    hours(h, clock, 11)
+    h.task_note("Ada", t, "draft done")
+    hours(h, clock, 11)
+    assert nudges(muse, "Ada", "write the listing") == [], "nudge: a progress note restarts the 12 h clock"
+    hours(h, clock, 1)
+    assert len(nudges(muse, "Ada", "write the listing")) == 1, "nudge: 12 h after the note"
+    print("reset OK")
+
+
+def ceo_world(n_idle, parked=0):
+    h, muse, clock, prj = world(workers=())
+    h.add_agent("Cee", "muse"); h.seat("ceo", "Cee")
+    names = [f"W{i}" for i in range(1, n_idle + parked + 1)]
+    for n in names:
+        h.add_agent(n, "muse")
+    for n in names[n_idle:]:
+        h._set("agents", n, state="parked")
+    h.tick()
+    return h, muse, clock, names
+
+
+def ceo_threshold():
+    h, muse, clock, names = ceo_world(4)
+    hours(h, clock, 13)
+    notes = muse.sent.get("Cee", [])
+    assert len(notes) == 1 and all(n in notes[0] for n in names), f"CEO: one note naming all four idle agents: {notes}"
+    h3, muse3, clock3, _ = ceo_world(3)
+    hours(h3, clock3, 13)
+    assert not muse3.sent.get("Cee"), f"CEO: three idle agents is not a problem yet: {muse3.sent.get('Cee')}"
+    print("ceo_threshold OK")
+
+
+def ceo_once():
+    h, muse, clock, names = ceo_world(4)
+    hours(h, clock, 13)
+    hours(h, clock, 11)
+    assert len(muse.sent.get("Cee", [])) == 1, "CEO: not re-notified about the same idle stretch"
+    hours(h, clock, 1)
+    assert len(muse.sent.get("Cee", [])) == 2, "CEO: reminded once 12 more hours pass"
+    print("ceo_once OK")
+
+
+def ceo_only():
+    h, muse, clock, names = ceo_world(5)
+    hours(h, clock, 30)
+    assert not any(muse.sent.get(n) for n in names), "CEO: idle agents themselves are never messaged"
+    print("ceo_only OK")
+
+
+def ceo_parked():
+    h, muse, clock, names = ceo_world(3, parked=2)
+    hours(h, clock, 13)
+    assert not muse.sent.get("Cee"), "CEO: parked agents don't count as idle"
+    print("ceo_parked OK")
+
+
+CASES = [cadence, rotate, content, idle_silent, reset, ceo_threshold, ceo_once, ceo_only, ceo_parked]
+
+if __name__ == "__main__":
+    pick = sys.argv[1] if len(sys.argv) > 1 else None
+    for case in CASES:
+        if pick in (None, case.__name__):
+            case()

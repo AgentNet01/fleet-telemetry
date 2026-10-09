@@ -4,7 +4,8 @@ The real file moves were proven live on Boboe 2 (hub_plan.md §6). Here we pin t
 it issues a switch when a ready task needs a product/role the agent isn't in, serves the target
 brain, verifies the reported hash, and raises Needs Jack on a mismatch.
 
-    python3 test_switch.py
+    python3 test_switch.py                       # hub side: issue, serve, verify, mismatch
+    python3 test_switch.py identity|core|roundtrip   # agent side: the real `fleet switch` on a temp home
 """
 import hashlib
 import os
@@ -57,5 +58,73 @@ def main():
     print("switch OK")
 
 
+CORE = "# Soul\nYou serve the fleet. Your role and product memory switch between tasks; nothing is deleted.\n"
+
+
+def agent_home():
+    """A live hub, and an agent home on product A as engineer with its own identity, soul, memory."""
+    import test_fleet
+    h, srv, port, tok = test_fleet.start()
+    h.set_role("engineer", "You are the engineer. Build it.")
+    h.set_role("marketer", "You are the marketer. Reach people.")
+    h.add_product("A", brief="A starter brief"); h.add_product("B", brief="B starter brief")
+    tok["Ace"] = h.add_agent("Ace", "muse"); h.place("Ace", "A", "engineer")
+    home = tempfile.mkdtemp()
+    files = {"IDENTITY.md": "# Ace\nname: Ace\n", "SOUL.md": CORE, "MEMORY.md": "A: buyers like green\n"}
+    for f, text in files.items():
+        open(os.path.join(home, f), "w").write(text)
+    os.makedirs(os.path.join(home, "memory")); open(os.path.join(home, "memory", "a-notes.md"), "w").write("A notes\n")
+
+    def switch(product, role):
+        import subprocess, sys
+        h.issue_switch("Ace", product, role)
+        env = dict(os.environ, HOME=home, FLEET_HUB=f"http://127.0.0.1:{port}", FLEET_TOKEN=tok["Ace"],
+                   FLEET_HOME=os.path.join(home, ".fleet"))
+        r = subprocess.run([sys.executable, os.path.join(os.path.dirname(hub.__file__), "fleet.py"), "switch", product, role],
+                           env=env, capture_output=True, text=True, timeout=30)
+        assert r.returncode == 0, r
+        return r
+    read = lambda *p: open(os.path.join(home, *p)).read()
+    return h, srv, home, files, switch, read
+
+
+def identity():
+    h, srv, home, files, switch, read = agent_home()
+    switch("B", "marketer"); switch("A", "engineer")
+    assert read("IDENTITY.md") == files["IDENTITY.md"], "IDENTITY.md never changes"
+    srv.shutdown(); print("identity OK")
+
+
+def core():
+    h, srv, home, files, switch, read = agent_home()
+    switch("B", "marketer")
+    soul = read("SOUL.md")
+    assert soul.startswith(CORE), f"the soul core is kept as is: {soul!r}"
+    assert "You are the marketer" in soul and "engineer" not in soul, f"only the role block changes: {soul!r}"
+    switch("A", "engineer")
+    soul = read("SOUL.md")
+    assert soul.startswith(CORE) and soul.count("<!-- fleet-role -->") == 1, f"one role block, core intact: {soul!r}"
+    assert "You are the engineer" in soul and "marketer" not in soul, soul
+    srv.shutdown(); print("core OK")
+
+
+def roundtrip():
+    h, srv, home, files, switch, read = agent_home()
+    switch("B", "marketer")
+    assert os.path.exists(os.path.join(home, "fleet-brains", "A", "MEMORY.md")), "A's memory saved under ~/fleet-brains/A"
+    assert read("fleet-brains", "A", "MEMORY.md") == files["MEMORY.md"]
+    assert "B starter brief" in read("MEMORY.md"), "first time on B: the starter brief"
+    assert not os.path.exists(os.path.join(home, "memory", "a-notes.md")), "A's notes don't leak into B"
+    open(os.path.join(home, "MEMORY.md"), "w").write("B: ship on Fridays\n")
+    switch("A", "engineer")
+    assert read("MEMORY.md") == files["MEMORY.md"], f"back on A, A's memory exactly: {read('MEMORY.md')!r}"
+    assert read("memory", "a-notes.md") == "A notes\n", "A's memory folder comes back"
+    assert read("fleet-brains", "B", "MEMORY.md") == "B: ship on Fridays\n", "B's memory kept for next time"
+    agent = {a["name"]: a for a in h.board()["agents"]}["Ace"]
+    assert agent["product"] == "A" and agent["role"] == "engineer" and not h.needs_jack(), (agent, h.needs_jack())
+    srv.shutdown(); print("roundtrip OK")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    {"identity": identity, "core": core, "roundtrip": roundtrip}.get(sys.argv[1] if len(sys.argv) > 1 else "", main)()

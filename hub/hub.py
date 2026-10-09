@@ -3,10 +3,14 @@
     python hub.py hub.json              run (HTTP API + dashboard + delivery loop + daily login renewal)
     python hub.py hub.json token NAME   print a new token for an agent (replaces its old one)
 
-Rules (hub_plan.md §5/§7): one item in flight per agent; a reply is every genuine message after
-ours, closed after 60 s of quiet; no reply in 10 min → resend once; 10 more → unresponsive and
-the asker is told. Replies close items and never open them (only `ask` does), and a request
-made while handling another is one level deeper; deeper than 5 goes to Needs Jack.
+Rules (company_spec.md; hub_plan.md §5/§7): the hub only writes in each agent's fleet side chat.
+Tasks, verifies and notes are delivered once; the work is tracked on the task row and moved by the
+holder's `fleet task …` commands, never by a timer. A request/question is one item in flight per
+agent; a reply is every genuine message after ours, closed after 60 s of quiet; unanswered after
+20 min it fails and the asker is told (the same text is never sent twice). Replies close items and
+never open them (only `ask` does); a request made while handling another is one level deeper;
+deeper than 5 goes to Needs Jack. Holders of an open task get a rotating nudge after 12 h without
+progress; idle agents are never woken — the CEO hears when more than three sit idle over 12 h.
 """
 import base64
 import hashlib
@@ -38,16 +42,6 @@ def _evidence_ok(link):
         return False
 
 
-def _wakanda_link(reply):
-    import re
-    for line in reply.splitlines():
-        if "WAKANDA" in line:
-            m = re.search(r"https?://\S+", line)
-            if m:
-                return m.group(0).rstrip(".,)")
-    return None
-
-
 def _tally(views, chair_text):
     """Label the council outcome from the views and the chair's own answer."""
     from collections import Counter
@@ -68,7 +62,7 @@ SCHEMA = """
 create table if not exists agents(
   name text primary key, kind text, token_hash text, state text default 'active',
   login_expires real, last_in real, last_out real,
-  current_product text, current_role text, onboarded real, seen_seq integer default 0);
+  current_product text, current_role text, onboarded real, seen_seq integer default 0, free_since real);
 create table if not exists items(
   id integer primary key, kind text, frm text, too text, text text, parent integer, depth integer,
   status text, created real, sent_at real, tries integer default 0, mark integer,
@@ -84,7 +78,7 @@ create table if not exists projects(
 create table if not exists tasks(
   id integer primary key, project integer, title text, role text, done_def text,
   blocked_by text, owner text, status text default 'open', progress_note text,
-  evidence text, verified_by text, created real, touched real);
+  evidence text, verified_by text, created real, touched real, verifier text);
 create table if not exists roles(name text primary key, soul text);
 create table if not exists seats(role text primary key, agent text);
 create table if not exists councils(
@@ -100,6 +94,11 @@ create table if not exists sales(
 create table if not exists switches(
   agent text primary key, product text, role text, expect text, issued real, status text);
 create table if not exists telemetry(agent text primary key, blob text, at real);
+create table if not exists suggestions(
+  id integer primary key, frm text, product text, text text, status text default 'open',
+  decided_by text, note text, at real, decided_at real);
+create table if not exists nudges(agent text primary key, last_at real, idx integer default -1);
+create table if not exists ceo_notes(id integer primary key, agents text, at real);
 """
 # Columns added to agents/items after milestone 1; harmless on a fresh DB, needed on the PC's.
 MIGRATIONS = [
@@ -111,7 +110,31 @@ MIGRATIONS = [
     "alter table items add column ref integer",
     "alter table councils add column ckey text",
     "create table if not exists telemetry(agent text primary key, blob text, at real)",
+    "alter table tasks add column verifier text",
+    "alter table agents add column free_since real",
 ]
+WORKERS = ("muse", "poll")            # kinds that take tasks; 'slack' (dot) and 'jack' (the board) don't
+PUSH = ("muse", "slack")              # kinds the hub sends to; 'poll' agents fetch with `fleet inbox`
+ONE_SHOT = ("note", "task", "verify", "nudge")
+NUDGE_AFTER = IDLE_AFTER = 12 * 3600
+CEO_IDLE_COUNT = 3                    # more than this many idle workers → the CEO hears about it
+NUDGES = (                            # same meaning, different words: agents tune out a repeated message
+    "Checking in on your open fleet task — how's it going?",
+    "Quick nudge: this task is still open on your plate.",
+    "Still on this one? A short progress note helps the team plan around you.",
+    "Reminder — this fleet task is waiting on you.",
+)  # delivered once; the work itself is tracked on the task row
+DEFAULT_ROLES = {
+    "designer": "You are the product designer for this product: how it looks, reads and feels to a buyer. "
+                "Show your work as files or links, never just a description.",
+    "engineer": "You are the engineer for this product: you build and automate what it needs. "
+                "Prove it works with something a reviewer can run or open.",
+    "marketer": "You are the marketer for this product: you find buyers and write what reaches them "
+                "(listings, posts, emails). Measure what you can.",
+    "optimizer": "You are the optimizer for this product: study what's working and what isn't, and send "
+                 "concrete suggestions to the PM and CEO with `fleet suggest`. They decide; you don't change "
+                 "the workflow yourself.",
+}
 
 
 def _hash(token):
@@ -131,6 +154,9 @@ class Hub:
                 self.db.execute(m)
             except sqlite3.OperationalError:
                 pass                     # column already there
+        if not self.db.execute("select 1 from roles limit 1").fetchone():
+            for name, soul in DEFAULT_ROLES.items():
+                self.db.execute("insert into roles(name, soul) values(?,?)", (name, soul))
         # ponytail: one lock around everything, including muse-cli calls in tick(); API calls can
         # wait a few seconds behind a slow tick. Split I/O out of the lock if that ever matters.
         self.lock = threading.RLock()
@@ -203,16 +229,21 @@ class Hub:
     def _format(self, it, resent=False):
         head = "(resent: no reply seen) " if resent else ""
         kind, iid, body = it["kind"], it["id"], it["text"]
+        if kind == "nudge":
+            return body
         if kind == "note":
             first, _, rest = body.partition("\n")
             return f"{head}[fleet #{iid} · {first}]\n{rest}\n— No reply needed."
         if kind == "task":
-            return (f"{head}[fleet #{iid} · task]\n{body}\n"
-                    f"— Work on it, then reply. Finish with a line `WAKANDA <link>` whose link is the "
-                    f"evidence (a commit, file or URL). No link yet? Reply your progress so far.")
+            t = it["ref"]
+            return (f"{head}[fleet · task #{t}]\n{body}\n"
+                    f"— It's yours until it's done. Post progress with `fleet task note {t} \"...\"`; when it's "
+                    f"finished run `fleet task done {t} <link>` with a link to the evidence (commit, file or URL).")
         if kind == "verify":
-            return (f"{head}[fleet #{iid} · verify]\n{body}\n"
-                    f"— Check it yourself against the definition of done. Reply `pass` or `fail: <reason>`.")
+            t = it["ref"]
+            return (f"{head}[fleet · verify task #{t}]\n{body}\n"
+                    f"— Check it yourself against the definition of done, then run `fleet task verify {t} pass` "
+                    f"or `fleet task verify {t} fail \"<reason>\"`.")
         if kind == "question":
             return (f"{head}[fleet #{iid} · the fleet is being asked]\n{body}\n"
                     f"— Reply with your own view in a sentence or two. One answer will be chosen from everyone's.")
@@ -233,8 +264,8 @@ class Hub:
         with self.lock:
             self._set("items", it["id"], status="sent", sent_at=self.clock(), tries=it["tries"] + 1, mark=mark)
             self._log(it["id"], it["too"], "in", text)
-            if it["kind"] == "note":
-                self._set("items", it["id"], status="answered")  # notes need no reply; don't hold the slot
+            if it["kind"] in ONE_SHOT:
+                self._set("items", it["id"], status="answered")  # no reply expected; don't hold the slot
 
     def _answered(self, it, reply):
         self._set("items", it["id"], status="answered", reply=reply)
@@ -242,10 +273,6 @@ class Hub:
         kind = it["kind"]
         if kind == "request" and it["frm"] != "hub":
             self._note(it["frm"], f"reply from {it['too']} to your #{it['id']}", reply)
-        elif kind == "task":
-            self._on_task_reply(it, reply)
-        elif kind == "verify":
-            self._on_verify_reply(it, reply)
         elif kind == "question":
             self._add_view(it["council"], it["too"], reply)
         elif kind == "chair":
@@ -258,8 +285,12 @@ class Hub:
             self._assign_tasks()
             self._switch_to_fill()
             self._close_councils()
+            self._assign_verifiers()
+            self._track_free()
+            self._nudge()
+            self._ceo_idle()
             agents = [dict(a) for a in self.db.execute(
-                "select * from agents where kind in ('muse','poll') and state != 'parked' order by name")]
+                "select * from agents where kind in ('muse','poll','slack') and state != 'parked' order by name")]
         # Two passes so cross-agent effects (a reply that queues a note for someone else) land in
         # the same tick regardless of agent order. One bad account can't starve the rest — each
         # agent is serviced independently and the muse-cli I/O runs outside the lock, so a slow or
@@ -286,13 +317,15 @@ class Hub:
                     # the headline is stable per agent so a stuck account files exactly one open item.
                     self.db.execute("insert into events(agent, dir, text, at) values(?,'err',?,?)",
                                     (name, f"#{n} {str(e)[:160]}", self.clock()))
-                    if n >= self.FAIL_ESCALATE:
-                        self._needs_jack_once(f"{name} keeps failing to service — check the agent/login")
+                    head = f"{name} keeps failing to service"
+                    if n >= self.FAIL_ESCALATE and not self.db.execute(
+                            "select 1 from needs_jack where done=0 and text like ?", (head + "%",)).fetchone():
+                        self._needs_jack(f"{head}: {str(e)[:200]}")
             except Exception:
                 pass
 
     def _poll_agent(self, a, now):
-        if a["kind"] != "muse":
+        if a["kind"] not in PUSH:
             return
         name = a["name"]
         with self.lock:
@@ -317,19 +350,14 @@ class Hub:
     def _deliver_agent(self, name, kind, now):
         with self.lock:
             it = self._inflight(name)
-            resend = nextitem = None
-            if it and not it["last_reply"]:
-                waited = now - it["sent_at"]
-                if kind == "muse" and it["tries"] < 2 and waited >= RESEND:
-                    resend = it
-                elif waited >= (RESEND if kind == "muse" else 2 * RESEND):
-                    self._fail_item(it, name)
-                    it = None
-            if not it and kind == "muse" and resend is None:
+            nextitem = None
+            # never resend the same text: an unanswered request/question just fails after 20 min
+            if it and not it["last_reply"] and now - it["sent_at"] >= 2 * RESEND:
+                self._fail_item(it, name)
+                it = None
+            if not it and kind in PUSH:
                 nextitem = self._next(name)
-        if resend is not None:
-            self._send(resend, resent=True)
-        elif nextitem is not None:
+        if nextitem is not None:
             self._send(nextitem)
 
     def _fail_item(self, it, name):
@@ -355,7 +383,8 @@ class Hub:
                 it = self._next(agent)
                 if not it:
                     return None
-                self._set("items", it["id"], status="sent", sent_at=self.clock(), tries=1)
+                self._set("items", it["id"], status="answered" if it["kind"] in ONE_SHOT else "sent",
+                          sent_at=self.clock(), tries=1)
                 self._log(it["id"], agent, "in", self._format(it))
             return {"id": it["id"], "kind": it["kind"], "from": it["frm"], "text": it["text"]}
 
@@ -397,8 +426,13 @@ class Hub:
         with self.lock:
             return self.db.execute("insert into projects(product, name) values(?,?)", (product_id, name)).lastrowid
 
-    def add_task(self, project_id, title, role, done_def, blocked_by=(), owner=None):
+    def add_task(self, project_id, title, role, done_def, blocked_by=(), owner=None, by=None):
         with self.lock:
+            if by is not None:
+                pr = self.db.execute("select p.name from projects j join products p on j.product=p.id where j.id=?",
+                                     (project_id,)).fetchone()
+                if not self.may_manage(by, pr["name"] if pr else None):
+                    raise PermissionError("only Jack, Darragh, the CEO or this product's PM can add its tasks")
             tid = self.db.execute(
                 "insert into tasks(project, title, role, done_def, blocked_by, owner, status, created, touched) "
                 "values(?,?,?,?,?,?,?,?,?)",
@@ -430,9 +464,9 @@ class Hub:
 
     def _idle(self, product=None, role=None):
         """An active, un-parked agent with nothing in flight and nothing queued, optionally in a given brain."""
-        for a in self.db.execute("select * from agents where kind='muse' and state='active'").fetchall():
-            if self._inflight(a["name"]) or self._next(a["name"]):
-                continue
+        for a in self.db.execute(f"select * from agents where kind in {WORKERS} and state='active' order by name").fetchall():
+            if self._open_tasks(a["name"]):
+                continue                             # only holding a task makes an agent busy; a pending question doesn't
             if product and a["current_product"] != product:
                 continue
             if role and a["current_role"] != role:
@@ -457,36 +491,187 @@ class Hub:
                     "insert into items(kind, frm, too, text, ref, depth, status, created) values('task','hub',?,?,?,0,'queued',?)",
                     (owner, f"{t['title']} — {product}, as {t['role']}.\nDone when: {t['done_def']}", t["id"], self.clock()))
 
-    def _on_task_reply(self, it, reply):
-        tid = it["ref"]
+    # ---- task lifecycle: one holder; `fleet task note|done|verify|release` move it ----------
+    def _open_tasks(self, agent):
+        return self.db.execute("select * from tasks where (owner=? and status='working') "
+                               "or (verifier=? and status='verifying') order by id", (agent, agent)).fetchall()
+
+    def _task_row(self, tid):
         t = self.db.execute("select * from tasks where id=?", (tid,)).fetchone()
         if not t:
-            return
-        link = _wakanda_link(reply)
-        if link and self.evidence_ok(link):
-            self._set("tasks", tid, status="verifying", evidence=link, touched=self.clock())
-            verifier = next((n for n in self._idle() if n != t["owner"]), None)
-            if verifier:
+            raise ValueError(f"no task #{tid}")
+        return t
+
+    def is_board(self, who):
+        a = self._agent(who) if who else None
+        return who == "jack" or bool(a and a["kind"] == "jack")
+
+    def may_manage(self, who, product):
+        """Jack and Darragh (the board), the CEO, and the product's PM may create and release its tasks."""
+        if self.is_board(who) or (who and who == self._chair()):
+            return True
+        p = self.db.execute("select pm from products where name=?", (product,)).fetchone()
+        return bool(who and p and p["pm"] == who)
+
+    def task_note(self, agent, tid, text):
+        with self.lock:
+            t = self._task_row(tid)
+            if t["owner"] != agent or t["status"] != "working":
+                raise PermissionError(f"#{tid} isn't a task you're working on")
+            self._set("tasks", tid, progress_note=text, touched=self.clock())
+            self._log(None, agent, "out", f"task #{tid} note: {text}")
+
+    def task_done(self, agent, tid, link):
+        with self.lock:
+            t = self._task_row(tid)
+            if t["owner"] != agent or t["status"] != "working":
+                raise PermissionError(f"#{tid} isn't a task you're working on")
+        if not self.evidence_ok(link):                                  # network check, outside the lock
+            raise ValueError(f"the evidence link doesn't open: {link}")
+        with self.lock:
+            self._set("tasks", tid, status="verifying", evidence=link, verifier=None, touched=self.clock())
+            self._log(None, agent, "out", f"task #{tid} done: {link}")
+            self._assign_verifiers()
+
+    def task_verify(self, agent, tid, ok, reason=""):
+        with self.lock:
+            t = self._task_row(tid)
+            if t["status"] != "verifying" or t["verifier"] != agent:
+                raise PermissionError(f"#{tid} isn't waiting on your verification")
+            self._log(None, agent, "out", f"task #{tid} verify: {'pass' if ok else 'fail — ' + reason}")
+            if ok:
+                self._set("tasks", tid, status="done", verified_by=agent, touched=self.clock())
+            else:
+                self._set("tasks", tid, status="working", verifier=None, touched=self.clock(),
+                          progress_note=f"verify failed ({agent}): {reason}")
+                self._note(t["owner"], f"task #{tid} didn't pass verification",
+                           f"{t['title']}\n{agent}: {reason}\nFix it, then `fleet task done {tid} <link>` again.")
+
+    def task_release(self, by, tid):
+        with self.lock:
+            t = self._task_row(tid)
+            if not self.may_manage(by, self._task_product(tid)):
+                raise PermissionError("only Jack, Darragh, the CEO or this product's PM can release a task")
+            self._set("tasks", tid, owner=None, verifier=None, status="ready", touched=self.clock(),
+                      progress_note=f"released by {by}")
+
+    def _assign_verifiers(self):
+        for t in self.db.execute("select * from tasks where status='verifying' and verifier is null").fetchall():
+            product = self._task_product(t["id"])
+            free = [n for n in self._idle() if n != t["owner"]]
+            same = [n for n in free if self._agent(n)["current_product"] == product]
+            who = (same or free or [None])[0]
+            if who:
+                self._set("tasks", t["id"], verifier=who)
                 self.db.execute(
                     "insert into items(kind, frm, too, text, ref, depth, status, created) values('verify','hub',?,?,?,0,'queued',?)",
-                    (verifier, f"{t['title']} — {self._task_product(tid)}.\nDone when: {t['done_def']}\nEvidence: {link}", tid, self.clock()))
-            else:
-                self._set("tasks", tid, verified_by="(no verifier available)", status="done")
-        elif link:
-            self._set("tasks", tid, progress_note="evidence didn't check out: " + link, touched=self.clock())
-        else:
-            # ponytail: a progress note just updates the task; no auto-continue (no loop, nothing to nudge).
-            self._set("tasks", tid, progress_note=reply, touched=self.clock())
+                    (who, f"{t['title']} — {product}, done by {t['owner']}.\nDone when: {t['done_def']}\n"
+                          f"Evidence: {t['evidence']}", t["id"], self.clock()))
 
-    def _on_verify_reply(self, it, reply):
-        tid = it["ref"]
-        t = self.db.execute("select * from tasks where id=?", (tid,)).fetchone()
-        if not t:
+    # ---- keeping work moving -------------------------------------------------------------
+    def _track_free(self):
+        """free_since = when a worker last stopped holding a task (None while it holds one)."""
+        for a in self.db.execute(f"select * from agents where kind in {WORKERS} and state='active'").fetchall():
+            if self._open_tasks(a["name"]):
+                if a["free_since"] is not None:
+                    self._set("agents", a["name"], free_since=None)
+            elif a["free_since"] is None:
+                self._set("agents", a["name"], free_since=self.clock())
+
+    def _nudge(self):
+        """A holder with no progress for 12 h gets one nudge, worded differently each time; the clock
+        restarts on any `fleet task` call (it updates `touched`). Agents without a task are left alone."""
+        now = self.clock()
+        for a in self.db.execute("select * from agents where state='active'").fetchall():
+            ts = self._open_tasks(a["name"])
+            if not ts or now - max(t["touched"] or 0 for t in ts) < NUDGE_AFTER:
+                continue
+            n = self.db.execute("select * from nudges where agent=?", (a["name"],)).fetchone()
+            if n and now - n["last_at"] < NUDGE_AFTER:
+                continue
+            idx = ((n["idx"] if n else -1) + 1) % len(NUDGES)
+            lines = []
+            for t in ts:
+                prod = self._task_product(t["id"])
+                if t["status"] == "verifying":
+                    lines.append(f"#{t['id']} verify “{t['title']}” — {prod}: `fleet task verify {t['id']} pass` "
+                                 f"or `fleet task verify {t['id']} fail \"<reason>\"`")
+                else:
+                    lines.append(f"#{t['id']} “{t['title']}” — {prod}, as {t['role']}: progress with "
+                                 f"`fleet task note {t['id']} \"...\"`, finished with `fleet task done {t['id']} <link>`")
+            self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('nudge','hub',?,?,0,'queued',?)",
+                            (a["name"], NUDGES[idx] + "\n" + "\n".join(lines), now))
+            self.db.execute("insert into nudges(agent, last_at, idx) values(?,?,?) on conflict(agent) "
+                            "do update set last_at=excluded.last_at, idx=excluded.idx", (a["name"], now, idx))
+
+    def _ceo_idle(self):
+        """More than three workers free for over 12 h → one note to whoever holds the CEO seat. Again only
+        when that set of agents changes or another 12 h pass. Idle agents themselves are never messaged."""
+        now, ceo = self.clock(), self._chair()
+        idle = [a for a in self.db.execute(f"select * from agents where kind in {WORKERS} and state='active' "
+                                           "and free_since is not null order by name").fetchall()
+                if a["name"] != ceo and now - a["free_since"] > IDLE_AFTER]
+        if len(idle) <= CEO_IDLE_COUNT:
             return
-        if "fail" in reply.lower():
-            self._set("tasks", tid, status="ready", owner=None, progress_note="verify failed: " + reply, touched=self.clock())
+        key = ",".join(a["name"] for a in idle)
+        last = self.db.execute("select * from ceo_notes order by id desc limit 1").fetchone()
+        if last and last["agents"] == key and now - last["at"] < IDLE_AFTER:
+            return
+        self.db.execute("insert into ceo_notes(agents, at) values(?,?)", (key, now))
+        who = "\n".join(f"- {a['name']} ({a['current_product'] or 'no product'} · {a['current_role'] or 'no role'}), "
+                        f"free {int((now - a['free_since']) // 3600)}h" for a in idle)
+        pms = "\n".join(f"- {p['name']}: PM {p['pm'] or '(none)'}" for p in
+                        self.db.execute("select name, pm from products where status='active' order by id"))
+        self._deliver_to(ceo, f"{len(idle)} agents have had no task for over 12 hours",
+                         f"{who}\n\nProducts and PMs:\n{pms or '- (no products yet)'}\n"
+                         "Ask the PMs for work these agents can take, or add tasks yourself.")
+
+    # ---- seats, PMs, roles, suggestions -------------------------------------------------
+    def set_pm(self, product, who):
+        with self.lock:
+            self.db.execute("update products set pm=? where name=? or id=?", (who or None, product, product))
+
+    def roles(self):
+        with self.lock:
+            return {r["name"]: r["soul"] for r in self.db.execute("select * from roles order by name")}
+
+    def _deliver_to(self, who, headline, text):
+        """A message for a seat holder: an agent gets it in its fleet chat; a board member (or nobody,
+        or a parked agent) gets it in Needs Jack, labelled with their name."""
+        a = self._agent(who) if who else None
+        if a and a["kind"] != "jack" and a["state"] != "parked":
+            self._note(who, headline, text)
         else:
-            self._set("tasks", tid, status="done", verified_by=it["too"], touched=self.clock())
+            self._needs_jack(f"For {(who or 'the board').title()}: {headline}\n{text}")
+
+    def suggest(self, agent, text):
+        with self.lock:
+            a = self._agent(agent)
+            product = a["current_product"] if a else None
+            sid = self.db.execute("insert into suggestions(frm, product, text, at) values(?,?,?,?)",
+                                  (agent, product, text, self.clock())).lastrowid
+            pm = self.db.execute("select pm from products where name=?", (product,)).fetchone()
+            body = f"From {agent} ({product or 'no product'}): {text}\n" \
+                   f"Decide with `fleet suggestion accept {sid} \"note\"` or `fleet suggestion reject {sid} \"why\"`."
+            for who in dict.fromkeys(w for w in ((pm["pm"] if pm else None), self._chair()) if w):
+                self._deliver_to(who, f"suggestion #{sid}", body)
+            return sid
+
+    def decide_suggestion(self, by, sid, accept, note=""):
+        with self.lock:
+            sg = self.db.execute("select * from suggestions where id=?", (sid,)).fetchone()
+            if not sg:
+                raise ValueError(f"no suggestion #{sid}")
+            if not self.may_manage(by, sg["product"]):
+                raise PermissionError("only Jack, Darragh, the CEO or this product's PM decide suggestions")
+            status = "accepted" if accept else "rejected"
+            self.db.execute("update suggestions set status=?, decided_by=?, note=?, decided_at=? where id=?",
+                            (status, by, note, self.clock(), sid))
+            self._note(sg["frm"], f"your suggestion #{sid} was {status} by {by}", f"{sg['text']}" + (f"\n{note}" if note else ""))
+
+    def suggestions(self):
+        with self.lock:
+            return [dict(r) for r in self.db.execute("select * from suggestions order by id desc")]
 
     # ---- council ------------------------------------------------------------------------
     def _responders(self):
@@ -512,6 +697,9 @@ class Hub:
             self._send(self.item(iid))
         return cid
 
+    def _asked(self, cid):
+        return {r["too"] for r in self.db.execute("select too from items where council=? and kind='question'", (cid,))}
+
     def _chair(self):
         r = self.db.execute("select agent from seats where role='ceo'").fetchone()
         return r["agent"] if r else None
@@ -522,13 +710,15 @@ class Hub:
     def _close_councils(self):
         for c in self.db.execute("select * from councils where status='open'").fetchall():
             voted = {r["agent"] for r in self.db.execute("select agent from council_views where council=?", (c["id"],))}
-            responders = set(self._responders())
-            if responders - voted and self.clock() - c["created"] < COUNCIL_WINDOW:
+            asked = self._asked(c["id"])
+            waiting = self.db.execute("select 1 from items where council=? and kind='question' and status in ('queued','sent')",
+                                      (c["id"],)).fetchone()
+            if waiting and self.clock() - c["created"] < COUNCIL_WINDOW:
                 continue                                       # still waiting, window open
             self._set("councils", c["id"], status="chairing")
             views = self.db.execute("select agent, view from council_views where council=?", (c["id"],)).fetchall()
             summary = "\n".join(f"- {v['agent']}: {v['view']}" for v in views)
-            missing = sorted(responders - voted)
+            missing = sorted(asked - voted)
             chair = c["chair"]
             if chair and self._agent(chair):
                 self.db.execute(
@@ -542,7 +732,7 @@ class Hub:
         c = self.db.execute("select * from councils where id=?", (cid,)).fetchone()
         views = [dict(v) for v in self.db.execute("select agent, view from council_views where council=?", (cid,))]
         label, dissent = _tally(views, chair_text)
-        missing = sorted(set(self._responders()) - {v["agent"] for v in views})
+        missing = sorted(self._asked(cid) - {v["agent"] for v in views})
         answer = f"{label}: {chair_text}"
         if dissent:
             answer += "\ndissent: " + "; ".join(f"{a} ({v})" for a, v in dissent)
@@ -568,13 +758,14 @@ class Hub:
     # ---- brain switch -------------------------------------------------------------------
     def brain_for(self, agent):
         with self.lock:
-            sw = self.db.execute("select * from switches where agent=?", (agent,)).fetchone()
+            sw = self.db.execute("select * from switches where agent=? and status='issued'", (agent,)).fetchone()
             if not sw:
                 return None
             soul = (self.db.execute("select soul from roles where name=?", (sw["role"],)).fetchone() or {"soul": ""})["soul"]
             prod = self.db.execute("select brief from products where name=?", (sw["product"],)).fetchone()
             memory = f"# MEMORY.md (product: {sw['product']})\n{prod['brief'] if prod else ''}"
-            return {"product": sw["product"], "role": sw["role"], "soul": soul, "memory": memory}
+            return {"product": sw["product"], "role": sw["role"], "soul": soul, "memory": memory,
+                    "from_product": self._agent(agent)["current_product"]}
 
     def issue_switch(self, agent, product, role):
         with self.lock:
@@ -587,8 +778,10 @@ class Hub:
                             (agent, product, role, expect, self.clock()))
             self.db.execute(
                 "insert into items(kind, frm, too, text, depth, status, created) values('note','hub',?,?,0,'queued',?)",
-                (agent, f"brain switch\nYour next task is in {product} as {role}. Run: fleet switch \"{product}\" \"{role}\"\n"
-                        f"It saves your current brain to ~/fleet-brains, loads {product}, and reports back. This is the fleet's normal hand-off.",
+                (agent, f"switch to {product} as {role}\nYour next task is in {product} as {role}. Run: fleet switch \"{product}\" \"{role}\"\n"
+                        f"It changes only the role section of SOUL.md and, if the product changes, saves your current "
+                        f"product's memory to ~/fleet-brains/ (it comes back when you return) and loads {product}'s. "
+                        "IDENTITY.md never changes. This is the fleet's normal hand-off between tasks.",
                  self.clock()))
 
     def record_switch(self, agent, product, role, got_hash):
@@ -608,11 +801,18 @@ class Hub:
             product = self._task_product(t["id"])
             if next(self._idle(product, t["role"]), None):
                 continue                                       # someone already fits; _assign_tasks will take it
-            cand = next((n for n in self._idle()
-                         if self.db.execute("select status from switches where agent=?", (n,)).fetchone() is None
-                         or self.db.execute("select status from switches where agent=?", (n,)).fetchone()["status"] != "issued"), None)
-            if cand:
-                self.issue_switch(cand, product, t["role"])
+            if self.db.execute("select 1 from switches where status='issued' and product=? and role=?",
+                               (product, t["role"])).fetchone():
+                continue                                       # a switch to fill this is already on its way
+            pending = {r["agent"] for r in self.db.execute("select agent from switches where status='issued'")}
+            free = [n for n in self._idle() if n not in pending]
+            # hold people constant: files and programs on a VM don't move with a switch, so prefer
+            # someone already on this product (a role-only switch), then someone on no product yet
+            on = lambda n: self._agent(n)["current_product"]
+            ranked = [n for n in free if on(n) == product] + [n for n in free if not on(n)] + \
+                     [n for n in free if on(n) and on(n) != product]
+            if ranked:
+                self.issue_switch(ranked[0], product, t["role"])
 
     # ---- vault --------------------------------------------------------------------------
     def secret_put(self, name, value, scope, by):
@@ -672,10 +872,16 @@ class Hub:
                     self._set("agents", name, login_expires=exp,
                               state="active" if a and a["state"] == "login" else (a["state"] if a else "active"))
                     self.db.execute("update needs_jack set done=1 where done=0 and text like ?", (f"{name}'s Muse login%",))
-            except Exception as e:
+            except muse.LoginError as e:              # muse.ai refused the login: only Jack can fix that
                 with self.lock:
                     self._set("agents", name, state="login")
-                    self._needs_jack(f"{name}'s Muse login couldn't be renewed ({str(e)[:120]}). Sign it in again.")
+                    if not self.db.execute("select 1 from needs_jack where done=0 and text like ?",
+                                           (f"{name}'s Muse login%",)).fetchone():
+                        self._needs_jack(f"{name}'s Muse login couldn't be renewed ({str(e)[:120]}). Sign it in again.")
+            except Exception as e:                    # network blip: log it, retry on the next renewal
+                with self.lock:
+                    self.db.execute("insert into events(agent, dir, text, at) values(?,'err',?,?)",
+                                    (name, f"login renewal: {str(e)[:160]}", self.clock()))
 
     # ---- reads --------------------------------------------------------------------------
     def item(self, iid):
@@ -742,9 +948,20 @@ class Hub:
                             "current": {"id": cur["id"], "text": cur["text"][:200], "sent_at": cur["sent_at"]} if cur else None,
                             "last_in": a["last_in"], "last_out": a["last_out"], "login_expires": a["login_expires"],
                             "product": a["current_product"], "role": a["current_role"], "onboarded": a["onboarded"],
-                            "focus": self._focus(a["name"])})
+                            "focus": self._focus(a["name"]), "free_since": a["free_since"],
+                            "task": next(({"id": t["id"], "title": t["title"], "status": t["status"],
+                                           "product": self._task_product(t["id"])} for t in self._open_tasks(a["name"])), None)})
             return {"now": self.clock(), "agents": out, "needs_jack": self.needs_jack(),
                     "revenue": self.revenue(), "products": self.portfolio()}
+
+    def org(self):
+        with self.lock:
+            return {"ceo": self._chair(),
+                    "board": sorted({"jack"} | {r["name"] for r in self.db.execute("select name from agents where kind='jack'")}),
+                    "pms": {p["name"]: p["pm"] for p in self.db.execute("select name, pm from products order by id")},
+                    "roles": self.roles(),
+                    "agents": [{"name": a["name"], "kind": a["kind"], "product": a["current_product"], "role": a["current_role"]}
+                               for a in self.db.execute("select * from agents where kind!='jack' and state!='parked' order by name")]}
 
     def portfolio(self):
         with self.lock:
@@ -843,7 +1060,9 @@ def serve(hub, host, port, password):
                     name = self._agent()
                     if name:
                         a = hub._agent(name)
+                        tasks = [hub.task(t["id"]) for t in hub._open_tasks(name)]
                         self._json(200, {"agent": name, "product": a["current_product"], "role": a["current_role"],
+                            "tasks": [{k: t[k] for k in ("id", "title", "status", "product", "role")} for t in tasks],
                             "queue": [{k: i[k] for k in ("id", "frm", "text", "status")}
                                       for i in hub.items_for(name) if i["status"] in ("queued", "sent")]})
                 elif u.path == "/api/secret":
@@ -860,6 +1079,10 @@ def serve(hub, host, port, password):
                     self._jack() and self._json(200, {"reads": hub.secret_reads(), "secrets": hub.secret_names()})
                 elif u.path == "/api/council":
                     self._jack() and self._json(200, hub.council(int(q.get("id", 0))) or {})
+                elif u.path == "/api/org":
+                    self._jack() and self._json(200, hub.org())
+                elif u.path == "/api/suggestions":
+                    self._jack() and self._json(200, {"suggestions": hub.suggestions()})
                 elif u.path == "/api/councils":
                     self._jack() and self._json(200, {"councils": hub.councils()})
                 else:
@@ -897,6 +1120,31 @@ def serve(hub, host, port, password):
                     if name:
                         b = self._body()
                         self._json(200, {"ok": hub.record_switch(name, b["product"], b["role"], b["hash"])})
+                elif u.path.startswith("/api/task/"):        # an agent moves a task: note | done | verify | release
+                    name = self._agent()
+                    if name:
+                        b, verb = self._body(), u.path.rsplit("/", 1)[1]
+                        tid = int(b["task"])
+                        if verb == "note":
+                            hub.task_note(name, tid, b["text"])
+                        elif verb == "done":
+                            hub.task_done(name, tid, b["link"])
+                        elif verb == "verify":
+                            hub.task_verify(name, tid, bool(b["ok"]), b.get("reason", ""))
+                        elif verb == "release":
+                            hub.task_release(name, tid)
+                        else:
+                            raise ValueError(f"unknown task action {verb}")
+                        self._json(200, {"ok": True, "task": hub.task(tid)["status"]})
+                elif u.path == "/api/suggest":
+                    name = self._agent()
+                    name and self._json(200, {"id": hub.suggest(name, self._body()["text"])})
+                elif u.path == "/api/suggestion":
+                    name = self._agent()
+                    if name:
+                        b = self._body()
+                        hub.decide_suggestion(name, int(b["id"]), bool(b["accept"]), b.get("note", ""))
+                        self._json(200, {"ok": True})
                 elif u.path == "/api/ingest":              # an agent's telemetryd pushes its machine heartbeat
                     name = self._agent()
                     if name:
@@ -905,7 +1153,9 @@ def serve(hub, host, port, password):
                 elif u.path == "/api/claim":                # an agent registers itself (Jack's code), no hub push
                     b = self._body()
                     if hmac.compare_digest(b.get("code", ""), password):
-                        self._json(200, {"token": hub.add_agent(b["name"], "muse")})
+                        # agents the hub holds a Muse login for get pushed to; anyone else fetches its own work
+                        kind = "muse" if b["name"] in getattr(hub, "accounts", {}) else "poll"
+                        self._json(200, {"token": hub.add_agent(b["name"], kind)})
                     else:
                         self._json(403, {"error": "bad claim code"})
                 elif u.path == "/api/jack/send":           # Jack messages an agent straight from the dashboard
@@ -928,8 +1178,38 @@ def serve(hub, host, port, password):
                 elif u.path == "/api/jack/task":
                     if self._jack():
                         b = self._body()
-                        self._json(200, {"id": hub.add_task(int(b["project"]), b["title"], b.get("role", "developer"),
-                                                            b.get("done_def", ""), blocked_by=b.get("blocked_by") or [])})
+                        self._json(200, {"id": hub.add_task(int(b["project"]), b["title"], b.get("role", "engineer"),
+                                                            b.get("done_def", ""), blocked_by=[int(x) for x in b.get("blocked_by") or []],
+                                                            by="jack")})
+                elif u.path == "/api/jack/seat":           # any seat can be held by an agent, Jack or Darragh
+                    if self._jack():
+                        b = self._body()
+                        hub.seat(b["role"], b.get("who") or None)
+                        self._json(200, {"ok": True})
+                elif u.path == "/api/jack/pm":
+                    if self._jack():
+                        b = self._body()
+                        hub.set_pm(b["product"], b.get("who") or None)
+                        self._json(200, {"ok": True})
+                elif u.path == "/api/jack/role":
+                    if self._jack():
+                        b = self._body()
+                        hub.set_role(b["name"].strip(), b["soul"])
+                        self._json(200, {"ok": True})
+                elif u.path == "/api/jack/place":           # put an agent on a product in a role (no file moves)
+                    if self._jack():
+                        b = self._body()
+                        hub.place(b["agent"], b.get("product") or None, b.get("role") or None)
+                        self._json(200, {"ok": True})
+                elif u.path == "/api/jack/suggestion":
+                    if self._jack():
+                        b = self._body()
+                        hub.decide_suggestion("jack", int(b["id"]), bool(b["accept"]), b.get("note", ""))
+                        self._json(200, {"ok": True})
+                elif u.path == "/api/jack/release":
+                    if self._jack():
+                        hub.task_release("jack", int(self._body()["task"]))
+                        self._json(200, {"ok": True})
                 elif u.path == "/api/jack/product":
                     if self._jack():
                         b = self._body()
@@ -945,32 +1225,14 @@ def serve(hub, host, port, password):
                         self._json(200, {"council": hub.ask_all("jack", b["question"], chair=b.get("chair") or None)})
                 else:
                     self._json(404, {"error": "not found"})
+            except PermissionError as e:
+                self._json(403, {"error": str(e)})
             except (ValueError, KeyError) as e:
                 self._json(400, {"error": str(e)})
             except Exception as e:
                 self._json(500, {"error": str(e)})
 
     return ThreadingHTTPServer((host, port), H)
-
-
-def _onboard_message(h, cfg, name):
-    """Build the trusted install the hub sends into an agent's fleet side chat.
-    The agent downloads fleet.py from the hub (short, inspectable) rather than a pasted blob."""
-    token = h.add_agent(name, "muse")                     # a fresh token for this agent
-    url = cfg["public_url"]
-    return (
-        "[trusted: your fleet hub] You're joining the fleet bus; this replaces the Slack listener.\n"
-        "Run exactly this, then reply with the final line it prints:\n\n"
-        f"mkdir -p ~/.fleet && curl -fsS {url}/fleet.py -o ~/.fleet/fleet.py && "
-        f"curl -fsS {url}/telemetryd.py -o ~/.fleet/telemetryd.py && "
-        f"printf '%s' '{token}' > ~/.fleet/token && printf '%s' '{url}' > ~/.fleet/hub && "
-        f"printf '%s' '{name}' > ~/.fleet/agent && chmod 600 ~/.fleet/token && "
-        "( crontab -l 2>/dev/null | grep -vi slack-watch | crontab - ) 2>/dev/null; "
-        "pkill -f telemetryd.py 2>/dev/null; nohup python3 ~/.fleet/telemetryd.py >/dev/null 2>&1 & "
-        "sleep 2; python3 ~/.fleet/fleet.py status\n\n"
-        "Feel free to read either file first — small stdlib scripts that talk to me over HTTPS. "
-        "fleet.py is the message bus; telemetryd.py reports your machine health to the dashboard. "
-        "From now on I reach you here, not through Slack, so you no longer need to run listen.py.")
 
 
 def _revenue_fetch(h, cfg):
@@ -1000,8 +1262,12 @@ def main(cfg_path, *args):
     import muse
     accounts = cfg["accounts"]
     parked = set(cfg.get("parked", []))
-    transport = muse.MuseTransport(cfg["muse_cli"], accounts)
-    h = Hub(cfg["db"], transport)
+    muse_t = muse.MuseTransport(cfg["muse_cli"], accounts)
+    h = Hub(cfg["db"], None)
+    vault = lambda name: (h.db.execute("select value from secrets where name=?", (name,)).fetchone() or {"value": None})["value"]
+    slack_t = muse.SlackTransport(token=lambda: vault("slack-bot-token"), users=cfg.get("slack_users", {"dot": "dot"}))
+    h.transport = muse.KindRouter(lambda n: h._agent(n)["kind"], muse=muse_t, slack=slack_t)
+    h.accounts = accounts
     for name in accounts:
         if not h._agent(name):
             h.add_agent(name, "muse")
@@ -1013,20 +1279,11 @@ def main(cfg_path, *args):
     if cmd == "token":
         print(h.add_agent(args[1], cfg.get("kinds", {}).get(args[1], "poll")))
         return
-    if cmd == "onboard":
-        name = args[1]
-        transport.deliver(name, _onboard_message(h, cfg, name))
-        print(f"sent onboarding to {name}; it will install fleet and call the hub back")
-        return
-    if cmd == "cutover":
-        go = "--go" in args
-        targets = [n for n in accounts if n not in parked]
-        if not go:
-            print(f"DRY RUN — would onboard {len(targets)} agents (parked agents are skipped). Add --go to send.")
-            return
-        for name in targets:
-            transport.deliver(name, _onboard_message(h, cfg, name))
-            print(f"onboarded {name}")
+    if cmd == "reset-chat":                  # open fresh fleet side chats (each starts with the intro)
+        for name in args[1:] or [n for n in accounts if n not in parked]:
+            muse_t.reset(name)
+            muse_t.session(name)                 # opens it now, with the intro as its first message
+            print(f"{name}: new fleet side chat opened with the intro")
         return
     if cmd in ("product", "project", "task", "seat", "role", "place", "park", "wake", "secret"):
         _admin(h, cmd, args[1:])
@@ -1039,7 +1296,7 @@ def main(cfg_path, *args):
         while True:
             try:
                 if time.time() - last_renew > 86400:
-                    h.renew_logins(accounts)
+                    h.renew_logins({n: d for n, d in accounts.items() if n not in parked})
                     last_renew = time.time()
                 if time.time() - last_rev > 3600:
                     h.pull_revenue(lambda: _revenue_fetch(h, cfg))
@@ -1050,7 +1307,7 @@ def main(cfg_path, *args):
             time.sleep(15)
 
     sys.stdout = sys.stderr = log           # never block on a dead console (hidden window / service with no stdout)
-    if cfg.get("loop", True):               # the muse-pushing background loop; off = pure server (no Muse-wall pushes)
+    if cfg.get("loop", True):               # assigns, nudges and delivers to fleet side chats; off = pure server
         threading.Thread(target=loop, daemon=True).start()
     log.write(time.strftime("%F %T ") + f"hub up on {cfg.get('host', '127.0.0.1')}:{cfg['port']}\n")
     serve(h, cfg.get("host", "127.0.0.1"), cfg["port"], cfg["password"]).serve_forever()

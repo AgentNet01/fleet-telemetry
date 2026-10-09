@@ -15,18 +15,21 @@ def new_hub():
 
 
 def stranding():
-    # an assigned task whose owner goes silent is released, not stranded at 'working'
+    # a task whose owner goes silent isn't stranded: it's never taken away on a timer (long tasks are
+    # normal — company_spec G1), the owner is nudged after 12 h, and Jack/PM/CEO can release it
     h, muse, clock = new_hub()
     p = h.add_product("P", brief="b"); pr = h.add_project(p, "x")
-    h.add_agent("Zoe", "muse"); h.place("Zoe", "P", "developer")
-    t = h.add_task(pr, "build", role="developer", done_def="works")
+    h.add_agent("Zoe", "muse"); h.place("Zoe", "P", "engineer")
+    t = h.add_task(pr, "build", role="engineer", done_def="works")
     h.tick()
     assert h.task(t)["owner"] == "Zoe" and h.task(t)["status"] == "working", h.task(t)
-    clock.go(11 * 60); h.tick()            # +11m: resend the task to the silent owner
-    clock.go(11 * 60); h.tick()            # +22m: give up and release the task
-    task = h.task(t)
-    assert task["status"] == "ready" and task["owner"] is None, f"a silent owner releases the task: {task}"
-    assert {a["name"]: a for a in h.board()["agents"]}["Zoe"]["state"] == "unresponsive"
+    clock.go(22 * 60); h.tick()
+    assert h.task(t)["owner"] == "Zoe", f"not released after 22 min: {h.task(t)}"
+    clock.go(12 * 3600); h.tick()
+    assert h.task(t)["owner"] == "Zoe" and any("build" in m for m in muse.sent["Zoe"][1:]), \
+        f"a silent owner is nudged, not stripped of the task: {muse.sent['Zoe']}"
+    h.task_release("jack", t)
+    assert h.task(t)["status"] == "ready" and h.task(t)["owner"] is None, h.task(t)
 
     # a chair that never answers resolves the council instead of stranding the asker
     h2, muse2, clock2 = new_hub()

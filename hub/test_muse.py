@@ -1,7 +1,11 @@
 """Muse transport (against fake_muse_cli.py) and daily login renewal (against a stub sign-in check).
 
-    python3 test_muse.py
+    python3 test_muse.py                  # transport + renewal
+    python3 test_muse.py side_chat_only   # every hub message goes to the agent's fleet side chat
+    python3 test_muse.py intro            # a new fleet side chat opens with the hub's introduction
+    python3 test_muse.py slack            # dot, proxied over Slack until Darragh connects it
 """
+import json
 import os
 import sys
 import tempfile
@@ -75,6 +79,86 @@ def renewal():
     print("renewal OK")
 
 
+def fake_state(d):
+    return json.load(open(os.path.join(d, "fake_state.json")))
+
+
+def user_messages(d, sid):
+    return [e["payload"]["display_text"] for e in fake_state(d)["events"]
+            if e["event_name"] == "message.user" and e["chat_context"]["chat_id"] == sid]
+
+
+def side_chat_only():
+    root = tempfile.mkdtemp()
+    d = account(root, "boboe-5")
+    t = muse.MuseTransport([sys.executable, os.path.join(HERE, "fake_muse_cli.py")], {"Boboe 5": d})
+    h = hub.Hub(os.path.join(tempfile.mkdtemp(), "hub.db"), t, Clock())
+    h.add_agent("Boboe 5", "muse"); h.add_agent("Boboe 6", "muse")
+    h.ask("Boboe 6", "Boboe 5", "can you check the price?")
+    h.tick()
+    sid = t.session("Boboe 5")
+    every = [e for e in fake_state(d)["events"] if e["event_name"] == "message.user"]
+    assert every and all(e["chat_context"]["chat_id"] == sid for e in every), "hub messages only ever go to the fleet side chat"
+    assert fake_state(d)["sessions"] == [sid], "exactly one fleet side chat"
+    print("side_chat_only OK")
+
+
+def intro():
+    root = tempfile.mkdtemp()
+    d = account(root, "boboe-5")
+    t = muse.MuseTransport([sys.executable, os.path.join(HERE, "fake_muse_cli.py")], {"Boboe 5": d})
+    t.deliver("Boboe 5", "first real message")
+    msgs = user_messages(d, t.session("Boboe 5"))
+    assert len(msgs) == 2 and msgs[1] == "first real message", f"intro: the intro comes first, once: {msgs}"
+    assert "fleet task" in msgs[0] and "side chat" in msgs[0].lower(), f"intro: says what this chat is for: {msgs[0]!r}"
+    old = t.session("Boboe 5")
+    t.reset("Boboe 5")
+    t.deliver("Boboe 5", "after reset")
+    assert t.session("Boboe 5") != old, "intro: reset opens a fresh fleet side chat"
+    assert user_messages(d, t.session("Boboe 5"))[0] == msgs[0], "intro: the fresh chat opens with the intro too"
+    print("intro OK")
+
+
+def slack():
+    calls = []
+
+    def api(method, **params):
+        calls.append((method, params))
+        if method == "users.list":
+            return {"members": [{"id": "U0DOT", "name": "darragh.buckley1812-dot", "profile": {"display_name": "dot"}},
+                                {"id": "U0JACK", "name": "jack", "profile": {"display_name": "jack"}}]}
+        if method == "conversations.open":
+            return {"channel": {"id": "D0DOT"}}
+        if method == "chat.postMessage":
+            return {"ts": "1700000100.000100"}
+        if method == "conversations.history":
+            return {"messages": [{"user": "U0DOT", "ts": "1700000200.000200", "text": "on it — PMs asked"},
+                                 {"bot_id": "B0HUB", "ts": "1700000100.000100", "text": "our own message"},
+                                 {"user": "U0DOT", "ts": "1700000000.000000", "text": "older than our message"}]}
+        raise AssertionError(method)
+
+    t = muse.SlackTransport(token=lambda: "xoxb-test", users={"dot": "dot"}, api=api)
+    mark = t.deliver("dot", "4 agents idle over 12 h")
+    assert ("chat.postMessage", {"channel": "D0DOT", "text": "4 agents idle over 12 h"}) in calls, calls
+    assert [text for _, text in t.replies("dot", mark)] == ["on it — PMs asked"], "only dot's later messages"
+
+    none = muse.SlackTransport(token=lambda: None, users={"dot": "dot"}, api=api)
+    try:
+        none.deliver("dot", "x")
+        raise AssertionError("no token must fail loudly, not drop the message")
+    except muse.LoginError as e:
+        assert "slack-bot-token" in str(e), e
+
+    h = hub.Hub(os.path.join(tempfile.mkdtemp(), "hub.db"), None, Clock())
+    from test_hub import FakeMuse
+    h.transport = FakeMuse()
+    h.add_agent("dot", "slack"); h.add_agent("Boboe 5", "muse")
+    h.ask("Boboe 5", "dot", "which product first?")
+    h.tick()
+    assert any("which product first?" in m for m in h.transport.sent.get("dot", [])), "the hub pushes to a slack agent like a muse one"
+    print("slack OK")
+
+
 if __name__ == "__main__":
-    transport()
-    renewal()
+    {"side_chat_only": side_chat_only, "intro": intro, "slack": slack}.get(
+        sys.argv[1] if len(sys.argv) > 1 else "", lambda: (transport(), renewal()))()

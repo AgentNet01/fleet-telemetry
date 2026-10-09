@@ -8,7 +8,14 @@
     fleet secret get <name>          read a secret you're allowed to
     fleet secret put <name> [--scope agent|product|fleet]   store a secret (value on stdin)
     fleet switch "<product>" "<role>"   switch your brain (run when the hub tells you to)
-    fleet status                     your product, role and what's waiting for you
+    fleet status                     your product, role, your tasks and what's waiting for you
+    fleet task note <id> "<text>"    progress on a task you hold (restarts its reminder clock)
+    fleet task done <id> <link>      finish a task; the link is the evidence (commit, file, URL)
+    fleet task verify <id> pass      approve a task you were asked to verify
+    fleet task verify <id> fail "<reason>"   send it back to its holder with the reason
+    fleet task release <id>          put a task back up for grabs (CEO / the product's PM only)
+    fleet suggest "<text>"           suggest a change to your PM and the CEO
+    fleet suggestion accept|reject <id> ["<note>"]   decide a suggestion (CEO / the product's PM)
 
 Config: ~/.fleet/token and ~/.fleet/hub (or FLEET_TOKEN / FLEET_HUB / FLEET_HOME).
 If the hub can't be reached, `ask` and `reply` are kept in ~/.fleet/outbox and sent,
@@ -17,6 +24,7 @@ exactly once, by your next `fleet` command.
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import urllib.error
@@ -35,12 +43,26 @@ def conf(name, env):
         return f.read().strip()
 
 
+def route():
+    """(hub base URL, opener) — the route setup.py proved from this VM (the chat turn's own proxy
+    refuses the hub's tailnet address), else ~/.fleet/hub directly."""
+    if os.environ.get("FLEET_HUB"):
+        return os.environ["FLEET_HUB"].rstrip("/"), urllib.request.build_opener()
+    ing, pc = os.path.join(HOME, "ingest"), os.path.join(HOME, "proxy.conf")
+    base = open(ing).read().strip().rsplit("/api/ingest", 1)[0] if os.path.exists(ing) else conf("hub", "FLEET_HUB").rstrip("/")
+    if os.path.exists(pc):
+        p = open(pc).read().strip()
+        return base, urllib.request.build_opener(urllib.request.ProxyHandler({"http": p, "https": p}))
+    return base, urllib.request.build_opener()
+
+
 def call(method, path, body=None):
-    req = urllib.request.Request(conf("hub", "FLEET_HUB").rstrip("/") + path, method=method,
+    base, op = route()
+    req = urllib.request.Request(base + path, method=method,
                                  data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Authorization": "Bearer " + conf("token", "FLEET_TOKEN"),
                                           "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with op.open(req, timeout=15) as r:
         return json.loads(r.read())
 
 
@@ -70,27 +92,56 @@ def write(path, body):
         return None
 
 
+ROLE_START, ROLE_END = "<!-- fleet-role -->", "<!-- /fleet-role -->"
+
+
+def _brain_dir(home, product):
+    return os.path.join(home, "fleet-brains", re.sub(r"[^\w.-]+", "_", product))
+
+
 def do_switch(product, role):
-    """Agent side of a brain switch: save the current brain, load the hub's target, report the hash.
-    Runs on a VM only — it rewrites ~/SOUL.md and ~/MEMORY.md."""
+    """Agent side of a switch, run between tasks. IDENTITY.md is never touched. SOUL.md keeps everything
+    outside the fleet-role block; only that block changes. Changing product saves this product's
+    MEMORY.md + memory/ to ~/fleet-brains/<product>/ and brings back the target's (or its starter brief)."""
     home = os.path.expanduser("~")
     brain = call("GET", "/api/brain")
-    if not brain.get("soul"):
-        print("No brain switch is pending for you."); return 1
-    saved = os.path.join(home, "fleet-brains", brain.get("from_product") or "previous")
-    os.makedirs(saved, exist_ok=True)
-    for f in ("IDENTITY.md", "SOUL.md", "MEMORY.md"):
-        if os.path.exists(os.path.join(home, f)):
-            shutil.copy2(os.path.join(home, f), saved)
-    if os.path.isdir(os.path.join(home, "memory")):
-        shutil.copytree(os.path.join(home, "memory"), os.path.join(saved, "memory"), dirs_exist_ok=True)
-    with open(os.path.join(home, "SOUL.md"), "w") as f:
-        f.write(brain["soul"])
-    with open(os.path.join(home, "MEMORY.md"), "w") as f:
-        f.write(brain["memory"])
+    if not brain.get("soul") or brain.get("product") != product or brain.get("role") != role:
+        print("No switch to that product and role is pending for you."); return 1
+    cur = brain.get("from_product")
+    if cur != product:
+        mem_file, mem_dir = os.path.join(home, "MEMORY.md"), os.path.join(home, "memory")
+        if cur:                                   # save first; nothing is removed until the copy exists
+            dst = _brain_dir(home, cur)
+            tmp = dst + ".saving"
+            shutil.rmtree(tmp, ignore_errors=True); os.makedirs(tmp)
+            if os.path.exists(mem_file):
+                shutil.copy2(mem_file, tmp)
+            if os.path.isdir(mem_dir):
+                shutil.copytree(mem_dir, os.path.join(tmp, "memory"))
+            shutil.rmtree(dst, ignore_errors=True); os.rename(tmp, dst)
+        shutil.rmtree(mem_dir, ignore_errors=True)
+        src = _brain_dir(home, product)
+        if os.path.exists(os.path.join(src, "MEMORY.md")):
+            shutil.copy2(os.path.join(src, "MEMORY.md"), mem_file)
+            if os.path.isdir(os.path.join(src, "memory")):
+                shutil.copytree(os.path.join(src, "memory"), mem_dir)
+        else:                                     # first time on this product: its starter brief
+            with open(mem_file, "w") as f:
+                f.write(brain["memory"])
+        os.makedirs(mem_dir, exist_ok=True)
+    soul_path = os.path.join(home, "SOUL.md")
+    soul = open(soul_path).read() if os.path.exists(soul_path) else ""
+    block = f"{ROLE_START}\n{brain['soul']}\n{ROLE_END}\n"
+    if ROLE_START in soul and ROLE_END in soul:
+        soul = soul[:soul.index(ROLE_START)] + block + soul[soul.index(ROLE_END) + len(ROLE_END):].lstrip("\n")
+    else:
+        soul = soul + ("" if not soul or soul.endswith("\n") else "\n") + block
+    with open(soul_path, "w") as f:
+        f.write(soul)
     got = hashlib.sha256((brain["soul"] + "\n" + brain["memory"]).encode()).hexdigest()
     call("POST", "/api/switched", {"product": product, "role": role, "hash": got})
-    print(f"Switched to {product} as {role}; previous brain saved under ~/fleet-brains/.")
+    where = f"{cur}'s memory is saved in ~/fleet-brains/ and comes back when you return; " if cur and cur != product else ""
+    print(f"Switched to {product} as {role}. {where}your identity and the rest of your soul are unchanged.")
     return 0
 
 
@@ -124,8 +175,30 @@ def main(args):
         flush()
         s = call("GET", "/api/status")
         where = f"You are on {s['product']} as {s['role']}." if s.get("product") else "You are not placed on a product yet."
+        tasks = "\n".join(f"task #{t['id']} {t['status']:9} {t['title']} ({t['product']}, {t['role']})"
+                          for t in s.get("tasks", [])) or "No open tasks."
         q = "\n".join(f"#{i['id']} {i['status']:6} from {i['frm']}: {i['text'][:80]}" for i in s["queue"]) or "Nothing waiting."
-        print(where + "\n" + q)
+        print(where + "\n" + tasks + "\n" + q)
+    elif cmd == "task" and len(args) >= 3 and args[1] in ("note", "done", "verify", "release"):
+        verb, tid = args[1], int(args[2])
+        body = {"task": tid}
+        if verb == "note" and len(args) == 4:
+            body["text"] = args[3]
+        elif verb == "done" and len(args) == 4:
+            body["link"] = args[3]
+        elif verb == "verify" and len(args) >= 4 and args[3] in ("pass", "fail"):
+            body.update(ok=args[3] == "pass", reason=" ".join(args[4:]))
+        elif verb != "release":
+            print(__doc__); return 2
+        call("POST", "/api/task/" + verb, body)
+        print({"note": f"Noted on #{tid}.", "done": f"#{tid} is done and goes to verification.",
+               "verify": f"Verification of #{tid} recorded.", "release": f"#{tid} released."}[verb])
+    elif cmd == "suggest" and len(args) == 2:
+        r = call("POST", "/api/suggest", {"text": args[1]})
+        print(f"Suggestion #{r['id']} sent to your PM and the CEO.")
+    elif cmd == "suggestion" and len(args) >= 3 and args[1] in ("accept", "reject"):
+        call("POST", "/api/suggestion", {"id": int(args[2]), "accept": args[1] == "accept", "note": " ".join(args[3:])})
+        print(f"Suggestion #{args[2]} {args[1]}ed.")
     else:
         print(__doc__); return 2
     return 0

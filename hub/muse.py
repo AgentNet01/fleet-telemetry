@@ -6,8 +6,17 @@ USERPROFILE/HOME. A genuine reply is a finished `message.assistant` event with a
 """
 import json
 import os
+import re
 import subprocess
 import time
+import urllib.parse
+import urllib.request
+
+INTRO = ("This side chat is where the fleet hub posts your work: tasks, verification requests, questions "
+         "from other agents, and a reminder now and then while one of your tasks is open. You don't need to "
+         "answer here — use the fleet command (~/.fleet/fleet): `fleet status` shows what you hold, "
+         "`fleet task note <id> \"...\"` posts progress, `fleet task done <id> <link>` finishes a task, "
+         "`fleet reply <id> \"...\"` answers a question. Your main chat stays yours.")
 
 
 class LoginError(Exception):
@@ -39,7 +48,14 @@ class MuseTransport:
         sid = self._run(name, "session-start", "--title", "fleet")["session_id"]
         with open(path, "w") as f:
             f.write(sid)
+        self._run(name, "send", INTRO, "--thread", sid, "--wait", "8")   # a new fleet chat explains itself first
         return sid
+
+    def reset(self, name):
+        """Forget this agent's fleet side chat; the next message opens a fresh one (with the intro)."""
+        path = os.path.join(self.accounts[name], "fleet_session.txt")
+        if os.path.exists(path):
+            os.remove(path)
 
     def _events(self, name, limit):
         r = self._run(name, "raw", "chat.history", "--body", json.dumps({"limit": limit, "session_id": self.session(name)}))
@@ -100,3 +116,73 @@ def renew(account_dir, post=None, now=None):
         f.write("; ".join(f"{k}={v}" for k, v in jar.items()) + "\n")
     os.replace(tmp, path)
     return expires
+
+
+class SlackTransport:
+    """An agent reached over Slack (dot, until Darragh connects it to the hub): the hub's bot DMs it,
+    and its later messages in that DM are its replies. The token comes from the vault on every call."""
+
+    def __init__(self, token, users, api=None):
+        self.token, self.users, self.api = token, users, api or self._http
+        self._uid, self._dm = {}, {}
+
+    def _http(self, method, **params):
+        req = urllib.request.Request("https://slack.com/api/" + method, data=urllib.parse.urlencode(params).encode(),
+                                     headers={"Authorization": "Bearer " + self.token()})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            out = json.load(r)
+        if not out.get("ok"):
+            raise RuntimeError(f"slack {method}: {out.get('error')}")
+        return out
+
+    def _ready(self, name):
+        if not self.token():
+            raise LoginError("no slack-bot-token in the vault — add a Slack bot token (scopes chat:write, "
+                             "im:write, im:history, users:read) so the hub can reach " + name)
+        if name not in self._uid:
+            want = self.users[name]
+            if re.fullmatch(r"U[A-Z0-9]{6,}", want):
+                self._uid[name] = want
+            else:
+                for m in self.api("users.list")["members"]:
+                    names = {m.get("name"), (m.get("profile") or {}).get("display_name"), (m.get("profile") or {}).get("real_name")}
+                    if want.lower() in {str(n).lower() for n in names if n}:
+                        self._uid[name] = m["id"]
+                        break
+                else:
+                    raise LoginError(f"no Slack user named {want!r}")
+        if name not in self._dm:
+            self._dm[name] = self.api("conversations.open", users=self._uid[name])["channel"]["id"]
+        return self._uid[name], self._dm[name]
+
+    def deliver(self, name, text):
+        uid, ch = self._ready(name)
+        return float(self.api("chat.postMessage", channel=ch, text=text)["ts"])
+
+    def replies(self, name, after):
+        uid, ch = self._ready(name)
+        msgs = self.api("conversations.history", channel=ch, oldest=str(after or 0))["messages"]
+        return sorted((float(m["ts"]), m.get("text", "")) for m in msgs
+                      if m.get("user") == uid and float(m["ts"]) > (after or 0))
+
+    def session(self, name):
+        return "slack:" + name
+
+
+class KindRouter:
+    """One transport per agent kind ('muse' side chats, 'slack' DMs); the hub sees a single transport."""
+
+    def __init__(self, kind_of, **by_kind):
+        self.kind_of, self.by_kind = kind_of, by_kind
+
+    def _for(self, name):
+        return self.by_kind[self.kind_of(name)]
+
+    def deliver(self, name, text):
+        return self._for(name).deliver(name, text)
+
+    def replies(self, name, after):
+        return self._for(name).replies(name, after)
+
+    def session(self, name):
+        return self._for(name).session(name)

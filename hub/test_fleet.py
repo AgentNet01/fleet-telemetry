@@ -1,7 +1,8 @@
 """The `fleet` command and the dashboard, against a real hub server on a temp port.
 
     python3 test_fleet.py             # inbox/reply, bad token, outbox while the hub is down
-    python3 test_fleet.py dashboard   # password, page sections, board JSON
+    python3 test_fleet.py dashboard   # password, page sections, board JSON, org/seat/suggestion endpoints
+    python3 test_fleet.py cli         # fleet task note|done|verify|release, fleet suggest / suggestion
 """
 import base64
 import json
@@ -77,6 +78,18 @@ def poll_agent_flow():
     print("fleet OK")
 
 
+def post(port, path, body, password=PASSWORD):
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=json.dumps(body).encode(), method="POST",
+                                 headers={"Content-Type": "application/json"})
+    if password:
+        req.add_header("Authorization", "Basic " + base64.b64encode(f"jack:{password}".encode()).decode())
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        return e.code, {}
+
+
 def get(port, path, password=None):
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}")
     if password:
@@ -122,8 +135,77 @@ def dashboard():
     assert any(t["title"] == "cover image" and t.get("blocked_by") for t in tasks), "a task shows its blocker"
     coun = json.loads(get(port, "/api/council?id=%d" % cid, PASSWORD)[1])
     assert coun["question"] == "ship it?", coun
+
+    # running the company: seats, PMs, roles, suggestions, releasing a task
+    for section in ("Org", "Suggestions"):
+        assert section in page, f"dashboard is missing the {section} section"
+    assert post(port, "/api/jack/seat", {"role": "ceo", "who": "jack"})[0] == 200
+    assert post(port, "/api/jack/pm", {"product": "Templates", "who": "Boboe 3"})[0] == 200
+    assert post(port, "/api/jack/role", {"name": "engineer", "soul": "You build."})[0] == 200
+    org = json.loads(get(port, "/api/org", PASSWORD)[1])
+    assert org["ceo"] == "jack" and org["pms"]["Templates"] == "Boboe 3" and org["roles"]["engineer"] == "You build.", org
+    assert get(port, "/api/org")[0] == 401, "org needs the password"
+    h.place("Boboe 3", "Templates", "optimizer")
+    sid = h.suggest("Boboe 3", "bundle the templates")
+    sugs = json.loads(get(port, "/api/suggestions", PASSWORD)[1])["suggestions"]
+    assert sugs and sugs[0]["text"] == "bundle the templates", sugs
+    assert post(port, "/api/jack/suggestion", {"id": sid, "accept": False, "note": "not yet"})[0] == 200
+    assert h.suggestions()[0]["status"] == "rejected", h.suggestions()
+    h.place("Boboe 3", "Templates", "engineer")
+    t3 = h.add_task(prj, "price it", role="engineer", done_def="a price")
+    h.tick()
+    a3 = {a["name"]: a for a in json.loads(get(port, "/api/board", PASSWORD)[1])["agents"]}["Boboe 3"]
+    assert a3["task"] and a3["task"]["title"] in ("build sheet", "price it"), f"agent card shows the held task: {a3}"
+    assert "free_since" in a3, a3
+    held = a3["task"]["id"]
+    assert post(port, "/api/jack/release", {"task": held})[0] == 200
+    assert h.task(held)["owner"] is None, h.task(held)
     srv.shutdown()
     print("dashboard OK")
+
+
+def cli():
+    h, srv, port, tok = start()
+    h.evidence_ok = lambda link: True
+    home = tempfile.mkdtemp()
+    pid = h.add_product("Shop", brief="b"); prj = h.add_project(pid, "launch")
+    h.place("Boboe 3", "Shop", "engineer"); h.place("dot", "Shop", "engineer")
+    t = h.add_task(prj, "write the listing", role="engineer", done_def="x")
+    h.tick()
+    owner = h.task(t)["owner"]
+    other = "dot" if owner == "Boboe 3" else "Boboe 3"
+    r = fleet(port, tok[owner], "status", home=home)
+    assert r.returncode == 0 and f"#{t}" in r.stdout and "write the listing" in r.stdout, f"status shows my task: {r}"
+    r = fleet(port, tok[owner], "task", "note", str(t), "draft done", home=home)
+    assert r.returncode == 0 and h.task(t)["progress_note"] == "draft done", (r, h.task(t))
+    r = fleet(port, tok[other], "task", "done", str(t), "https://example.com/e", home=home)
+    assert r.returncode != 0 and "403" in r.stderr, f"only the holder can finish it: {r}"
+    r = fleet(port, tok[owner], "task", "done", str(t), "https://example.com/e", home=home)
+    assert r.returncode == 0 and h.task(t)["status"] == "verifying", (r, h.task(t))
+    h.tick()
+    r = fleet(port, tok[other], "task", "verify", str(t), "fail", "totals off", home=home)
+    assert r.returncode == 0 and h.task(t)["status"] == "working", (r, h.task(t))
+    fleet(port, tok[owner], "task", "done", str(t), "https://example.com/e2", home=home)
+    h.tick()
+    r = fleet(port, tok[other], "task", "verify", str(t), "pass", home=home)
+    assert r.returncode == 0 and h.task(t)["status"] == "done", (r, h.task(t))
+
+    t2 = h.add_task(prj, "another", role="engineer", done_def="x")
+    h.tick()
+    r = fleet(port, tok[h.task(t2)["owner"]], "task", "release", str(t2), home=home)
+    assert r.returncode != 0 and "403" in r.stderr, f"workers can't release: {r}"
+
+    h.place("dot", "Shop", "optimizer")
+    r = fleet(port, tok["dot"], "suggest", "bigger thumbnails", home=home)
+    assert r.returncode == 0 and h.suggestions()[0]["text"] == "bigger thumbnails", (r, h.suggestions())
+    sid = h.suggestions()[0]["id"]
+    r = fleet(port, tok["Boboe 3"], "suggestion", "accept", str(sid), home=home)
+    assert r.returncode != 0 and "403" in r.stderr, f"only the PM or CEO decides: {r}"
+    h.set_pm("Shop", "Boboe 3")
+    r = fleet(port, tok["Boboe 3"], "suggestion", "accept", str(sid), "next listing", home=home)
+    assert r.returncode == 0 and h.suggestions()[0]["status"] == "accepted", (r, h.suggestions())
+    srv.shutdown()
+    print("cli OK")
 
 
 def company():
@@ -155,4 +237,4 @@ def company():
 
 
 if __name__ == "__main__":
-    {"dashboard": dashboard, "company": company}.get(sys.argv[1] if len(sys.argv) > 1 else "", poll_agent_flow)()
+    {"dashboard": dashboard, "company": company, "cli": cli}.get(sys.argv[1] if len(sys.argv) > 1 else "", poll_agent_flow)()

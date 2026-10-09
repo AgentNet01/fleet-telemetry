@@ -1,7 +1,7 @@
 """Hub rules against a fake transport and clock.
 
     python3 test_hub.py          # routing, relays, no loops, depth limit
-    python3 test_hub.py timing   # resend, unresponsive, one in flight, quiet window
+    python3 test_hub.py timing   # no resend, unresponsive after 20 min, one in flight, quiet window
 """
 import os
 import sys
@@ -111,11 +111,9 @@ def timing():
     second = h.ask("Boboe 7", "Boboe 3", "two")
     h.tick()
     assert len(muse.sent["Boboe 3"]) == 1, "one item in flight per agent"
-    clock.go(599); h.tick()
-    assert len(muse.sent["Boboe 3"]) == 1, "no resend before 10 min"
+    clock.go(1199); h.tick()
+    assert len(muse.sent["Boboe 3"]) == 1, "the same text is never sent twice (company_spec: no repeats)"
     clock.go(2); h.tick()
-    assert len(muse.sent["Boboe 3"]) == 2 and "resent: no reply seen" in muse.sent["Boboe 3"][1], muse.sent
-    clock.go(601); h.tick()
     agent = {a["name"]: a for a in h.board()["agents"]}["Boboe 3"]
     assert agent["state"] == "unresponsive", agent
     assert h.item(first)["status"] == "failed"

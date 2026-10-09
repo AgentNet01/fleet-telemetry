@@ -1,4 +1,4 @@
-"""Company layer: products, projects, tasks with dependencies, assignment, verify, council.
+"""Company layer: products, projects, tasks with dependencies, assignment, verify, council, org.
 
     python3 test_company.py          # tasks: blocked → ready → assign → done → verify → unblock
     python3 test_company.py council  # ask all → views → one labelled chair answer
@@ -24,48 +24,208 @@ def answer(h, muse, clock, agent, text):
 
 
 def tasks():
+    """blocked → ready → assigned → done (with evidence) → verified by someone else → unblocks the next."""
     h, muse, clock = new_hub()
     pid = h.add_product("Templates", brief="Etsy budgeting templates")
     prj = h.add_project(pid, "launch")
-    for n, role in (("Ada", "developer"), ("Bea", "designer")):
+    for n, role in (("Ada", "engineer"), ("Bea", "designer")):
         h.add_agent(n, "muse")
         h.place(n, pid, role)
-    t1 = h.add_task(prj, "build the sheet", role="developer", done_def="a working .xlsx in the repo")
+    t1 = h.add_task(prj, "build the sheet", role="engineer", done_def="a working .xlsx in the repo")
     t2 = h.add_task(prj, "cover image", role="designer", done_def="a 2000px PNG", blocked_by=[t1])
 
     h.tick()
-    assert any("build the sheet" in t for t in muse.sent.get("Ada", [])), "developer task goes to the developer"
-    assert "Bea" not in muse.sent, "the blocked design task is not sent"
+    assert any("build the sheet" in t for t in muse.sent.get("Ada", [])), "engineer task goes to the engineer"
+    assert not any("cover image" in t for t in muse.sent.get("Bea", [])), "the blocked design task is not sent"
     assert h.task(t2)["status"] == "blocked", h.task(t2)
 
-    # Ada finishes with evidence; a different agent gets the verify
-    answer(h, muse, clock, "Ada", "done. WAKANDA https://github.com/AgentNet01/x/commit/abc")
+    h.task_done("Ada", t1, "https://github.com/AgentNet01/x/commit/abc")
     assert h.task(t1)["status"] == "verifying", h.task(t1)
     h.tick()
-    assert any("verify" in t.lower() and "build the sheet" in t for t in muse.sent.get("Bea", [])), f"verify to a different agent: {muse.sent.get('Bea')}"
-
-    # Bea verifies it passes → t1 done, t2 now ready and assigned to Bea (designer, idle)
-    answer(h, muse, clock, "Bea", "checked it against the definition of done — looks right, passes")
+    assert any("build the sheet" in t and "verify" in t.lower() for t in muse.sent.get("Bea", [])), \
+        f"verify goes to a different agent: {muse.sent.get('Bea')}"
+    h.task_verify("Bea", t1, True)
     assert h.task(t1)["status"] == "done", h.task(t1)
     h.tick()
-    assert any("cover image" in t for t in muse.sent.get("Bea", [])), f"t2 unblocked and assigned once t1 is done: {muse.sent.get('Bea')}"
-    assert h.task(t2)["owner"] == "Bea", h.task(t2)
-
-    # a failed verify reopens the task with the reason
-    h2, muse2, clock2 = new_hub()
-    p = h2.add_product("P", brief="b"); pr = h2.add_project(p, "x")
-    for n in ("Cy", "Di"):
-        h2.add_agent(n, "muse"); h2.place(n, p, "developer")
-    t = h2.add_task(pr, "thing", role="developer", done_def="works")
-    h2.tick()
-    owner = h2.task(t)["owner"]
-    other = "Di" if owner == "Cy" else "Cy"
-    answer(h2, muse2, clock2, owner, "WAKANDA https://example.com/evidence")
-    h2.tick()
-    answer(h2, muse2, clock2, other, "this fails — the numbers don't add up")
-    assert h2.task(t)["status"] in ("ready", "open"), f"a failed verify reopens the task: {h2.task(t)}"
-    assert "numbers don't add up" in (h2.task(t)["progress_note"] or ""), h2.task(t)
+    assert h.task(t2)["owner"] == "Bea", f"t2 unblocked and assigned once t1 is done: {h.task(t2)}"
     print("tasks OK")
+
+
+def lifecycle():
+    """One holder; `fleet task done` closes it; a different agent verifies; nothing is released on a timer."""
+    h, muse, clock = new_hub()
+    pid = h.add_product("P", brief="b"); prj = h.add_project(pid, "x")
+    for n in ("Ada", "Cy"):
+        h.add_agent(n, "muse"); h.place(n, pid, "engineer")
+    t = h.add_task(prj, "the long job", role="engineer", done_def="works")
+    h.tick()
+    owner = h.task(t)["owner"]
+    other = "Cy" if owner == "Ada" else "Ada"
+    assert owner, h.task(t)
+    try:
+        h.task_done(other, t, "https://example.com/x")
+        raise AssertionError("only the holder may mark a task done")
+    except PermissionError:
+        pass
+
+    for _ in range(30):                                   # 30 hours of silence
+        clock.go(3600); h.tick()
+    assert h.task(t)["owner"] == owner and h.task(t)["status"] == "working", \
+        f"a long task is never released by a timer: {h.task(t)}"
+    sends = [m for m in muse.sent.get(owner, []) if "the long job" in m]
+    assert len(set(sends)) == len(sends), "no message is ever sent twice word for word"
+
+    h.task_note(owner, t, "half way, the export works")
+    assert h.task(t)["status"] == "working" and "half way" in h.task(t)["progress_note"], h.task(t)
+
+    h.task_done(owner, t, "https://example.com/evidence")
+    assert h.task(t)["status"] == "verifying", h.task(t)
+    h.tick()
+    assert any("verify" in m.lower() and "the long job" in m for m in muse.sent.get(other, [])), muse.sent.get(other)
+    try:
+        h.task_verify(owner, t, True)
+        raise AssertionError("the author can't verify their own task")
+    except PermissionError:
+        pass
+    h.task_verify(other, t, False, "the totals are off by one")
+    assert h.task(t)["status"] == "working" and h.task(t)["owner"] == owner, f"a failed verify goes back to its holder: {h.task(t)}"
+    h.tick()
+    assert any("totals are off by one" in m for m in muse.sent.get(owner, [])), "the holder is told why"
+    h.task_done(owner, t, "https://example.com/evidence2")
+    h.tick()
+    h.task_verify(other, t, True)
+    assert h.task(t)["status"] == "done", h.task(t)
+
+    t2 = h.add_task(prj, "another", role="engineer", done_def="x")
+    h.tick()
+    holder = h.task(t2)["owner"]
+    try:
+        h.task_release(holder, t2)
+        raise AssertionError("a worker can't release tasks")
+    except PermissionError:
+        pass
+    h.task_release("jack", t2)
+    assert h.task(t2)["owner"] is None and h.task(t2)["status"] == "ready", h.task(t2)
+    assert not any("WAKANDA" in m for ms in muse.sent.values() for m in ms), "no done-word anywhere"
+    print("lifecycle OK")
+
+
+def poll():
+    h, muse, clock = new_hub()
+    pid = h.add_product("P", brief="b"); prj = h.add_project(pid, "x")
+    h.add_agent("Pe", "poll"); h.place("Pe", pid, "engineer")
+    t = h.add_task(prj, "pulled job", role="engineer", done_def="x")
+    h.tick()
+    assert h.task(t)["owner"] == "Pe", f"poll agent never assigned: {h.task(t)}"
+    it = h.inbox("Pe")
+    assert it and "pulled job" in it["text"], it
+    assert h.inbox("Pe") is None, "a delivered task doesn't sit in the inbox forever"
+    print("poll OK")
+
+
+def placement():
+    """Hold people constant: same product first, then a role switch on that product, then another product."""
+    h, muse, clock = new_hub()
+    a = h.add_product("A", brief="a"); b = h.add_product("B", brief="b")
+    pa = h.add_project(a, "x")
+    h.add_agent("Abe", "muse"); h.place("Abe", "B", "engineer")       # right role, other product
+    h.add_agent("Zed", "muse"); h.place("Zed", "A", "designer")       # same product, other role
+    t = h.add_task(pa, "build it", role="engineer", done_def="x")
+    h.tick()
+    assert not any("fleet switch" in m for m in muse.sent.get("Abe", [])), \
+        f"placement: an agent on another product was switched in before one already on A: {muse.sent.get('Abe')}"
+    assert any("fleet switch" in m and '"A"' in m and "engineer" in m for m in muse.sent.get("Zed", [])), \
+        f"placement: the agent already on A takes a role switch: {muse.sent.get('Zed')}"
+
+    h2, muse2, _ = new_hub()
+    a2 = h2.add_product("A", brief="a"); h2.add_product("B", brief="b")
+    p2 = h2.add_project(a2, "x")
+    h2.add_agent("Abe", "muse"); h2.place("Abe", "B", "engineer")
+    t2 = h2.add_task(p2, "build it", role="engineer", done_def="x")
+    h2.tick()
+    assert any("fleet switch" in m and '"A"' in m for m in muse2.sent.get("Abe", [])), \
+        "placement: with nobody on A, someone from another product is switched in"
+    print("placement OK")
+
+
+def switch_between():
+    h, muse, clock = new_hub()
+    a = h.add_product("A", brief="a"); b = h.add_product("B", brief="b")
+    pa, pb = h.add_project(a, "x"), h.add_project(b, "y")
+    h.add_agent("Ann", "muse"); h.place("Ann", "A", "engineer")
+    t = h.add_task(pa, "job on A", role="engineer", done_def="x")
+    h.tick()
+    assert h.task(t)["owner"] == "Ann"
+    h.add_task(pb, "job on B", role="engineer", done_def="x")
+    h.tick(); h.tick()
+    assert not any("fleet switch" in m for m in muse.sent.get("Ann", [])), "never switched while holding a task"
+    print("switch_between OK")
+
+
+def org():
+    h, muse, clock = new_hub()
+    assert sorted(h.roles()) == ["designer", "engineer", "marketer", "optimizer"], h.roles()
+    pid = h.add_product("P", brief="b"); prj = h.add_project(pid, "x")
+    for n in ("Pam", "Cee", "Wes"):
+        h.add_agent(n, "muse")
+    h.set_pm("P", "Pam"); h.seat("ceo", "Cee")
+    try:
+        h.add_task(prj, "x", role="engineer", done_def="y", by="Wes")
+        raise AssertionError("a worker can't create tasks")
+    except PermissionError:
+        pass
+    for who in ("Pam", "Cee", "jack"):
+        assert h.add_task(prj, f"by {who}", role="marketer", done_def="y", by=who)
+    for n in ("M1", "M2"):
+        h.add_agent(n, "muse"); h.place(n, "P", "marketer")
+    h.tick()
+    owners = {h.task(t["id"])["owner"] for pr in h.portfolio() for j in pr["projects"] for t in j["tasks"]}
+    assert {"M1", "M2"} <= owners, f"several agents can hold the same role: {owners}"
+    assert {p["name"]: p["pm"] for p in h.portfolio()}["P"] == "Pam"
+    print("org OK")
+
+
+def suggest():
+    h, muse, clock = new_hub()
+    pid = h.add_product("P", brief="b")
+    for n in ("Opt", "Pam", "Cee", "Wes"):
+        h.add_agent(n, "muse")
+    h.place("Opt", "P", "optimizer"); h.set_pm("P", "Pam"); h.seat("ceo", "Cee")
+    sid = h.suggest("Opt", "use bigger thumbnails")
+    h.tick()
+    for who in ("Pam", "Cee"):
+        assert any("bigger thumbnails" in m for m in muse.sent.get(who, [])), f"{who} sees the suggestion"
+    try:
+        h.decide_suggestion("Wes", sid, True)
+        raise AssertionError("a worker can't decide suggestions")
+    except PermissionError:
+        pass
+    h.decide_suggestion("Pam", sid, True, "do it on the next listing")
+    assert h.suggestions()[0]["status"] == "accepted", h.suggestions()
+    h.tick()
+    assert any("accepted" in m.lower() and "bigger thumbnails" in m for m in muse.sent.get("Opt", [])), "the optimizer hears back"
+    print("suggest OK")
+
+
+def seats():
+    """Seats are interchangeable: an agent, Jack, or Darragh can hold the CEO seat."""
+    h, muse, clock = new_hub()
+    h.add_agent("darragh", "jack")
+    h.add_agent("dot", "slack")
+    for n in ("W1", "W2", "W3", "W4"):
+        h.add_agent(n, "muse")
+    h.seat("ceo", "jack")
+    h.tick(); clock.go(13 * 3600); h.tick()
+    assert any("W1" in n["text"] and "W4" in n["text"] for n in h.needs_jack()), \
+        f"seats: with Jack as CEO the idle note lands in Needs Jack: {h.needs_jack()}"
+    h.seat("ceo", "darragh")
+    clock.go(13 * 3600); h.tick()
+    assert any("Darragh" in n["text"] for n in h.needs_jack()), f"seats: labelled for Darragh: {h.needs_jack()}"
+    h.seat("ceo", "dot")
+    clock.go(13 * 3600); h.tick()
+    assert any("W1" in m for m in muse.sent.get("dot", [])), f"seats: dot (over Slack) gets it: {muse.sent.get('dot')}"
+    assert not any(n in muse.sent for n in ("W1", "W2", "W3", "W4")), "idle agents themselves are never pinged"
+    print("seats OK")
 
 
 def council():
@@ -102,4 +262,5 @@ def council():
 
 
 if __name__ == "__main__":
-    {"council": council}.get(sys.argv[1] if len(sys.argv) > 1 else "", tasks)()
+    {"council": council, "lifecycle": lifecycle, "poll": poll, "placement": placement, "org": org, "suggest": suggest,
+     "seats": seats, "switch_between": switch_between}.get(sys.argv[1] if len(sys.argv) > 1 else "", tasks)()
