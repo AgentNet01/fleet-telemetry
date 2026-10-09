@@ -101,25 +101,41 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
 .coun .view{font-size:13px;color:var(--dim);padding:2px 0}.coun .view b{color:var(--fg)}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--panel3);border:1px solid var(--line);color:var(--fg);padding:9px 16px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:20}
 .toast.show{opacity:1}
-@media(max-width:560px){.hero .big{font-size:36px}.form .r2{grid-template-columns:1fr}.kan{grid-template-columns:repeat(5,74vw)}}
+.fld{display:grid;gap:4px;font-size:12px;color:var(--dim);min-width:0}
+.fld>label{padding-left:2px}
+.free{color:var(--faint);font-size:12px}.free.long{color:var(--warn)}
+.tcard .tn{color:var(--dim);font-size:12px;margin-top:4px;white-space:pre-wrap;word-break:break-word}
+.tcard a{color:var(--accent);font-size:12px;word-break:break-all}
+.tcard .tact{margin-top:6px}
+.orgrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:10px;align-items:center}
+.orgrow .who{font-weight:600}.orgrow .sub{color:var(--dim);font-size:12px}
+.pl{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) minmax(0,1fr) auto;gap:6px;align-items:center}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.sug{display:grid;gap:6px}.sug .meta{color:var(--faint);font-size:12px}
+.sug .st{font-size:12px;font-weight:600}.st.open{color:var(--warn)}.st.accepted{color:var(--ok)}.st.rejected{color:var(--dim)}
+.sug .acts{display:flex;gap:6px;flex-wrap:wrap}
+@media(max-width:560px){.hero .big{font-size:36px}.form .r2{grid-template-columns:1fr}.kan{grid-template-columns:repeat(5,74vw)}
+  .orgrow{grid-template-columns:1fr}.pl{grid-template-columns:1fr 1fr}.pl .who,.pl .btn{grid-column:1/-1}}
 </style>
 </head>
 <body>
 <main>
   <div class="top"><h1><span class="live"></span>Fleet Hub</h1><span class="fresh" id="fresh">Loading…</span></div>
   <div class="hero"><div class="lbl">Revenue · made so far</div><div class="big" id="money">$0.00</div><div class="chips" id="revchips"></div></div>
-  <div class="tabs" id="tabs">
-    <button class="tab" data-tab="overview" aria-selected="true">Overview</button>
-    <button class="tab" data-tab="portfolio">Portfolio</button>
-    <button class="tab" data-tab="council">Council</button>
-    <button class="tab" data-tab="vault">Vault</button>
+  <div class="tabs" id="tabs" role="tablist">
+    <button class="tab" role="tab" data-tab="overview" aria-selected="true">Overview</button>
+    <button class="tab" role="tab" data-tab="portfolio">Portfolio</button>
+    <button class="tab" role="tab" data-tab="org">Org</button>
+    <button class="tab" role="tab" data-tab="suggestions">Suggestions <span id="sugn"></span></button>
+    <button class="tab" role="tab" data-tab="council">Council</button>
+    <button class="tab" role="tab" data-tab="vault">Vault</button>
   </div>
   <section id="overview">
     <h2>Needs Jack <span id="njn"></span></h2>
     <div class="hint">Only you can do these — approvals, logins, payment keys. Dismiss when handled.</div>
     <div class="card nj" id="nj"></div>
     <h2>Agents</h2>
-    <div class="hint">Click an agent for its machine, files, activity, current task, and to message it.</div>
+    <div class="hint">Click an agent for its machine, files, activity, current task, and to message it. Agents with no task are never pinged; when more than three sit free over 12 h the CEO is told.</div>
     <div class="card" id="agents"></div>
   </section>
   <section id="portfolio" hidden>
@@ -131,6 +147,16 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
   <section id="product" hidden>
     <button class="back" data-back="portfolio">← Portfolio</button>
     <div id="productbody"></div>
+  </section>
+  <section id="org" hidden>
+    <h2>Org</h2>
+    <div class="hint">Every seat is interchangeable: an agent, Jack or Darragh can hold it. Anything sent to a board member lands in Needs Jack with their name on it. Agents stay on their product where they can — files and programs on a VM don't move with a switch.</div>
+    <div id="orgbody"></div>
+  </section>
+  <section id="suggestions" hidden>
+    <h2>Suggestions</h2>
+    <div class="hint">Optimizers send ideas to their PM and the CEO with <span class="mono">fleet suggest</span>. The PM, the CEO or the board accepts or rejects; nothing changes until someone decides.</div>
+    <div id="suglist"></div>
   </section>
   <section id="council" hidden>
     <h2>Council</h2>
@@ -163,7 +189,11 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const money = n => "$" + (n || 0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
-let now = Date.now()/1000, openAgent=null, openProduct=null, tab="overview", board=null;
+let now = Date.now()/1000, openAgent=null, openProduct=null, tab="overview", board=null, org=null;
+const opt = (v, txt, sel) => `<option value="${esc(v)}"${sel?" selected":""}>${esc(txt)}</option>`;
+const people = () => [...((org&&org.board)||["jack"]), ...((org&&org.agents)||[]).map(a=>a.name)];
+function freeFor(a){ if(a.task||!a.free_since) return ""; const h=Math.floor((now-a.free_since)/3600);
+  return `<span class="free${h>=12?" long":""}">free ${h}h</span>`; }
 function ago(t){ if(!t) return "never"; const s=Math.max(0,now-t);
   return s<90?`${Math.round(s)}s ago`:s<5400?`${Math.round(s/60)}m ago`:s<129600?`${Math.round(s/3600)}h ago`:`${Math.round(s/86400)}d ago`; }
 function dur(s){ if(!s) return "—"; s=Math.round(s); const d=s/86400|0,h=s%86400/3600|0,m=s%3600/60|0; return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`; }
@@ -174,18 +204,19 @@ async function jpost(p,body){ const r=await fetch(p,{method:"POST",headers:{"Con
 
 // ---- status: prefer the agent's real machine report, fall back to the bus ----
 function stateOf(a){ if(["unresponsive","login","parked"].includes(a.state)) return a.state;
-  const f=a.focus||{}; if(f.reporting) return (f.task||f.doing)?"working":"idle";
+  const f=a.focus||{}; if(a.task||f.task) return "working"; if(f.reporting) return f.doing?"working":"idle";
   return a.current?"working":"idle"; }
 function label(a){ const s=stateOf(a), f=a.focus||{};
   if(s==="login") return "Login needs renewing"; if(s==="unresponsive") return "Unresponsive";
   if(s==="parked") return a.queue?`Parked · ${a.queue} held`:"Parked (not messaged)";
+  if(a.task) return a.task.status==="verifying"?`verifying “${a.task.title}”`:`working on “${a.task.title}”`;
   if(f.task) return `working on “${f.task.title}”`;
   if(f.doing) return f.doing;
   if(a.current) return `#${a.current.id}: ${a.current.text}`;
   return a.queue?`Idle · ${a.queue} waiting`:"Idle"; }
 
 async function load(){
-  const b = await jget("api/board"); if(!b) return; board=b; now=b.now;
+  const [b, o] = await Promise.all([jget("api/board"), jget("api/org")]); if(!b) return; board=b; now=b.now; if(o) org=o;
   $("fresh").textContent = "updated " + new Date(b.now*1000).toLocaleTimeString();
   $("money").textContent = money(b.revenue && b.revenue.total);
   const by=(b.revenue&&b.revenue.by_product)||{};
@@ -209,11 +240,14 @@ async function load(){
     const tag=a.product?`<span class="tag">${esc(a.product)} · ${esc(a.role||"")}</span>`:"";
     return `<button class="row agent" data-agent="${esc(a.name)}"><span class="dot s-${stateOf(a)}"></span>
       <span style="min-width:0"><div class="nm">${esc(a.name)}${tag}</div><div class="what">${esc(label(a))}</div></span>
-      <span class="ages">${a.last_in?"msg "+ago(a.last_in):"never"}<br>${a.last_out?"said "+ago(a.last_out):"—"}</span></button>`;}).join("");
+      <span class="ages">${freeFor(a)||(a.last_in?"msg "+ago(a.last_in):"—")}<br>${a.kind==="slack"?"via Slack":a.last_out?"said "+ago(a.last_out):"—"}</span></button>`;}).join("");
   document.querySelectorAll(".agent").forEach(el=>el.onclick=()=>showAgent(el.dataset.agent));
 
   renderPortfolio(b.products||[]);
   if(openProduct) renderProduct(openProduct, true);
+  if(tab==="suggestions") renderSuggestions();
+  jget("api/suggestions").then(d=>{ const n=((d&&d.suggestions)||[]).filter(x=>x.status==="open").length;
+    $("sugn").innerHTML=n?`<span style="color:var(--warn)">(${n})</span>`:""; });
   if(tab==="council") renderCouncil();
   if(tab==="vault") renderVault();
   if(openAgent) showAgent(openAgent, true);
@@ -234,11 +268,13 @@ function renderPortfolio(products){
 }
 $("addprod").onclick=()=>{ const h=$("prodform"); if(h.dataset.open){h.innerHTML="";h.dataset.open="";return;} h.dataset.open="1";
   h.innerHTML=`<div class="card" style="margin-bottom:12px"><form class="form">
-    <input name="name" placeholder="product name  e.g. Notion templates" required autocomplete="off">
-    <input name="brief" placeholder="one line: what it sells, why it's low-overhead" autocomplete="off">
-    <div class="r2"><input name="metric" placeholder="first goal  e.g. first sale" autocomplete="off"><button class="btn primary" type="submit">Create product</button></div></form></div>`;
+    <div class="fld"><label for="fld1">Product name</label><input id="fld1" name="name" placeholder="e.g. Notion templates" required autocomplete="off"></div>
+    <div class="fld"><label for="fld2">Brief</label><input id="fld2" name="brief" placeholder="one line: what it sells, why it's low-overhead" autocomplete="off"></div>
+    <div class="r2"><div class="fld"><label for="fld3">First goal</label><input id="fld3" name="metric" placeholder="e.g. first sale" autocomplete="off"></div>
+      <div class="fld"><label for="fld4">PM</label><select id="fld4" name="pm">${opt("","— no PM yet —")}${people().map(n=>opt(n,n)).join("")}</select></div></div>
+    <div><button class="btn primary" type="submit">Create product</button></div></form></div>`;
   h.querySelector("form").onsubmit=async e=>{ e.preventDefault(); const f=e.target;
-    try{ await jpost("api/jack/product",{name:f.name.value.trim(),brief:f.brief.value.trim(),metric:f.metric.value.trim()});
+    try{ await jpost("api/jack/product",{name:f.name.value.trim(),brief:f.brief.value.trim(),metric:f.metric.value.trim(),pm:f.pm.value});
       h.innerHTML="";h.dataset.open=""; toast("Product created"); load(); }catch(err){ toast(err.message); }}; };
 
 const COLS=[["blocked","Blocked"],["ready","Ready"],["working","Working"],["verifying","Verifying"],["done","Done"]];
@@ -250,33 +286,86 @@ function renderProduct(pid, quiet){
     <div class="brief" style="margin:0 2px 6px">${esc(p.brief||"")}${p.metric?` · goal: ${esc(p.metric)}`:""}</div>
     <div id="projform"></div>
     ${(p.projects||[]).map(pr=>`<div class="proj">
-      <div class="projname"><span>${esc(pr.name)}</span><button class="btn sm" data-addtask="${pr.id}">+ task</button></div>
+      <div class="projname"><span>${esc(pr.name)}</span><button class="btn sm" data-addtask="${pr.id}">+ Task</button></div>
       <div class="kan">${COLS.map(([k,lbl])=>{ const ts=(pr.tasks||[]).filter(t=>bucket(t.status)===k);
         return `<div class="col"><div class="colh"><span>${lbl}</span><span>${ts.length||""}</span></div>
-          ${ts.map(t=>`<div class="tcard ${k}"><div class="tt">${esc(t.title)}</div>
-            <div class="tm">${esc(t.role||"")}${t.owner?" · "+esc(t.owner):""}</div>
-            ${t.blocked_by&&t.blocked_by.length?`<div class="blk" title="can't start until these tasks are done">⛔ waits on #${t.blocked_by.join(", #")}</div>`:""}</div>`).join("")
+          ${ts.map(t=>`<div class="tcard ${k}"><div class="tt">#${t.id} ${esc(t.title)}</div>
+            <div class="tm">${esc(t.role||"")}${t.owner?" · "+esc(t.owner):""}${t.verifier&&k==="verifying"?" · checking: "+esc(t.verifier):""}</div>
+            ${t.blocked_by&&t.blocked_by.length?`<div class="blk" title="can't start until these are done">⛔ waits on ${t.blocked_by.map(b=>esc(titleOf(b))).join(", ")}</div>`:""}
+            ${t.progress_note&&k!=="done"?`<div class="tn">${esc(t.progress_note)}</div>`:""}
+            ${t.evidence?`<a href="${esc(t.evidence)}" target="_blank" rel="noopener">evidence</a>`:""}
+            ${["working","verifying"].includes(k)?`<div class="tact"><button class="btn sm" data-release="${t.id}">Release</button></div>`:""}</div>`).join("")
           ||`<div class="colempty">—</div>`}</div>`;}).join("")}</div>
       <div id="addtask-${pr.id}"></div></div>`).join("")||`<div class="muted" style="padding:8px 2px">No projects yet — add one.</div>`}`;
   $("addproj").onclick=()=>{ const h=$("projform"); if(h.dataset.open){h.innerHTML="";h.dataset.open="";return;} h.dataset.open="1";
     h.innerHTML=`<div class="card" style="margin:0 0 12px"><form class="form"><div class="r2">
-      <input name="name" placeholder="project (phase)  e.g. launch" required autocomplete="off">
-      <button class="btn primary" type="submit">Add project</button></div></form></div>`;
+      <div class="fld"><label for="fld5">Project name</label><input id="fld5" name="name" placeholder="a phase, e.g. launch" required autocomplete="off"></div>
+      <div style="align-self:end"><button class="btn primary" type="submit">Add project</button></div></div></form></div>`;
     h.querySelector("form").onsubmit=async e=>{ e.preventDefault();
       try{ await jpost("api/jack/project",{product:pid,name:e.target.name.value.trim()}); toast("Project added"); load(); }catch(err){ toast(err.message); }}; };
-  document.querySelectorAll("[data-addtask]").forEach(el=>el.onclick=()=>taskForm(+el.dataset.addtask));
+  document.querySelectorAll("[data-addtask]").forEach(el=>el.onclick=()=>taskForm(+el.dataset.addtask, p));
+  document.querySelectorAll("[data-release]").forEach(el=>el.onclick=async()=>{ el.disabled=true;
+    try{ await jpost("api/jack/release",{task:+el.dataset.release}); toast("Released — it goes to the next free agent"); load(); }catch(e){ el.disabled=false; toast(e.message); }});
   if(!quiet) showOnly("product");
 }
-function taskForm(projectId){ const host=$("addtask-"+projectId);
+function titleOf(id){ for(const p of (board&&board.products)||[]) for(const pr of p.projects||[]) for(const t of pr.tasks||[]) if(t.id===id) return t.title; return "#"+id; }
+function taskForm(projectId, product){ const host=$("addtask-"+projectId);
   if(host.dataset.open){host.innerHTML="";host.dataset.open="";return;} host.dataset.open="1";
+  const roles=Object.keys((org&&org.roles)||{designer:1,engineer:1,marketer:1,optimizer:1});
+  const others=(product.projects||[]).flatMap(pr=>pr.tasks||[]).filter(t=>t.status!=="done");
   host.innerHTML=`<div class="card" style="margin-top:8px"><form class="form">
-    <input name="title" placeholder="what needs doing" required autocomplete="off">
-    <div class="r2"><select name="role">${["pm","developer","designer","marketing","sales"].map(r=>`<option>${r}</option>`).join("")}</select>
-      <input name="done_def" placeholder="done when… (evidence)" autocomplete="off"></div>
-    <div><button class="btn primary" type="submit">Add task</button> <span class="faint" style="font-size:12px">a free agent in that role picks it up</span></div></form></div>`;
+    <div class="fld"><label for="fld6-${projectId}">Task</label><input id="fld6-${projectId}" name="title" placeholder="one piece of work one agent can finish" required autocomplete="off"></div>
+    <div class="r2"><div class="fld"><label for="fld7-${projectId}">Role</label><select id="fld7-${projectId}" name="role">${roles.map(r=>opt(r,r)).join("")}</select></div>
+      <div class="fld"><label for="fld8-${projectId}">Done when</label><input id="fld8-${projectId}" name="done_def" placeholder="what the evidence shows" autocomplete="off"></div></div>
+    <div class="fld"><label for="fld9-${projectId}">Blocked by</label><select id="fld9-${projectId}" name="blocked">${opt("","nothing — it can start now")}${others.map(t=>opt(t.id,t.title)).join("")}</select></div>
+    <div><button class="btn primary" type="submit">Add task</button> <span class="faint" style="font-size:12px">a free agent in that role on this product picks it up</span></div></form></div>`;
   host.querySelector("form").onsubmit=async e=>{ e.preventDefault(); const f=e.target;
-    try{ await jpost("api/jack/task",{project:projectId,title:f.title.value.trim(),role:f.role.value,done_def:f.done_def.value.trim()});
+    try{ await jpost("api/jack/task",{project:projectId,title:f.title.value.trim(),role:f.role.value,done_def:f.done_def.value.trim(),blocked_by:f.blocked.value?[+f.blocked.value]:[]});
       host.innerHTML="";host.dataset.open=""; toast("Task added"); load(); }catch(err){ toast(err.message); }}; }
+
+// ---- org ----
+async function renderOrg(){
+  const o=await jget("api/org"); if(!o) return; org=o;
+  const ppl=people(), prods=Object.keys(o.pms||{}), roles=Object.keys(o.roles||{});
+  $("orgbody").innerHTML=`
+    <div class="card"><div class="row orgrow"><div><div class="who">Board</div><div class="sub">set the goals, approve spending</div></div>
+      <div>${(o.board||[]).map(esc).join(" · ")}</div></div>
+    <div class="row orgrow"><div><div class="who">CEO</div><div class="sub">runs the portfolio; told when agents sit idle</div></div>
+      <div class="fld"><label class="vh" for="ceo_sel">CEO</label><select id="ceo_sel">${opt("","— empty —")}${ppl.map(n=>opt(n,n,n===o.ceo)).join("")}</select></div></div>
+    ${prods.map((p,i)=>`<div class="row orgrow"><div><div class="who">PM · ${esc(p)}</div><div class="sub">owns this product's tasks</div></div>
+      <div class="fld"><label class="vh" for="pmsel-${i}">PM of ${esc(p)}</label><select id="pmsel-${i}" data-pm="${esc(p)}">${opt("","— none —")}${ppl.map(n=>opt(n,n,n===o.pms[p])).join("")}</select></div></div>`).join("")}</div>
+    <h2>Agents</h2><div class="hint">Where each agent works. Changing it here records the placement; the agent's own files stay put.</div>
+    <div class="card">${(o.agents||[]).filter(a=>a.kind!=="slack").map(a=>`<div class="row pl"><div class="who">${esc(a.name)}</div>
+      <select data-pp="${esc(a.name)}" aria-label="product for ${esc(a.name)}">${opt("","no product")}${prods.map(p=>opt(p,p,p===a.product)).join("")}</select>
+      <select data-pr="${esc(a.name)}" aria-label="role for ${esc(a.name)}">${opt("","no role")}${roles.map(r=>opt(r,r,r===a.role)).join("")}</select>
+      <button class="btn sm" data-place="${esc(a.name)}">Save</button></div>`).join("")||`<div class="row muted">No agents yet.</div>`}</div>
+    <h2>Roles</h2><div class="hint">The role section an agent's SOUL.md gets when it takes a task in that role. The rest of its soul and its identity never change.</div>
+    <div class="card">${roles.map((r,i)=>`<form class="form" data-role="${esc(r)}"><div class="fld"><label for="rolesoul-${i}">${esc(r)}</label>
+      <textarea name="soul" rows="4">${esc(o.roles[r])}</textarea></div><div><button class="btn sm" type="submit">Save ${esc(r)}</button></div></form>`).join("")}</div>`;
+  $("ceo_sel").onchange=async e=>{ const who=e.target.value;
+    try{ await jpost("api/jack/seat",{role:"ceo",who}); toast(who?"CEO is now "+who:"CEO seat is empty"); }catch(err){ toast(err.message); }};
+  document.querySelectorAll("[data-pm]").forEach(el=>el.onchange=async()=>{
+    try{ await jpost("api/jack/pm",{product:el.dataset.pm,who:el.value}); toast(`PM of ${el.dataset.pm}: ${el.value||"none"}`); load(); }catch(err){ toast(err.message); }});
+  document.querySelectorAll("[data-place]").forEach(el=>el.onclick=async()=>{ const n=el.dataset.place;
+    const product=document.querySelector(`[data-pp="${CSS.escape(n)}"]`).value, role=document.querySelector(`[data-pr="${CSS.escape(n)}"]`).value;
+    try{ await jpost("api/jack/place",{agent:n,product,role}); toast(`${n}: ${product||"no product"} · ${role||"no role"}`); load(); }catch(err){ toast(err.message); }});
+  document.querySelectorAll("[data-role]").forEach(f=>f.onsubmit=async e=>{ e.preventDefault();
+    try{ await jpost("api/jack/role",{name:f.dataset.role,soul:f.soul.value}); toast("Saved "+f.dataset.role); }catch(err){ toast(err.message); }});
+}
+
+// ---- suggestions ----
+async function renderSuggestions(){
+  const d=await jget("api/suggestions"); const ss=(d&&d.suggestions)||[];
+  $("suglist").innerHTML=ss.length?`<div class="card">${ss.map(x=>`<div class="row sug" data-sug="${x.id}">
+      <div>${esc(x.text)}</div>
+      <div class="meta">#${x.id} · from ${esc(x.frm)} · ${esc(x.product||"no product")} · ${ago(x.at)}</div>
+      <div class="st ${esc(x.status)}">${esc(x.status)}${x.decided_by?` by ${esc(x.decided_by)}`:""}${x.note?` — ${esc(x.note)}`:""}</div>
+      ${x.status==="open"?`<div class="acts"><button class="btn sm primary" data-acc="${x.id}">Accept</button><button class="btn sm" data-rej="${x.id}">Reject</button></div>`:""}
+    </div>`).join("")}</div>`:`<div class="card"><div class="row muted">No suggestions yet. Optimizers send them with fleet suggest.</div></div>`;
+  const decide=async(id,accept)=>{ try{ await jpost("api/jack/suggestion",{id,accept,note:""}); toast(accept?"Accepted":"Rejected"); load(); }catch(err){ toast(err.message); }};
+  document.querySelectorAll("[data-acc]").forEach(el=>el.onclick=()=>decide(+el.dataset.acc,true));
+  document.querySelectorAll("[data-rej]").forEach(el=>el.onclick=()=>decide(+el.dataset.rej,false));
+}
 
 // ---- council ----
 async function renderCouncil(){
@@ -365,10 +454,11 @@ async function showAgent(name, quiet){
   if(!quiet){ showOnly("detail"); const tl=$("tl"); if(tl) tl.scrollTop=tl.scrollHeight; }
 }
 
-function showOnly(id){ ["overview","portfolio","product","council","vault","detail"].forEach(s=>$(s).hidden=s!==id); }
+function showOnly(id){ ["overview","portfolio","product","org","suggestions","council","vault","detail"].forEach(s=>$(s).hidden=s!==id); }
 function selectTab(name){ tab=name; openAgent=null; openProduct=null;
   document.querySelectorAll(".tab").forEach(t=>t.setAttribute("aria-selected", t.dataset.tab===name));
-  showOnly(name); if(name==="council") renderCouncil(); if(name==="vault") renderVault(); }
+  showOnly(name); if(name==="council") renderCouncil(); if(name==="vault") renderVault();
+  if(name==="org") renderOrg(); if(name==="suggestions") renderSuggestions(); }
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>selectTab(t.dataset.tab));
 document.querySelectorAll("[data-back]").forEach(b=>b.onclick=()=>selectTab(b.dataset.back));
 load(); setInterval(load, 10000);
