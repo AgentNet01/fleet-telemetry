@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -110,15 +111,17 @@ def do_switch(product, role):
     cur = brain.get("from_product")
     if cur != product:
         mem_file, mem_dir = os.path.join(home, "MEMORY.md"), os.path.join(home, "memory")
-        if cur:                                   # save first; nothing is removed until the copy exists
-            dst = _brain_dir(home, cur)
-            tmp = dst + ".saving"
-            shutil.rmtree(tmp, ignore_errors=True); os.makedirs(tmp)
-            if os.path.exists(mem_file):
-                shutil.copy2(mem_file, tmp)
-            if os.path.isdir(mem_dir):
-                shutil.copytree(mem_dir, os.path.join(tmp, "memory"))
-            shutil.rmtree(dst, ignore_errors=True); os.rename(tmp, dst)
+        # save first; nothing is removed until the copy exists (the first switch keeps the pre-fleet brain)
+        dst = _brain_dir(home, cur) if cur else _brain_dir(home, "_original")
+        if not cur and os.path.exists(dst):       # _original is written once; later unplaced brains get their own
+            dst = _brain_dir(home, time.strftime("_unplaced-%Y%m%d-%H%M%S"))
+        tmp = dst + ".saving"
+        shutil.rmtree(tmp, ignore_errors=True); os.makedirs(tmp)
+        if os.path.exists(mem_file):
+            shutil.copy2(mem_file, tmp)
+        if os.path.isdir(mem_dir):
+            shutil.copytree(mem_dir, os.path.join(tmp, "memory"))
+        shutil.rmtree(dst, ignore_errors=True); os.rename(tmp, dst)
         shutil.rmtree(mem_dir, ignore_errors=True)
         src = _brain_dir(home, product)
         if os.path.exists(os.path.join(src, "MEMORY.md")):
@@ -140,7 +143,7 @@ def do_switch(product, role):
         f.write(soul)
     got = hashlib.sha256((brain["soul"] + "\n" + brain["memory"]).encode()).hexdigest()
     call("POST", "/api/switched", {"product": product, "role": role, "hash": got})
-    where = f"{cur}'s memory is saved in ~/fleet-brains/ and comes back when you return; " if cur and cur != product else ""
+    where = f"{cur or 'your earlier'} memory is saved in ~/fleet-brains/ and comes back when you return; " if cur != product else ""
     print(f"Switched to {product} as {role}. {where}your identity and the rest of your soul are unchanged.")
     return 0
 
