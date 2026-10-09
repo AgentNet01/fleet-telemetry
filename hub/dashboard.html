@@ -115,7 +115,9 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
 .sug .st{font-size:12px;font-weight:600}.st.open{color:var(--warn)}.st.accepted{color:var(--ok)}.st.rejected{color:var(--dim)}
 .sug .acts{display:flex;gap:6px;flex-wrap:wrap}
 @media(max-width:560px){.hero .big{font-size:36px}.form .r2{grid-template-columns:1fr}.kan{grid-template-columns:repeat(5,74vw)}
-  .orgrow{grid-template-columns:1fr}.pl{grid-template-columns:1fr 1fr}.pl .who,.pl .btn{grid-column:1/-1}}
+  .orgrow{grid-template-columns:1fr}.pl{grid-template-columns:1fr 1fr}.pl .who,.pl .btn{grid-column:1/-1}
+  .tabs{flex-wrap:wrap;overflow-x:visible}}
+textarea[name=soul]{field-sizing:content;min-height:84px}
 </style>
 </head>
 <body>
@@ -206,7 +208,10 @@ async function jpost(p,body){ const r=await fetch(p,{method:"POST",headers:{"Con
 function stateOf(a){ if(["unresponsive","login","parked"].includes(a.state)) return a.state;
   const f=a.focus||{}; if(a.task||f.task) return "working"; if(f.reporting) return f.doing?"working":"idle";
   return a.current?"working":"idle"; }
+function seatsOf(name){ const o=org||{}, out=[];
+  if(o.ceo===name) out.push("CEO"); for(const [p,pm] of Object.entries(o.pms||{})) if(pm===name) out.push("PM · "+p); return out; }
 function label(a){ const s=stateOf(a), f=a.focus||{};
+  if(a.kind==="slack") return "Reached over Slack, not a task worker"+(a.queue?` · ${a.queue} message${a.queue>1?"s":""} waiting to send`:"");
   if(s==="login") return "Login needs renewing"; if(s==="unresponsive") return "Unresponsive";
   if(s==="parked") return a.queue?`Parked · ${a.queue} held`:"Parked (not messaged)";
   if(a.task) return a.task.status==="verifying"?`verifying “${a.task.title}”`:`working on “${a.task.title}”`;
@@ -237,7 +242,8 @@ async function load(){
 
   const ags=(b.agents||[]).slice().sort((x,y)=>x.name.localeCompare(y.name,undefined,{numeric:true}));
   $("agents").innerHTML = ags.map(a=>{
-    const tag=a.product?`<span class="tag">${esc(a.product)} · ${esc(a.role||"")}</span>`:"";
+    const seats=seatsOf(a.name).map(x=>`<span class="tag">${esc(x)}</span>`).join("");
+    const tag=(a.product?`<span class="tag">${esc(a.product)} · ${esc(a.role||"")}</span>`:"")+seats;
     return `<button class="row agent" data-agent="${esc(a.name)}"><span class="dot s-${stateOf(a)}"></span>
       <span style="min-width:0"><div class="nm">${esc(a.name)}${tag}</div><div class="what">${esc(label(a))}</div></span>
       <span class="ages">${freeFor(a)||(a.last_in?"msg "+ago(a.last_in):"—")}<br>${a.kind==="slack"?"via Slack":a.last_out?"said "+ago(a.last_out):"—"}</span></button>`;}).join("");
