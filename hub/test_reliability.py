@@ -73,6 +73,7 @@ def transient_errors_dont_page():
     assert len(open_items()) == 1, "a stuck agent pages once, not every tick"
     h._guarded("X", lambda: None)               # recovers
     assert h._fails.get("X", 0) == 0, "recovery resets the counter"
+    assert not open_items(), "recovery clears the agent's alert"
     print("transient OK")
 
 

@@ -305,10 +305,12 @@ class Hub:
     def _guarded(self, name, fn):
         try:
             fn()
-            if self._fails.pop(name, 0):     # it was failing and just recovered
+            if self._fails.pop(name, 0):     # it was failing and just recovered: say so, clear its alert
                 with self.lock:
                     self.db.execute("insert into events(agent, dir, text, at) values(?,'err',?,?)",
                                     (name, "recovered", self.clock()))
+                    self.db.execute("update needs_jack set done=1 where done=0 and text like ?",
+                                    (f"{name} keeps failing to service%",))
         except Exception as e:
             n = self._fails[name] = self._fails.get(name, 0) + 1
             try:

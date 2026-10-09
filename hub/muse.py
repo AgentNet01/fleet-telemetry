@@ -161,9 +161,15 @@ class SlackTransport:
         uid, ch, thread = self._thread(name)
         return float(self.api("chat.postMessage", channel=ch, thread_ts=thread, text=f"<@{uid}> {text}")["ts"])
 
+    READ_EVERY = 65     # Slack lets non-Marketplace apps read a thread about once a minute (429 otherwise)
+
     def replies(self, name, after):
         uid, ch, thread = self._thread(name)
-        msgs = self.api("conversations.replies", channel=ch, ts=thread, oldest=str(after or 0))["messages"]
+        cache = self.__dict__.setdefault("_read", {})
+        at, msgs = cache.get(name, (0, None))
+        if msgs is None or time.time() - at >= self.READ_EVERY:
+            msgs = self.api("conversations.replies", channel=ch, ts=thread, limit=200)["messages"]
+            cache[name] = (time.time(), msgs)
         return sorted((float(m["ts"]), m.get("text", "")) for m in msgs
                       if m.get("user") == uid and float(m["ts"]) > float(after or 0))
 
