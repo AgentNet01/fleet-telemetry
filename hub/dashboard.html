@@ -390,7 +390,7 @@ $("askform").onsubmit=async e=>{ e.preventDefault(); const q=$("ask_q").value.tr
 function scopeOptions(){
   const prods=(board&&board.products||[]).map(p=>`<option value="product:${esc(p.name)}">product · ${esc(p.name)}</option>`).join("");
   const ags=(board&&board.agents||[]).filter(a=>a.state!=="parked").map(a=>`<option value="agent:${esc(a.name)}">agent · ${esc(a.name)}</option>`).join("");
-  return `<option value="fleet">fleet (any agent)</option>${prods}${ags}`;
+  return `<option value="hub">hub only (no agent can read it)</option><option value="fleet">fleet (any agent)</option>${prods}${ags}`;
 }
 async function renderVault(){
   $("sk_scope").innerHTML=scopeOptions();
