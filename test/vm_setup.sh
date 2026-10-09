@@ -41,6 +41,8 @@ docker exec fleet-vm test ! -e /etc/systemd/system/telemetryd.service || fail "o
 in_vm 'test ! -e ~/hooks/scripts/telemetry-watchdog.sh && test -x ~/hooks/scripts/fleet-telemetry.sh' || fail "hook scripts wrong"
 [ "$(count)" = 1 ] || fail "expected 1 daemon after setup, got $(count)"
 fresh || fail "hub got no heartbeat after setup"
+in_vm 'test -s ~/.fleet/routes.json' || fail "setup didn't record its routes"
+in_vm '~/.fleet/fleet status' | grep -q "You are" || fail "the fleet command isn't installed or can't reach the hub"
 
 in_vm 'pkill -f "[.]fleet/telemetryd.py"'; sleep 1
 [ "$(count)" = 0 ] || fail "daemon didn't die"

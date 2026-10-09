@@ -701,6 +701,44 @@ def read_config():
 
 # (the Slack mailbox was removed with the receiver; the hub's fleet bus carries messages now)
 
+FAILOVER_AFTER = 5    # consecutive failed pushes before trying the other routes setup.py found
+
+
+def load_routes():
+    """Every route to the hub that answered when setup.py ran, best first: [{"proxy", "ingest"}]."""
+    d = _fleet_dir()
+    try:
+        with open(os.path.join(d, "routes.json")) as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def failover(current):
+    """The current route keeps failing: switch to the first other route that answers now, and remember
+    it (~/.fleet/ingest + proxy.conf) so a restart keeps it. None if no other route answers."""
+    d = _fleet_dir()
+    for r in load_routes():
+        if r["ingest"] == current:
+            continue
+        p = r.get("proxy")
+        op = urllib.request.build_opener(urllib.request.ProxyHandler({"http": p, "https": p})) if p \
+            else urllib.request.build_opener()
+        try:
+            op.open(r["ingest"].rsplit("/api/ingest", 1)[0] + "/fleet.py", timeout=15).read()
+        except Exception:
+            continue
+        with open(os.path.join(d, "ingest"), "w") as f:
+            f.write(r["ingest"])
+        pc = os.path.join(d, "proxy.conf")
+        if p:
+            with open(pc, "w") as f:
+                f.write(p)
+        elif os.path.exists(pc):
+            os.remove(pc)
+        return r
+    return None
+
 def main():
     global AGENT, RECEIVER_URL
     os.makedirs(TDIR, exist_ok=True)
@@ -712,6 +750,7 @@ def main():
     # The old Slack mailbox is retired — the hub's fleet bus (fleet.py) carries messages now.
     last_push = 0.0
     last_activity = None
+    fails = 0
     while True:
         try:
             now = time.time()
@@ -733,6 +772,7 @@ def main():
                 payload["burst"] = bursting
                 try:
                     ok, cmd = post(op, token, payload)
+                    fails = 0 if ok else fails + 1
                     note("post", None if ok else "HTTP not 200")
                     if ok:
                         handle_cmd(cmd, time.time())
@@ -741,9 +781,16 @@ def main():
                     else:
                         spool(payload)
                 except Exception as e:
+                    fails += 1
                     note("post", e)
                     log("post failed: %s" % e)
                     spool(payload)
+                if fails >= FAILOVER_AFTER:
+                    fails = 0
+                    r = failover(RECEIVER_URL)
+                    if r:
+                        RECEIVER_URL, op = r["ingest"], opener()
+                        log("route failed %d times; now using %s via %s" % (FAILOVER_AFTER, RECEIVER_URL, r.get("proxy") or "default"))
                 last_push = time.time()
         except Exception as e:
             log("cycle failed: %s" % e)

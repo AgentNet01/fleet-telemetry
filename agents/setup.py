@@ -23,22 +23,27 @@ proxy_conf, ingest = os.path.join(fleet, "proxy.conf"), os.path.join(fleet, "ing
 host = urllib.parse.urlparse(os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or "").hostname
 tailnet = "http://" + urllib.parse.urlparse(HUB).hostname + ":8780"
 routes = ([(f"http://{host}:3130", tailnet), (f"http://{host}:3130", HUB)] if host else []) + [(None, HUB)]
+working = []                        # every route that answers now, best first; the daemon fails over along it
 for proxy, base in routes:
-    try:
-        op = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy})) if proxy \
-            else urllib.request.build_opener()
-        op.open(base + "/fleet.py", timeout=20).read()
-    except Exception:
-        continue
-    open(ingest, "w").write(base + "/api/ingest")
-    if proxy:
-        open(proxy_conf, "w").write(proxy)
-    elif os.path.exists(proxy_conf):
-        os.remove(proxy_conf)
-    route = f"{base} via {proxy or 'default route'}"
-    break
-else:
+    o = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy})) if proxy \
+        else urllib.request.build_opener()
+    for _ in range(2):              # the VM's proxies are flaky: one retry before giving up on a route
+        try:
+            o.open(base + "/fleet.py", timeout=20).read()
+            working.append((proxy, base, o))
+            break
+        except Exception:
+            continue
+if not working:
     sys.exit("fleet: can't reach the hub by any route (tunnel to tailnet, tunnel to hub, default). Paste this to Jack.")
+proxy, base, op = working[0]
+json.dump([{"proxy": p, "ingest": b + "/api/ingest"} for p, b, _ in working], open(os.path.join(fleet, "routes.json"), "w"))
+open(ingest, "w").write(base + "/api/ingest")
+if proxy:
+    open(proxy_conf, "w").write(proxy)
+elif os.path.exists(proxy_conf):
+    os.remove(proxy_conf)
+route = f"{base} via {proxy or 'default route'} ({len(working)} of {len(routes)} routes work)"
 
 req = urllib.request.Request(base + "/api/claim", data=json.dumps({"name": name, "code": code}).encode(),
                              headers={"Content-Type": "application/json"}, method="POST")
@@ -47,6 +52,11 @@ open(os.path.join(fleet, "token"), "w").write(token); os.chmod(os.path.join(flee
 open(os.path.join(fleet, "hub"), "w").write(HUB)
 open(os.path.join(fleet, "agent"), "w").write(name)
 shutil.copy2(os.path.join(here, "telemetryd.py"), os.path.join(fleet, "telemetryd.py"))
+cli = os.path.join(fleet, "fleet")                     # the fleet command, from the same checkout
+shutil.copy2(os.path.join(here, "..", "hub", "fleet.py"), cli); os.chmod(cli, 0o755)
+bindir = os.path.join(home, ".local", "bin")
+if os.path.isdir(bindir) and not os.path.exists(os.path.join(bindir, "fleet")):
+    os.symlink(cli, os.path.join(bindir, "fleet"))
 
 # Remove every older install: the v10–v14 systemd daemon, its files, Slack listener, crons, hooks scripts.
 sh = lambda c: subprocess.run(c, shell=True, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -66,6 +76,7 @@ shutil.copy2(os.path.join(here, "telemetry_hook.sh"), hook); os.chmod(hook, 0o75
 subprocess.Popen(["setsid", sys.executable, os.path.join(fleet, "telemetryd.py")],
                  stdout=open(os.path.join(fleet, "telemetryd.log"), "a"), stderr=subprocess.STDOUT,
                  stdin=subprocess.DEVNULL, start_new_session=True)
-print(f"fleet: {name} registered; telemetry running; hub route: {route}; old installs removed.\n"
+print(f"fleet: {name} registered; telemetry running; hub route: {route}; old installs removed; "
+      f"fleet command at {cli}.\n"
       f"Last step (once): hooks.add id=fleet-telemetry interval=60s script={hook}, then enable it.\n"
       f"Old hooks to remove if you still have them: telemetry-watchdog, slack-inbox.")

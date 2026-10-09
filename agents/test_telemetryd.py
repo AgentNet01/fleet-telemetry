@@ -98,4 +98,29 @@ assert t.opener() is not None
 
 # burst caps still hold against hostile input
 assert t.handle_cmd({"burst": True, "interval": 0, "until": 1e12}, 100.0) == (2, 400.0)
+# when the current route keeps failing, the daemon moves to another route that answers, and remembers it
+import http.server, socket, threading
+class _Hub(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200 if self.path == "/fleet.py" else 404); self.end_headers(); self.wfile.write(b"ok")
+    def log_message(self, *a): pass
+live = http.server.HTTPServer(("127.0.0.1", 0), _Hub)
+threading.Thread(target=live.serve_forever, daemon=True).start()
+s_ = socket.socket(); s_.bind(("127.0.0.1", 0)); dead_port = s_.getsockname()[1]; s_.close()
+dead, good = f"http://127.0.0.1:{dead_port}/api/ingest", f"http://127.0.0.1:{live.server_port}/api/ingest"
+with tempfile.TemporaryDirectory() as fd:
+    for f, v in (("hub", "https://hub.example"), ("token", "t"), ("agent", "Ada"), ("ingest", dead)):
+        open(os.path.join(fd, f), "w").write(v)
+    json.dump([{"proxy": None, "ingest": dead}, {"proxy": None, "ingest": good}], open(os.path.join(fd, "routes.json"), "w"))
+    real_dir, t._fleet_dir = t._fleet_dir, (lambda: fd)
+    assert [r["ingest"] for r in t.load_routes()] == [dead, good], t.load_routes()
+    picked = t.failover(dead)
+    assert picked and picked["ingest"] == good, f"routes: moved to the route that answers: {picked}"
+    assert t.read_config()["receiver_url"] == good, "routes: the new route is remembered for the next start"
+    assert not os.path.exists(os.path.join(fd, "proxy.conf")), "a direct route clears the proxy"
+    os.remove(os.path.join(fd, "routes.json"))
+    assert t.failover(good) is None, "routes: no other route known -> stay put"
+    t._fleet_dir = real_dir
+live.shutdown()
+
 print("ok")
