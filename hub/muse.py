@@ -119,12 +119,19 @@ def renew(account_dir, post=None, now=None):
 
 
 class SlackTransport:
-    """An agent reached over Slack (dot, until Darragh connects it to the hub): the hub's bot DMs it,
-    and its later messages in that DM are its replies. The token comes from the vault on every call."""
+    """An agent reached over Slack (dot, until Darragh connects it to the hub). dot is a bot, so the hub
+    can't DM it; it talks the way the fleet always has — @mentioning it in one long-lived thread in a
+    channel both bots are in. dot's later messages in that thread are its replies. The bot token comes
+    from the vault on every call; the thread's ts is kept in state_dir so it survives restarts.
+      users = {"dot": {"user": "U0C6QLALEJV", "channel": "C0C6MQMSLFL"}}"""
 
-    def __init__(self, token, users, api=None):
+    INTRO = ("{who} this thread is where the fleet hub talks to you. Notes for the CEO seat (like agents sitting "
+             "idle, or suggestions from the optimizers) arrive here as replies. Answer in this thread and the hub "
+             "reads it. Jack and Darragh see everything on the hub dashboard.")
+
+    def __init__(self, token, users, api=None, state_dir=None):
         self.token, self.users, self.api = token, users, api or self._http
-        self._uid, self._dm = {}, {}
+        self.state_dir = state_dir
 
     def _http(self, method, **params):
         req = urllib.request.Request("https://slack.com/api/" + method, data=urllib.parse.urlencode(params).encode(),
@@ -135,35 +142,30 @@ class SlackTransport:
             raise RuntimeError(f"slack {method}: {out.get('error')}")
         return out
 
-    def _ready(self, name):
+    def _thread(self, name):
         if not self.token():
-            raise LoginError("no slack-bot-token in the vault — add a Slack bot token (scopes chat:write, "
-                             "im:write, im:history, users:read) so the hub can reach " + name)
-        if name not in self._uid:
-            want = self.users[name]
-            if re.fullmatch(r"U[A-Z0-9]{6,}", want):
-                self._uid[name] = want
-            else:
-                for m in self.api("users.list")["members"]:
-                    names = {m.get("name"), (m.get("profile") or {}).get("display_name"), (m.get("profile") or {}).get("real_name")}
-                    if want.lower() in {str(n).lower() for n in names if n}:
-                        self._uid[name] = m["id"]
-                        break
-                else:
-                    raise LoginError(f"no Slack user named {want!r}")
-        if name not in self._dm:
-            self._dm[name] = self.api("conversations.open", users=self._uid[name])["channel"]["id"]
-        return self._uid[name], self._dm[name]
+            raise LoginError("no slack-bot-token in the vault — add the Fleet Reader bot token (scope: hub only) "
+                             "so the hub can reach " + name)
+        u = self.users[name]
+        path = os.path.join(self.state_dir, f"slack_thread_{name}.txt") if self.state_dir else None
+        ts = getattr(self, "_ts", {}).get(name) or (open(path).read().strip() if path and os.path.exists(path) else None)
+        if not ts:
+            ts = self.api("chat.postMessage", channel=u["channel"], text=self.INTRO.format(who=f"<@{u['user']}>"))["ts"]
+            if path:
+                with open(path, "w") as f:
+                    f.write(ts)
+        self.__dict__.setdefault("_ts", {})[name] = ts
+        return u["user"], u["channel"], ts
 
     def deliver(self, name, text):
-        uid, ch = self._ready(name)
-        return float(self.api("chat.postMessage", channel=ch, text=text)["ts"])
+        uid, ch, thread = self._thread(name)
+        return float(self.api("chat.postMessage", channel=ch, thread_ts=thread, text=f"<@{uid}> {text}")["ts"])
 
     def replies(self, name, after):
-        uid, ch = self._ready(name)
-        msgs = self.api("conversations.history", channel=ch, oldest=str(after or 0))["messages"]
+        uid, ch, thread = self._thread(name)
+        msgs = self.api("conversations.replies", channel=ch, ts=thread, oldest=str(after or 0))["messages"]
         return sorted((float(m["ts"]), m.get("text", "")) for m in msgs
-                      if m.get("user") == uid and float(m["ts"]) > (after or 0))
+                      if m.get("user") == uid and float(m["ts"]) > float(after or 0))
 
     def session(self, name):
         return "slack:" + name

@@ -120,29 +120,35 @@ def intro():
 
 
 def slack():
-    calls = []
+    """dot is a bot (no DMs between bots): the hub @mentions it in one thread in a shared channel."""
+    calls, posted = [], []
 
     def api(method, **params):
         calls.append((method, params))
-        if method == "users.list":
-            return {"members": [{"id": "U0DOT", "name": "darragh.buckley1812-dot", "profile": {"display_name": "dot"}},
-                                {"id": "U0JACK", "name": "jack", "profile": {"display_name": "jack"}}]}
-        if method == "conversations.open":
-            return {"channel": {"id": "D0DOT"}}
         if method == "chat.postMessage":
-            return {"ts": "1700000100.000100"}
-        if method == "conversations.history":
-            return {"messages": [{"user": "U0DOT", "ts": "1700000200.000200", "text": "on it — PMs asked"},
-                                 {"bot_id": "B0HUB", "ts": "1700000100.000100", "text": "our own message"},
-                                 {"user": "U0DOT", "ts": "1700000000.000000", "text": "older than our message"}]}
+            ts = f"17000001{len(posted):02d}.000100"
+            posted.append((ts, params))
+            return {"ts": ts}
+        if method == "conversations.replies":
+            return {"messages": [{"user": "U0HUB", "bot_id": "B0HUB", "ts": posted[0][0], "text": "our thread starter"},
+                                 {"user": "U0DOT", "ts": "1700000999.000200", "text": "on it — PMs asked"},
+                                 {"user": "U0JACK", "ts": "1700000999.000300", "text": "a person chiming in"}]}
         raise AssertionError(method)
 
-    t = muse.SlackTransport(token=lambda: "xoxb-test", users={"dot": "dot"}, api=api)
+    state = tempfile.mkdtemp()
+    t = muse.SlackTransport(token=lambda: "xoxb-test", users={"dot": {"user": "U0DOT", "channel": "C0ALL"}},
+                            api=api, state_dir=state)
     mark = t.deliver("dot", "4 agents idle over 12 h")
-    assert ("chat.postMessage", {"channel": "D0DOT", "text": "4 agents idle over 12 h"}) in calls, calls
-    assert [text for _, text in t.replies("dot", mark)] == ["on it — PMs asked"], "only dot's later messages"
+    intro, note = posted[0][1], posted[1][1]
+    assert intro["channel"] == "C0ALL" and "<@U0DOT>" in intro["text"] and "thread_ts" not in intro, intro
+    assert note == {"channel": "C0ALL", "thread_ts": posted[0][0], "text": "<@U0DOT> 4 agents idle over 12 h"}, note
+    assert [text for _, text in t.replies("dot", mark)] == ["on it — PMs asked"], "only dot's later messages in the thread"
+    t2 = muse.SlackTransport(token=lambda: "xoxb-test", users={"dot": {"user": "U0DOT", "channel": "C0ALL"}},
+                             api=api, state_dir=state)
+    t2.deliver("dot", "after a restart")
+    assert len(posted) == 3 and posted[2][1]["thread_ts"] == posted[0][0], "a restart keeps the same thread"
 
-    none = muse.SlackTransport(token=lambda: None, users={"dot": "dot"}, api=api)
+    none = muse.SlackTransport(token=lambda: None, users={"dot": {"user": "U0DOT", "channel": "C0ALL"}}, api=api)
     try:
         none.deliver("dot", "x")
         raise AssertionError("no token must fail loudly, not drop the message")

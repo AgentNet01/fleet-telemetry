@@ -1265,7 +1265,8 @@ def main(cfg_path, *args):
     muse_t = muse.MuseTransport(cfg["muse_cli"], accounts)
     h = Hub(cfg["db"], None)
     vault = lambda name: (h.db.execute("select value from secrets where name=?", (name,)).fetchone() or {"value": None})["value"]
-    slack_t = muse.SlackTransport(token=lambda: vault("slack-bot-token"), users=cfg.get("slack_users", {"dot": "dot"}))
+    slack_t = muse.SlackTransport(token=lambda: (vault("slack-bot-token") or "").strip() or None,
+                                  users=cfg.get("slack_users", {}), state_dir=os.path.dirname(cfg["db"]))
     h.transport = muse.KindRouter(lambda n: h._agent(n)["kind"], muse=muse_t, slack=slack_t)
     h.accounts = accounts
     for name in accounts:
