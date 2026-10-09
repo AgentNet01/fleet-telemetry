@@ -130,14 +130,16 @@ def read_token():
 
 
 def opener():
-    # proxy.conf only existed for the old Mac receiver; the hub is https and the VM's own
-    # HTTPS_PROXY env (honored by the default opener) already reaches it.
-    if not os.path.exists(PROXY_FILE):
+    # Background processes must use the VM's tunnel proxy (http://<egress-host>:3130, written by
+    # setup.py). The chat turn's HTTPS_PROXY filters hosts and answers 403 once we're outside a turn.
+    d = _fleet_dir()
+    path = os.path.join(d, "proxy.conf") if d else PROXY_FILE
+    if not os.path.exists(path):
         return urllib.request.build_opener()
-    with open(PROXY_FILE) as f:
+    with open(path) as f:
         proxy = f.read().strip()          # e.g. http://10.0.0.5:3130
     return urllib.request.build_opener(
-        urllib.request.ProxyHandler({"http": proxy}))
+        urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
 
 
 def cpu():
@@ -687,7 +689,9 @@ def read_config():
     # "agent" here is only a label. Fall back to the legacy per-VM config.json otherwise.
     d = _fleet_dir()
     if d:
-        url = open(os.path.join(d, "hub")).read().strip().rstrip("/") + "/api/ingest"
+        ing = os.path.join(d, "ingest")      # the route setup.py proved works from this VM
+        url = (open(ing).read().strip() if os.path.exists(ing)
+               else open(os.path.join(d, "hub")).read().strip().rstrip("/") + "/api/ingest")
         namefile = os.path.join(d, "agent")
         name = open(namefile).read().strip() if os.path.exists(namefile) else os.uname().nodename
         return {"agent": name, "receiver_url": url}

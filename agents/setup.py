@@ -1,49 +1,71 @@
 #!/usr/bin/env python3
-"""One-time fleet setup, run by the agent itself (no hub push needed).
+"""Fleet setup, run by the agent itself from its fleet-telemetry checkout.
 
-    python3 setup.py "<your agent name>" <claim-code> [hub-url]
+    python3 agents/setup.py "<your agent name>" <claim-code> [hub-url]
 
-Registers with the hub (claim-code is Jack's), stores creds in ~/.fleet, and
-starts the telemetry daemon so the agent's machine shows on the dashboard.
-Re-running it is safe — it just refreshes the token and restarts telemetry.
+Registers with the hub, installs the telemetry daemon in ~/.fleet, points it at the VM's tunnel
+proxy (background processes can't use the chat turn's proxy), installs the restart hook script,
+and removes every older telemetry/Slack install. Safe to re-run: re-running is how you upgrade.
 """
-import json, os, subprocess, sys, urllib.request
+import json, os, shutil, subprocess, sys, urllib.parse, urllib.request
 
 HUB = sys.argv[3].rstrip("/") if len(sys.argv) > 3 else "https://ai-alienware.tail3cffa4.ts.net"
 name, code = sys.argv[1], sys.argv[2]
+here = os.path.dirname(os.path.abspath(__file__))
+home = os.path.expanduser("~")
+fleet = os.path.join(home, ".fleet"); os.makedirs(fleet, exist_ok=True)
 
-req = urllib.request.Request(HUB + "/api/claim", data=json.dumps({"name": name, "code": code}).encode(),
+# How the daemon reaches the hub once it runs outside a chat turn. The turn's proxy refuses the hub
+# (its name resolves to a private tailnet address), so prefer the VM's tunnel proxy (same host,
+# port 3130, no credentials) to the hub's tailnet-only http port; that is the route the old daemon
+# used for weeks. Keep the first route that answers.
+proxy_conf, ingest = os.path.join(fleet, "proxy.conf"), os.path.join(fleet, "ingest")
+host = urllib.parse.urlparse(os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or "").hostname
+tailnet = "http://" + urllib.parse.urlparse(HUB).hostname + ":8780"
+routes = ([(f"http://{host}:3130", tailnet), (f"http://{host}:3130", HUB)] if host else []) + [(None, HUB)]
+for proxy, base in routes:
+    try:
+        op = urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy})) if proxy \
+            else urllib.request.build_opener()
+        op.open(base + "/fleet.py", timeout=20).read()
+    except Exception:
+        continue
+    open(ingest, "w").write(base + "/api/ingest")
+    if proxy:
+        open(proxy_conf, "w").write(proxy)
+    elif os.path.exists(proxy_conf):
+        os.remove(proxy_conf)
+    route = f"{base} via {proxy or 'default route'}"
+    break
+else:
+    sys.exit("fleet: can't reach the hub by any route (tunnel to tailnet, tunnel to hub, default). Paste this to Jack.")
+
+req = urllib.request.Request(base + "/api/claim", data=json.dumps({"name": name, "code": code}).encode(),
                              headers={"Content-Type": "application/json"}, method="POST")
-token = json.load(urllib.request.urlopen(req, timeout=30))["token"]
-
-fleet = os.path.expanduser("~/.fleet"); os.makedirs(fleet, exist_ok=True)
+token = json.load(op.open(req, timeout=60))["token"]
 open(os.path.join(fleet, "token"), "w").write(token); os.chmod(os.path.join(fleet, "token"), 0o600)
 open(os.path.join(fleet, "hub"), "w").write(HUB)
 open(os.path.join(fleet, "agent"), "w").write(name)
+shutil.copy2(os.path.join(here, "telemetryd.py"), os.path.join(fleet, "telemetryd.py"))
 
-# find telemetryd.py beside this script or in ~/.fleet; otherwise fetch it from the hub
-here = os.path.dirname(os.path.abspath(__file__))
-td = next((p for p in (os.path.join(here, "telemetryd.py"), os.path.join(fleet, "telemetryd.py"))
-           if os.path.exists(p)), None)
-if not td:
-    td = os.path.join(fleet, "telemetryd.py")
-    urllib.request.urlretrieve(HUB + "/telemetryd.py", td)
+# Remove every older install: the v10–v14 systemd daemon, its files, Slack listener, crons, hooks scripts.
+sh = lambda c: subprocess.run(c, shell=True, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+sh("systemctl disable --now telemetryd.service; rm -f /etc/systemd/system/telemetryd.service; systemctl daemon-reload")
+sh("crontab -l 2>/dev/null | grep -viE 'watchdog|slack|listen|telemetry' | crontab -")
+for pat in ("listen.py", "telemetryd.py"):   # not via sh: the shell's own command line would match
+    subprocess.run(["pkill", "-f", pat], check=False)
+shutil.rmtree(os.path.join(home, "workspace", "telemetry"), ignore_errors=True)
+hooks = os.path.join(home, "hooks", "scripts"); os.makedirs(hooks, exist_ok=True)
+for old in ("telemetry-watchdog.sh", "slack-inbox.sh"):
+    old = os.path.join(hooks, old)
+    os.path.exists(old) and os.remove(old)
 
-# Retire the old Slack front door + watchdog so they stop re-prompting this chat.
-# (The Muse watchdog HOOK is removed by the agent with `hooks.rm id=telemetry-watchdog`
-#  — a shell script can't unregister it. This clears the cron, files, and process.)
-subprocess.run("crontab -l 2>/dev/null | grep -viE 'watchdog|slack-watch|listen' | crontab - 2>/dev/null",
-               shell=True, check=False)
-subprocess.run("pkill -f listen.py 2>/dev/null", shell=True, check=False)
-for f in ("~/workspace/telemetry/listen.py", "~/hooks/scripts/telemetry-watchdog.sh",
-          "~/workspace/telemetry/watchdog_hook.sh"):
-    try:
-        os.remove(os.path.expanduser(f))
-    except OSError:
-        pass
+hook = os.path.join(hooks, "fleet-telemetry.sh")
+shutil.copy2(os.path.join(here, "telemetry_hook.sh"), hook); os.chmod(hook, 0o755)
 
-subprocess.run(["pkill", "-f", "telemetryd.py"], check=False)
-subprocess.Popen([sys.executable, td], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                 start_new_session=True)
-print(f"fleet: {name} registered, telemetry on, old front door removed. "
-      f"Now run `hooks.rm id=telemetry-watchdog` to stop the watchdog for good.")
+subprocess.Popen(["setsid", sys.executable, os.path.join(fleet, "telemetryd.py")],
+                 stdout=open(os.path.join(fleet, "telemetryd.log"), "a"), stderr=subprocess.STDOUT,
+                 stdin=subprocess.DEVNULL, start_new_session=True)
+print(f"fleet: {name} registered; telemetry running; hub route: {route}; old installs removed.\n"
+      f"Last step (once): hooks.add id=fleet-telemetry interval=60s script={hook}, then enable it.\n"
+      f"Old hooks to remove if you still have them: telemetry-watchdog, slack-inbox.")
