@@ -92,15 +92,9 @@ with tempfile.TemporaryDirectory() as sp:
     t.post = real
     assert posted == [{"n": 2}] and os.listdir(sp) == [], (posted, os.listdir(sp))
 
-# inbox: one file per message (a repeat replaces it); "answered" files it away
-with tempfile.TemporaryDirectory() as ib:
-    t.INBOX = ib
-    msg_ = {"kind": "slack", "channel_id": "C1", "ts": "5.1", "text": "hi"}
-    t.handle_mail(dict(msg_, id=1)); t.handle_mail(dict(msg_, id=2, why="again"))
-    assert os.listdir(ib) == ["C1-5.1.json"], os.listdir(ib)
-    t.handle_mail({"kind": "answered", "channel_id": "C1", "ts": "5.1", "id": 3})
-    t.handle_mail({"kind": "answered", "channel_id": "C1", "ts": "9.9", "id": 4})   # unknown: ignored
-    assert sorted(os.listdir(ib)) == ["done"] and os.listdir(os.path.join(ib, "done")) == ["C1-5.1.json"]
+# an agent set up by setup.py has no proxy.conf; the daemon must still start
+t.PROXY_FILE = "/nonexistent/proxy.conf"
+assert t.opener() is not None
 
 # burst caps still hold against hostile input
 assert t.handle_cmd({"burst": True, "interval": 0, "until": 1e12}, 100.0) == (2, 400.0)

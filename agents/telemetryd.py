@@ -130,6 +130,10 @@ def read_token():
 
 
 def opener():
+    # proxy.conf only existed for the old Mac receiver; the hub is https and the VM's own
+    # HTTPS_PROXY env (honored by the default opener) already reaches it.
+    if not os.path.exists(PROXY_FILE):
+        return urllib.request.build_opener()
     with open(PROXY_FILE) as f:
         proxy = f.read().strip()          # e.g. http://10.0.0.5:3130
     return urllib.request.build_opener(
