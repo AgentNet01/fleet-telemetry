@@ -277,6 +277,12 @@ def join():
     except urllib.error.HTTPError as e:
         assert e.code == 401, e.code
 
+    # a team agent whose Muse login the hub holds gets its work pushed into its fleet chat, like a Boboe
+    h.accounts = {"Dara Muse": "x"}
+    hub.register_accounts(h, h.accounts)        # what the hub does at startup: an entry nobody holds a token for
+    r = run("join", "Dara Muse", JOIN, hub_url)
+    assert r.returncode == 0 and h._agent("Dara Muse")["kind"] == "muse", (r, dict(h._agent("Dara Muse") or {}))
+
     # a Slack-bridged agent (dot) joining directly keeps its bridge until Jack switches it off
     h.add_agent("Slacky", "slack")
     r = run("join", "Slacky", JOIN, hub_url)

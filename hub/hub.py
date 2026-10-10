@@ -1250,14 +1250,14 @@ def serve(hub, host, port, password, join_code=None):
                     old = hub._agent(name) if name else None
                     if not (jacks or joins):
                         self._json(403, {"error": "bad claim code"})
-                    elif not name or name.lower() == "jack" or (old and old["kind"] != "slack" and (joins or old["kind"] != "muse")):
+                    elif not name or name.lower() == "jack" or (old and old["token_hash"] and old["kind"] != "slack" and (joins or old["kind"] != "muse")):
                         # the join code makes new agents, or gives a Slack-bridged agent (dot) direct access while
                         # its bridge keeps working; Jack's code also re-claims a Boboe whose VM was replaced.
                         # Neither can take over a board member or another hub agent.
                         self._json(409, {"error": f"the name {name!r} is taken or reserved; pick another"})
                     else:
                         # agents the hub holds a Muse login for get pushed to; anyone else fetches its own work
-                        kind = "muse" if jacks and name in getattr(hub, "accounts", {}) else (old["kind"] if old else "poll")
+                        kind = "muse" if name in getattr(hub, "accounts", {}) else (old["kind"] if old else "poll")
                         self._json(200, {"token": hub.add_agent(name, kind)})
                 elif u.path == "/api/jack/send":           # Jack messages an agent straight from the dashboard
                     if self._jack():
@@ -1358,6 +1358,13 @@ def _revenue_fetch(h, cfg):
     return rows
 
 
+def register_accounts(h, accounts):
+    """A Muse login the hub holds becomes an agent entry with no token; whoever joins under that name claims it."""
+    with h.lock:
+        for name in accounts:
+            h.db.execute("insert or ignore into agents(name, kind) values(?, 'muse')", (name,))
+
+
 def main(cfg_path, *args):
     cfg = json.load(open(cfg_path))
     import muse
@@ -1370,9 +1377,7 @@ def main(cfg_path, *args):
                                   users=cfg.get("slack_users", {}), state_dir=os.path.dirname(cfg["db"]))
     h.transport = muse.KindRouter(lambda n: h._agent(n)["kind"], muse=muse_t, slack=slack_t)
     h.accounts = accounts
-    for name in accounts:
-        if not h._agent(name):
-            h.add_agent(name, "muse")
+    register_accounts(h, accounts)
     for name in parked:
         if h._agent(name):
             h._set("agents", name, state="parked")
