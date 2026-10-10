@@ -261,6 +261,43 @@ def council():
     print("council OK")
 
 
+def manage():
+    """The company runs itself: the CEO and PMs create products, projects and tasks and place agents."""
+    h, muse, clock = new_hub()
+    for n, k in (("Ada", "muse"), ("Bea", "muse"), ("dot", "slack")):
+        h.add_agent(n, k)
+    h.seat("ceo", "dot")
+
+    # dot runs the company from its Slack replies: lines starting with "fleet " are commands
+    answer(h, muse, clock, "dot", 'Setting up.\nfleet product add "Shop" "Etsy planner templates" "first sale"\n'
+                                  'fleet pm "Shop" Ada\nfleet project add "Shop" "launch"')
+    shop = h.db.execute("select * from products where name='Shop'").fetchone()
+    assert shop and shop["pm"] == "Ada" and shop["metric"] == "first sale", dict(shop) if shop else None
+    prj = h.db.execute("select id from projects where name='launch'").fetchone()["id"]
+    clock.go(61); h.tick()
+    back = "\n".join(muse.sent.get("dot", []))
+    assert "product #" in back and f"project #{prj}" in back, f"dot hears what its commands did: {back[-400:]}"
+
+    # the PM adds work and staffs its own product through the fleet command
+    r = h.manage("Ada", f'task add {prj} "list 3 planners" marketer "3 live listings"')
+    assert "task #" in r, r
+    assert "placed" in h.manage("Ada", 'place Bea "Shop" marketer')
+    assert h._agent("Bea")["current_product"] == "Shop"
+    assert "Shop" in h.manage("Bea", "portfolio") and "list 3 planners" in h.manage("Bea", "portfolio")
+
+    # an agent with no seat can't run the company, and nothing changes
+    for line in ('product add "Mine" "x"', f'task add {prj} "x" engineer "x"', 'pm "Shop" Bea', 'place Ada "Shop" designer'):
+        try:
+            h.manage("Bea", line)
+            raise AssertionError(f"Bea ran: {line}")
+        except PermissionError:
+            pass
+    assert h._agent("Ada")["current_role"] is None or h._agent("Ada")["current_role"] != "designer"
+    assert h.db.execute("select count(*) from products").fetchone()[0] == 1
+    assert "unknown" in h.manage("dot", "fly away").lower()
+    print("manage OK")
+
+
 if __name__ == "__main__":
     {"council": council, "lifecycle": lifecycle, "poll": poll, "placement": placement, "org": org, "suggest": suggest,
-     "seats": seats, "switch_between": switch_between}.get(sys.argv[1] if len(sys.argv) > 1 else "", tasks)()
+     "seats": seats, "manage": manage, "switch_between": switch_between}.get(sys.argv[1] if len(sys.argv) > 1 else "", tasks)()

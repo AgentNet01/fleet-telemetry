@@ -23,6 +23,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PASSWORD = "test-pass-123"
 
 
+JOIN = "join-only-code"
+
+
 def free_port():
     s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
 
@@ -32,7 +35,7 @@ def start(port=None, db=None):
     h = hub.Hub(db or os.path.join(tempfile.mkdtemp(), "hub.db"), FakeMuse(), Clock())
     tokens = {} if db else {n: h.add_agent(n, k) for n, k in (("Boboe 3", "muse"), ("dot", "poll"))}
     port = port or free_port()
-    srv = hub.serve(h, "127.0.0.1", port, PASSWORD)
+    srv = hub.serve(h, "127.0.0.1", port, PASSWORD, join_code=JOIN)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return h, srv, port, tokens
 
@@ -232,9 +235,64 @@ def company():
 
     r = fleet(port, tok["Boboe 3"], "status", home=home)
     assert "Templates" in r.stdout and "developer" in r.stdout, f"status shows product and role: {r.stdout}"
+
+    # the CEO runs the company from the command line; a plain agent is refused
+    r = fleet(port, tok["dot"], "project", "add", "Templates", "launch", home=home)
+    assert r.returncode == 0 and "project #" in r.stdout, r
+    r = fleet(port, tok["dot"], "portfolio", home=home)
+    assert "launch" in r.stdout and "Boboe 3" in r.stdout, r.stdout
+    r = fleet(port, tok["Boboe 3"], "product", "add", "Mine", "x", home=home)
+    assert r.returncode != 0 and "403" in r.stderr, r
     srv.shutdown()
     print("company OK")
 
 
+def join():
+    """Another team's agent joins with its own code: a new name only, no takeover, no dashboard."""
+    h, srv, port, tok = start()
+    h.add_agent("darragh", "jack")
+    home = tempfile.mkdtemp()
+    hub_url = f"http://127.0.0.1:{port}"
+    env = dict(os.environ, FLEET_HOME=home)
+    env.pop("FLEET_HUB", None); env.pop("FLEET_TOKEN", None)
+    run = lambda *a: subprocess.run([sys.executable, os.path.join(HERE, "fleet.py"), *a], env=env,
+                                    capture_output=True, text=True, timeout=30)
+
+    r = run("join", "Dara Scout", JOIN, hub_url)
+    assert r.returncode == 0 and "Dara Scout" in r.stdout, r
+    assert h._agent("Dara Scout")["kind"] == "poll"
+    r = run("status")
+    assert r.returncode == 0 and "not placed" in r.stdout, r
+
+    # the join code can't take over anyone, and isn't the dashboard password
+    for name in ("Boboe 3", "dot", "darragh", "jack", "Dara Scout"):
+        r = run("join", name, JOIN, hub_url)
+        assert r.returncode != 0, f"join code took over {name}: {r.stdout}"
+    assert h.agent_by_token(tok["Boboe 3"]) == "Boboe 3", "existing agent kept its token"
+    import base64, urllib.request, urllib.error
+    req = urllib.request.Request(hub_url + "/api/board", headers={
+        "Authorization": "Basic " + base64.b64encode(f"jack:{JOIN}".encode()).decode()})
+    try:
+        urllib.request.urlopen(req); raise AssertionError("join code opened the dashboard")
+    except urllib.error.HTTPError as e:
+        assert e.code == 401, e.code
+
+    # a Slack-bridged agent (dot) joining directly keeps its bridge until Jack switches it off
+    h.add_agent("Slacky", "slack")
+    r = run("join", "Slacky", JOIN, hub_url)
+    assert r.returncode == 0, r
+    assert h._agent("Slacky")["kind"] == "slack", "joining keeps the Slack bridge"
+    r = run("status")
+    assert r.returncode == 0, r
+
+    # Jack's own code still re-claims a Boboe (VM replaced), but never a board member or dot
+    r = run("join", "Boboe 3", PASSWORD, hub_url)
+    assert r.returncode == 0, r
+    for name in ("darragh", "jack", "dot"):
+        assert run("join", name, PASSWORD, hub_url).returncode != 0, f"Jack's code re-claimed {name}"
+    srv.shutdown()
+    print("join OK")
+
+
 if __name__ == "__main__":
-    {"dashboard": dashboard, "company": company, "cli": cli}.get(sys.argv[1] if len(sys.argv) > 1 else "", poll_agent_flow)()
+    {"dashboard": dashboard, "company": company, "cli": cli, "join": join}.get(sys.argv[1] if len(sys.argv) > 1 else "", poll_agent_flow)()

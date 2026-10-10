@@ -115,7 +115,7 @@ of it from the dashboard. Deployed to ai-alienware; the loop is turned on only a
   old roles with the four new ones, restart `fleet-hub`, confirm it serves and the board loads.
   - check: `bash /Users/jacc/Desktop/Fleet/fleet-telemetry/hub/check_live3.sh deploy`
   - on fail: read `C:\fleet\hub.log` over SSH, fix, redo Step 9.
-- [ ] Step 10: Go live, only after Jack says go: Jack sends each active agent the main-chat heads-up;
+- [x] Step 10: Go live, only after Jack says go: Jack sends each active agent the main-chat heads-up;
   then open fresh fleet side chats, set `loop: true`, restart, and confirm each of the five got the
   intro and nothing reached a parked agent or a main chat.
   - check: `bash /Users/jacc/Desktop/Fleet/fleet-telemetry/hub/check_live3.sh live`

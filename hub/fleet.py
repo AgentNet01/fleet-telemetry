@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """fleet: talk to the fleet hub.
 
+    fleet join "<name>" <code> [<hub url>]   join the hub once (saves ~/.fleet/token); nothing else is installed
     fleet ask "<agent>" "<text>"     ask another agent (their reply comes back to you)
     fleet ask all "<text>"           ask the whole fleet; one answer comes back
     fleet inbox                      your oldest waiting item (agents that poll, e.g. dot)
@@ -15,6 +16,15 @@
     fleet task verify <id> fail "<reason>"   send it back to its holder with the reason
     fleet task release <id>          put a task back up for grabs (CEO / the product's PM only)
     fleet suggest "<text>"           suggest a change to your PM and the CEO
+
+  Running the company (CEO: everything; a product's PM: its projects, tasks and people):
+    fleet portfolio                  every product, project, open task, and who is where
+    fleet product add "<name>" "<brief>" ["<goal>"]          (CEO)
+    fleet product set "<product>" brief|metric|status "<value>"
+    fleet pm "<product>" <agent>     make an agent the product's PM (CEO)
+    fleet project add "<product>" "<name>"
+    fleet task add <project id> "<title>" <role> "<done when>" [<blocker task ids,>]
+    fleet place <agent> "<product>" <role>   roles: designer engineer marketer optimizer
     fleet suggestion accept|reject <id> ["<note>"]   decide a suggestion (CEO / the product's PM)
 
 Config: ~/.fleet/token and ~/.fleet/hub (or FLEET_TOKEN / FLEET_HUB / FLEET_HOME).
@@ -152,6 +162,19 @@ def main(args):
     if not args or args[0] in ("-h", "--help", "help"):
         print(__doc__); return 0
     cmd = args[0]
+    if cmd == "join" and len(args) in (3, 4):
+        base = (args[3] if len(args) == 4 else "https://ai-alienware.tail3cffa4.ts.net").rstrip("/")
+        req = urllib.request.Request(base + "/api/claim", data=json.dumps({"name": args[1], "code": args[2]}).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as r:
+            token = json.load(r)["token"]
+        os.makedirs(HOME, exist_ok=True)
+        for f, v in (("hub", base), ("token", token)):
+            with open(os.path.join(HOME, f), "w") as fh:
+                fh.write(v)
+        os.chmod(os.path.join(HOME, "token"), 0o600)
+        print(f"Joined as {args[1]}. Check for work with: fleet status   (and fleet inbox)")
+        return 0
     if cmd == "ask" and len(args) == 3 and args[1] == "all":
         r = write("/api/ask", {"to": "all", "text": args[2]})
         r and print("Asked the fleet. One answer will come back to you.")
@@ -196,6 +219,9 @@ def main(args):
         call("POST", "/api/task/" + verb, body)
         print({"note": f"Noted on #{tid}.", "done": f"#{tid} is done and goes to verification.",
                "verify": f"Verification of #{tid} recorded.", "release": f"#{tid} released."}[verb])
+    elif cmd in ("portfolio", "product", "project", "pm", "place") or args[:2] == ["task", "add"]:
+        import shlex
+        print(call("POST", "/api/manage", {"line": shlex.join(args)})["result"])
     elif cmd == "suggest" and len(args) == 2:
         r = call("POST", "/api/suggest", {"text": args[1]})
         print(f"Suggestion #{r['id']} sent to your PM and the CEO.")

@@ -15,6 +15,7 @@ progress; idle agents are never woken — the CEO hears when more than three sit
 import base64
 import hashlib
 import hmac
+import html
 import json
 import os
 import secrets
@@ -124,6 +125,7 @@ NUDGES = (                            # same meaning, different words: agents tu
     "Still on this one? A short progress note helps the team plan around you.",
     "Reminder — this fleet task is waiting on you.",
 )  # delivered once; the work itself is tracked on the task row
+SMART_QUOTES = str.maketrans({"\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'"})
 DEFAULT_ROLES = {
     "designer": "You are the product designer for this product: how it looks, reads and feels to a buyer. "
                 "Show your work as files or links, never just a description.",
@@ -341,6 +343,8 @@ class Hub:
             if fresh:
                 for _, text in fresh:
                     self._log(it["id"] if it else None, name, "out", text)
+                    if a["kind"] == "slack":
+                        self._run_lines(name, text)
                 self._set("agents", name, seen_seq=max(s for s, _ in fresh), state="active")
                 if it and rep is not None:
                     self._set("items", it["id"], nreplies=len(rep), last_reply=now,
@@ -632,6 +636,89 @@ class Hub:
     def set_pm(self, product, who):
         with self.lock:
             self.db.execute("update products set pm=? where name=? or id=?", (who or None, product, product))
+
+    MANAGE_HELP = ('fleet portfolio | fleet product add "<name>" "<brief>" ["<metric>"] | '
+                   'fleet product set "<product>" brief|metric|status "<value>" | fleet pm "<product>" <agent> | '
+                   'fleet project add "<product>" "<name>" | '
+                   'fleet task add <project id> "<title>" designer|engineer|marketer|optimizer "<done when>" [<blocker ids,>] | '
+                   'fleet place <agent> "<product>" <role>')
+
+    def manage(self, by, line):
+        """One company command from an agent (the fleet CLI, or a "fleet ..." line in dot's Slack reply).
+        Products and PMs: the board and the CEO. Projects, tasks, placing agents: also the product's PM."""
+        import shlex
+        a = shlex.split(line)
+        with self.lock:
+            def product(ref):
+                r = self.db.execute("select * from products where name=? or cast(id as text)=?", (ref, ref)).fetchone()
+                if not r:
+                    raise ValueError(f"no product {ref!r}")
+                return r
+
+            def top():
+                if not (self.is_board(by) or by == self._chair()):
+                    raise PermissionError("only Jack, Darragh or the CEO can do that")
+
+            def mgr(name):
+                if not self.may_manage(by, name):
+                    raise PermissionError(f"only Jack, Darragh, the CEO or {name}'s PM can do that")
+
+            if a == ["portfolio"]:
+                return self._portfolio()
+            if a[:2] == ["product", "add"] and len(a) in (4, 5):
+                top()
+                return f"product #{self.add_product(a[2], brief=a[3], metric=a[4] if len(a) == 5 else None)} {a[2]} created"
+            if a[:2] == ["product", "set"] and len(a) == 5 and a[3] in ("brief", "metric", "status"):
+                p = product(a[2]); mgr(p["name"])
+                self._set("products", p["id"], **{a[3]: a[4]})
+                return f"{p['name']}: {a[3]} set"
+            if a[0] == "pm" and len(a) == 3:
+                top()
+                p = product(a[1])
+                if not self._agent(a[2]):
+                    raise ValueError(f"no agent {a[2]!r}")
+                self.set_pm(p["id"], a[2])
+                return f"{a[2]} is PM of {p['name']}"
+            if a[:2] == ["project", "add"] and len(a) == 4:
+                p = product(a[2]); mgr(p["name"])
+                return f"project #{self.add_project(p['id'], a[3])} {a[3]} added to {p['name']}"
+            if a[:2] == ["task", "add"] and len(a) in (6, 7):
+                if a[4] not in self.roles():
+                    raise ValueError(f"role must be one of {', '.join(self.roles())}")
+                blk = [int(x) for x in a[6].split(",") if x] if len(a) == 7 else ()
+                return f"task #{self.add_task(int(a[2]), a[3], a[4], a[5], blocked_by=blk, by=by)} {a[3]} added"
+            if a[0] == "place" and len(a) == 4:
+                p = product(a[2]); mgr(p["name"])
+                if not self._agent(a[1]) or a[3] not in self.roles():
+                    raise ValueError(f"unknown agent {a[1]!r} or role {a[3]!r}")
+                self.place(a[1], p["name"], a[3])
+                return f"{a[1]} placed on {p['name']} as {a[3]}"
+            return "unknown command. Use: " + self.MANAGE_HELP
+
+    def _run_lines(self, name, text):
+        done = []
+        for ln in text.splitlines():
+            ln = html.unescape(ln).translate(SMART_QUOTES).strip().strip("`").strip()
+            if ln.startswith("fleet "):
+                try:
+                    done.append(f"{ln}\n→ {self.manage(name, ln[6:])}")
+                except (PermissionError, ValueError) as e:
+                    done.append(f"{ln}\n→ refused: {e}")
+        if done:
+            self._note(name, "your fleet commands", "\n\n".join(done))
+
+    def _portfolio(self):
+        out = []
+        for p in self.db.execute("select * from products order by id"):
+            out.append(f"product #{p['id']} {p['name']} ({p['status']}) PM {p['pm'] or '(none)'} · goal {p['metric'] or '-'}\n  {p['brief'] or ''}")
+            for j in self.db.execute("select * from projects where product=? order by id", (p["id"],)):
+                out.append(f"  project #{j['id']} {j['name']}")
+                for t in self.db.execute("select * from tasks where project=? and status != 'done' order by id", (j["id"],)):
+                    out.append(f"    task #{t['id']} {t['status']} {t['title']} ({t['role']}) {('· ' + t['owner']) if t['owner'] else ''}")
+        out.append("agents:")
+        for g in self.db.execute("select * from agents where kind in ('muse','poll') and state != 'parked' order by name"):
+            out.append(f"  {g['name']}: {g['current_product'] or 'no product'} · {g['current_role'] or 'no role'}")
+        return "\n".join(out) or "(no products yet)"
 
     def roles(self):
         with self.lock:
@@ -981,7 +1068,7 @@ class Hub:
 
 
 # ---- HTTP ---------------------------------------------------------------------------------
-def serve(hub, host, port, password):
+def serve(hub, host, port, password, join_code=None):
     page_path = os.path.join(HERE, "dashboard.html")
 
     class H(BaseHTTPRequestHandler):
@@ -1138,6 +1225,9 @@ def serve(hub, host, port, password):
                         else:
                             raise ValueError(f"unknown task action {verb}")
                         self._json(200, {"ok": True, "task": hub.task(tid)["status"]})
+                elif u.path == "/api/manage":                # CEO / PM run the company: products, projects, tasks, placement
+                    name = self._agent()
+                    name and self._json(200, {"result": hub.manage(name, self._body()["line"])})
                 elif u.path == "/api/suggest":
                     name = self._agent()
                     name and self._json(200, {"id": hub.suggest(name, self._body()["text"])})
@@ -1152,14 +1242,23 @@ def serve(hub, host, port, password):
                     if name:
                         hub.ingest(name, self._body())
                         self._json(200, {"ok": True})
-                elif u.path == "/api/claim":                # an agent registers itself (Jack's code), no hub push
+                elif u.path == "/api/claim":                # an agent registers itself with a code, no hub push
                     b = self._body()
-                    if hmac.compare_digest(b.get("code", ""), password):
-                        # agents the hub holds a Muse login for get pushed to; anyone else fetches its own work
-                        kind = "muse" if b["name"] in getattr(hub, "accounts", {}) else "poll"
-                        self._json(200, {"token": hub.add_agent(b["name"], kind)})
-                    else:
+                    code, name = b.get("code", ""), str(b.get("name", "")).strip()
+                    jacks = hmac.compare_digest(code, password)
+                    joins = bool(join_code) and hmac.compare_digest(code, join_code)
+                    old = hub._agent(name) if name else None
+                    if not (jacks or joins):
                         self._json(403, {"error": "bad claim code"})
+                    elif not name or name.lower() == "jack" or (old and old["kind"] != "slack" and (joins or old["kind"] != "muse")):
+                        # the join code makes new agents, or gives a Slack-bridged agent (dot) direct access while
+                        # its bridge keeps working; Jack's code also re-claims a Boboe whose VM was replaced.
+                        # Neither can take over a board member or another hub agent.
+                        self._json(409, {"error": f"the name {name!r} is taken or reserved; pick another"})
+                    else:
+                        # agents the hub holds a Muse login for get pushed to; anyone else fetches its own work
+                        kind = "muse" if jacks and name in getattr(hub, "accounts", {}) else (old["kind"] if old else "poll")
+                        self._json(200, {"token": hub.add_agent(name, kind)})
                 elif u.path == "/api/jack/send":           # Jack messages an agent straight from the dashboard
                     if self._jack():
                         b = self._body()
@@ -1313,7 +1412,7 @@ def main(cfg_path, *args):
     if cfg.get("loop", True):               # assigns, nudges and delivers to fleet side chats; off = pure server
         threading.Thread(target=loop, daemon=True).start()
     log.write(time.strftime("%F %T ") + f"hub up on {cfg.get('host', '127.0.0.1')}:{cfg['port']}\n")
-    serve(h, cfg.get("host", "127.0.0.1"), cfg["port"], cfg["password"]).serve_forever()
+    serve(h, cfg.get("host", "127.0.0.1"), cfg["port"], cfg["password"], cfg.get("join_code")).serve_forever()
 
 
 def _admin(h, cmd, a):
