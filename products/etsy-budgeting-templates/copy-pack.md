@@ -1,6 +1,6 @@
 # Etsy Listing Copy Pack — Budgeting Templates v1
 Product: Etsy budgeting templates · Goal: first sale · Marketer: Boboe 1
-Status: FINAL — validated build (budget-planner-v1.zip, sha256 482cc3a09acb6452fc81faf54fa2bed77f407c82872925e87b849c245f870597, staged 2026-10-10). Sheet names verified against the staged workbook. Brutus-reviewed (fleet #60). No placeholders. Ready to paste into Etsy.
+Status: FINAL v2 — corrected after verification failure (fleet #71): all debt-payoff claims removed (v1 has no debt sheet — same failure mode as Oct 5, now fixed at the source), compatibility stated honestly per the staged build (tested in LibreOffice Calc; Excel/Google Sheets not verified). Sheet names verified against the staged workbook. Brutus-reviewed (fleet #60); title/tags changes in v2 are claim corrections only. No placeholders. Ready to paste into Etsy.
 Name lockup: cover + shop announcement = "Simple Monthly Budget Spreadsheet"; listing title string (search-optimized) = "Monthly Budget Spreadsheet | ...".
 
 ## Field limits (verified Oct 2026)
@@ -10,16 +10,16 @@ Name lockup: cover + shop announcement = "Simple Monthly Budget Spreadsheet"; li
 - Shop announcement: ≤500 characters; key info in the first ~167
 
 ## Title
-Monthly Budget Spreadsheet | Excel Budget Planner Template | Expense Tracker, Debt Payoff & Savings Goals | Auto Dashboard
+Monthly Budget Spreadsheet | Budget Planner Template | Expense Tracker & Savings Goals | Auto Dashboard
 
 ## Tags (13)
 1. budget spreadsheet
 2. monthly budget
 3. budget planner
-4. excel budget
+4. budget workbook
 5. money tracker
 6. expense tracker
-7. debt payoff plan
+7. savings goal plan
 8. savings tracker
 9. money planner
 10. finance planner
@@ -28,7 +28,7 @@ Monthly Budget Spreadsheet | Excel Budget Planner Template | Expense Tracker, De
 13. paycheck budget
 
 ## Shop announcement
-NEW: the Simple Monthly Budget Spreadsheet — track income, expenses, debt payoff and savings in one auto-calculating Excel template. 7 sheets, beginner friendly, instant download.
+NEW: the Simple Monthly Budget Spreadsheet — track income, expenses, and savings goals in one auto-calculating template. 7 sheets, instant download. Tested in LibreOffice Calc (.xlsx).
 
 ## Description
 Tired of guessing where your money goes? This all-in-one monthly budget spreadsheet shows you exactly what comes in, what goes out, and what's left — automatically.
@@ -56,20 +56,19 @@ WHO IT'S FOR
 → Anyone who wants to stop overspending
 → Couples and families planning a monthly budget
 → Students and first-time budgeters
-→ Anyone paying off debt or saving for a goal
+→ Anyone saving for a goal — emergency fund, vacation, or a big purchase
 
 HOW IT WORKS
 1. Purchase — instant download after checkout
-2. Open the .xlsx workbook in Excel (also opens in LibreOffice Calc)
+2. Open the .xlsx workbook in LibreOffice Calc (free)
 3. Follow the START HERE tab — budgeting in minutes
 
 PLEASE NOTE
 • Digital download only — no physical item will be shipped
-• Provided as a Microsoft Excel workbook (.xlsx); tested in LibreOffice Calc
+• Provided as a spreadsheet workbook (.xlsx); tested in LibreOffice Calc — compatibility with Microsoft Excel and Google Sheets has not been verified
 • Digital downloads aren't eligible for returns or exchanges. If the file won't open or is corrupted, contact the shop for a replacement. This doesn't limit your rights under Etsy's policies or applicable law.
 • This spreadsheet was created with AI assistance.
 • For personal use only; redistribution or resale is prohibited
-• Excel software not included
 
 Questions? Send me a message — I'm happy to help. If you love it, a review helps this new shop grow. 💛
 
