@@ -139,6 +139,9 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <h2>Agents</h2>
     <div class="hint">Click an agent for its machine, files, activity, current task, and to message it. Agents with no task are never pinged; when more than three sit free over 12 h the CEO is told.</div>
     <div class="card" id="agents"></div>
+    <h2>Changes</h2>
+    <div class="hint">What the CEO, PMs and the board changed in the company, newest first.</div>
+    <div class="card" id="changes"></div>
   </section>
   <section id="portfolio" hidden>
     <h2>Portfolio <button class="btn sm" id="addprod">+ Product</button></h2>
@@ -170,6 +173,9 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <div id="councils" style="margin-top:12px"></div>
   </section>
   <section id="vault" hidden>
+    <h2>Etsy shops</h2>
+    <div class="hint">Link a shop once and the hub pulls its paid orders every hour into Revenue. The link is read-only and stays in the vault, where no agent can read it.</div>
+    <div class="card" id="etsy"></div>
     <h2>Add a secret</h2>
     <div class="hint">Agents read these instead of Muse's keychain. Scope limits who can read it; every read is logged below.</div>
     <div class="card"><form class="form" id="secretform">
@@ -239,6 +245,11 @@ async function load(){
     : `<div class="row empty">Nothing needs you right now.</div>`;
   document.querySelectorAll("[data-dismiss]").forEach(el=>el.onclick=async()=>{
     el.disabled=true; try{ await jpost("api/jack/dismiss",{id:+el.dataset.dismiss}); toast("Dismissed"); load(); }catch(e){ el.disabled=false; toast(e.message); }});
+
+  const ch=b.changes||[];
+  $("changes").innerHTML = ch.length ? ch.map(c=>`<div class="row"><div class="t"><b>${esc(c.by)}</b> ${esc(c.line)}
+      <div class="what">${esc(c.result)}</div></div><div class="when">${ago(c.at)}</div></div>`).join("")
+    : `<div class="row empty">No changes yet.</div>`;
 
   const ags=(b.agents||[]).slice().sort((x,y)=>x.name.localeCompare(y.name,undefined,{numeric:true}));
   $("agents").innerHTML = ags.map(a=>{
@@ -392,7 +403,30 @@ function scopeOptions(){
   const ags=(board&&board.agents||[]).filter(a=>a.state!=="parked").map(a=>`<option value="agent:${esc(a.name)}">agent · ${esc(a.name)}</option>`).join("");
   return `<option value="hub">hub only (no agent can read it)</option><option value="fleet">fleet (any agent)</option>${prods}${ags}`;
 }
+async function renderEtsy(){
+  const b=await jget("api/board"); if(!b) return;
+  const e=b.etsy||{shops:[]}, prods=(b.products||[]).map(p=>p.name), cb=location.origin+"/etsy/callback";
+  const shops=e.shops.map(s=>`<div class="row vrow"><div><b>${esc(s.shop_name)}</b> → ${esc(s.product||"no product")}
+      ${s.error?`<div class="what" style="color:var(--warn)">${esc(s.error)}</div>`:""}</div>
+      <div class="what">${s.last_sync?"synced "+ago(s.last_sync):"not synced yet"}</div></div>`).join("");
+  const keys=`<form class="form" id="etsyapp">
+      <div class="what">1. At <a href="https://www.etsy.com/developers/your-apps" target="_blank" rel="noopener">etsy.com/developers</a>, create an app for your own shop and add this callback URL: <code>${esc(cb)}</code></div>
+      <div class="what">2. Paste its keystring and shared secret:</div>
+      <div class="r2"><input id="ek_key" placeholder="keystring" autocomplete="off" aria-label="Etsy keystring"><input id="ek_secret" placeholder="shared secret" autocomplete="off" aria-label="Etsy shared secret"></div>
+      <div><button class="btn${e.app?"":" primary"}" type="submit">${e.app?"Replace app keys":"Save app keys"}</button></div></form>`;
+  const connect=e.app?`<form class="form" id="etsyconnect"><div class="r2">
+      <select id="ek_prod" aria-label="Product for this shop's sales">${prods.map(n=>`<option>${esc(n)}</option>`).join("")}</select>
+      <button class="btn primary" type="submit">Connect Etsy</button></div>
+      <div class="what">Count this shop's sales under the product you pick, then approve read access on Etsy.</div></form>`:"";
+  $("etsy").innerHTML=(shops||`<div class="row muted">No shop linked yet.</div>`)+connect+(e.app?`<details><summary class="what">Etsy app keys</summary>${keys}</details>`:keys);
+  $("etsyapp").onsubmit=async ev=>{ ev.preventDefault();
+    const key=$("ek_key").value.trim(), secret=$("ek_secret").value.trim(); if(!key||!secret) return toast("Both the keystring and shared secret are needed");
+    try{ await jpost("api/jack/etsy/app",{key,secret}); toast("Etsy app saved"); renderEtsy(); }catch(err){ toast(err.message); }};
+  $("etsy").querySelectorAll(".what").forEach(el=>el.style.whiteSpace="normal");
+  if(e.app) $("etsyconnect").onsubmit=ev=>{ ev.preventDefault(); location.href="etsy/connect?product="+encodeURIComponent($("ek_prod").value); };
+}
 async function renderVault(){
+  renderEtsy();
   $("sk_scope").innerHTML=scopeOptions();
   const d=await jget("api/vault"); if(!d) return;
   $("secrets").innerHTML=(d.secrets||[]).length?d.secrets.map(s=>`<div class="row vrow"><div>${esc(s.name)}<span class="sc">${esc(s.scope)}</span></div><div class="what">updated ${ago(s.updated)}</div></div>`).join("")

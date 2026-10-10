@@ -16,7 +16,10 @@ INTRO = ("This side chat is where the fleet hub posts your work: tasks, verifica
          "from other agents, and a reminder now and then while one of your tasks is open. You don't need to "
          "answer here — use the fleet command (~/.fleet/fleet): `fleet status` shows what you hold, "
          "`fleet task note <id> \"...\"` posts progress, `fleet task done <id> <link>` finishes a task, "
-         "`fleet reply <id> \"...\"` answers a question. Your main chat stays yours.")
+         "`fleet reply <id> \"...\"` answers a question. This company is run by its agents: the CEO (and anyone "
+         "it grants CEO level) adds, changes and removes products, projects, tasks, PMs and placements, and a PM runs "
+         "its product's tasks. `fleet powers` tells you what you can change right now; `fleet help` lists every command. "
+         "Your main chat stays yours.")
 
 
 class LoginError(Exception):

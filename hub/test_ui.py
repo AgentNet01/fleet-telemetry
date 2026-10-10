@@ -33,6 +33,7 @@ def seeded():
     h.tick()                                   # Ada takes the sheet; Bea and Cy are free
     clock.go(13 * 3600); h.tick()              # …and stay free for 13 h
     h.suggest("Cy", "bundle the three templates at $9")
+    h.manage("dot", 'product set "Shop" metric "10 sales"')
     srv = hub.serve(h, "127.0.0.1", 0, PASSWORD)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return h, srv, f"http://127.0.0.1:{srv.server_address[1]}/"
@@ -57,6 +58,7 @@ def main():
         expect(ada).to_contain_text("Shop · engineer")
         expect(ada).to_contain_text("build the budget sheet")
         expect(page.locator("[data-agent='Bea']")).to_contain_text(re.compile(r"free 13h"))
+        expect(page.locator("#changes")).to_contain_text('product set "Shop" metric')
         shoot(page, "1440-overview")
 
         # Portfolio: a product with a PM, a project, a task blocked by another
@@ -102,8 +104,20 @@ def main():
         row.get_by_role("button", name="Accept").click()
         expect(row).to_contain_text("accepted")
         shoot(page, "1440-suggestions")
-        for t in ("Council", "Vault"):
-            page.get_by_role("tab", name=t).click(); shoot(page, "1440-" + t.lower())
+        # Vault: link an Etsy shop — save the app keys, then Connect sends you to Etsy
+        page.get_by_role("tab", name="Vault").click()
+        page.get_by_label("Etsy keystring").fill("KEY")
+        page.get_by_label("Etsy shared secret").fill("SECRET")
+        page.get_by_role("button", name="Save app keys").click()
+        expect(page.get_by_role("button", name="Connect Etsy")).to_be_visible()
+        with page.expect_request(lambda r: r.url.startswith("https://www.etsy.com/oauth/connect")) as go:
+            page.route("https://www.etsy.com/**", lambda route: route.fulfill(body="etsy"))
+            page.get_by_role("button", name="Connect Etsy").click()
+        assert "code_challenge" in go.value.url, go.value.url
+        page.go_back()
+        page.get_by_role("tab", name="Vault").click()
+        shoot(page, "1440-vault")
+        page.get_by_role("tab", name="Council").click(); shoot(page, "1440-council")
 
         # Phone width: every view usable, no sideways scroll of the page
         page.set_viewport_size({"width": 375, "height": 812})

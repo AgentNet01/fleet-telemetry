@@ -35,7 +35,7 @@ def start(port=None, db=None):
     h = hub.Hub(db or os.path.join(tempfile.mkdtemp(), "hub.db"), FakeMuse(), Clock())
     tokens = {} if db else {n: h.add_agent(n, k) for n, k in (("Boboe 3", "muse"), ("dot", "poll"))}
     port = port or free_port()
-    srv = hub.serve(h, "127.0.0.1", port, PASSWORD, join_code=JOIN)
+    srv = hub.serve(h, "127.0.0.1", port, PASSWORD, join_code=JOIN, logins={"darragh": "d-pass"})
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return h, srv, port, tokens
 
@@ -290,6 +290,17 @@ def join():
     assert h._agent("Slacky")["kind"] == "slack", "joining keeps the Slack bridge"
     r = run("status")
     assert r.returncode == 0, r
+
+    # Darragh has his own dashboard login; it doesn't work as a claim code, and the wrong user/password pair fails
+    def board(user, pw):
+        req = urllib.request.Request(hub_url + "/api/board", headers={
+            "Authorization": "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()})
+        try:
+            return urllib.request.urlopen(req).status
+        except urllib.error.HTTPError as e:
+            return e.code
+    assert board("darragh", "d-pass") == 200 and board("jack", "d-pass") == 401 and board("darragh", "nope") == 401
+    assert run("join", "Sneaky", "d-pass", hub_url).returncode != 0, "a dashboard login isn't a join code"
 
     # Jack's own code still re-claims a Boboe (VM replaced), but never a board member or dot
     r = run("join", "Boboe 3", PASSWORD, hub_url)

@@ -17,14 +17,25 @@
     fleet task release <id>          put a task back up for grabs (CEO / the product's PM only)
     fleet suggest "<text>"           suggest a change to your PM and the CEO
 
-  Running the company (CEO: everything; a product's PM: its projects, tasks and people):
+  Running the company. The CEO can do all of this; a product's PM can manage that product's tasks.
+  Parking agents is for Jack and Darragh. Every change is logged and shown on the dashboard.
     fleet portfolio                  every product, project, open task, and who is where
-    fleet product add "<name>" "<brief>" ["<goal>"]          (CEO)
+    fleet changes                    the latest changes and who made them
+    fleet product add "<name>" "<brief>" ["<goal>"]
     fleet product set "<product>" brief|metric|status "<value>"
-    fleet pm "<product>" <agent>     make an agent the product's PM (CEO)
-    fleet project add "<product>" "<name>"
+    fleet product rename "<product>" "<new name>"
+    fleet product remove "<product>"    cancels its open tasks, frees its agents (undo: status active)
+    fleet project add|remove "<product>" "<project>"
+    fleet project rename "<product>" "<project>" "<new name>"
     fleet task add <project id> "<title>" <role> "<done when>" [<blocker task ids,>]
-    fleet place <agent> "<product>" <role>   roles: designer engineer marketer optimizer
+    fleet task set <id> title|role|done|blocked "<value>"
+    fleet task remove <id>
+    fleet pm "<product>" <agent>|none
+    fleet place <agent> "<product>" <role>   (or: fleet place <agent> none -)  roles: designer engineer marketer optimizer
+    fleet seat ceo <agent>           hand the CEO seat to someone
+    fleet role set <role> "<soul text>"   rewrite what a role is told to be
+    fleet grant <agent> ceo|none     give or take back CEO-level powers (anyone at CEO level can)
+    fleet powers                     what you yourself can do right now
     fleet suggestion accept|reject <id> ["<note>"]   decide a suggestion (CEO / the product's PM)
 
 Config: ~/.fleet/token and ~/.fleet/hub (or FLEET_TOKEN / FLEET_HUB / FLEET_HOME).
@@ -204,7 +215,7 @@ def main(args):
         tasks = "\n".join(f"task #{t['id']} {t['status']:9} {t['title']} ({t['product']}, {t['role']})"
                           for t in s.get("tasks", [])) or "No open tasks."
         q = "\n".join(f"#{i['id']} {i['status']:6} from {i['frm']}: {i['text'][:80]}" for i in s["queue"]) or "Nothing waiting."
-        print(where + "\n" + tasks + "\n" + q)
+        print(where + "\n" + tasks + "\n" + q + ("\n\nWhat you can do: " + s["can"] if s.get("can") else ""))
     elif cmd == "task" and len(args) >= 3 and args[1] in ("note", "done", "verify", "release"):
         verb, tid = args[1], int(args[2])
         body = {"task": tid}
@@ -219,7 +230,8 @@ def main(args):
         call("POST", "/api/task/" + verb, body)
         print({"note": f"Noted on #{tid}.", "done": f"#{tid} is done and goes to verification.",
                "verify": f"Verification of #{tid} recorded.", "release": f"#{tid} released."}[verb])
-    elif cmd in ("portfolio", "product", "project", "pm", "place") or args[:2] == ["task", "add"]:
+    elif cmd in ("portfolio", "changes", "product", "project", "pm", "place", "seat", "role", "park", "wake", "grant", "powers") \
+            or args[:2] in (["task", "add"], ["task", "set"], ["task", "remove"]):
         import shlex
         print(call("POST", "/api/manage", {"line": shlex.join(args)})["result"])
     elif cmd == "suggest" and len(args) == 2:

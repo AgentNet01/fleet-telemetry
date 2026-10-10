@@ -100,6 +100,8 @@ create table if not exists suggestions(
   decided_by text, note text, at real, decided_at real);
 create table if not exists nudges(agent text primary key, last_at real, idx integer default -1);
 create table if not exists ceo_notes(id integer primary key, agents text, at real);
+create table if not exists grants(agent text primary key, level text, by text, at real);
+create table if not exists changes(id integer primary key, by text, line text, result text, at real);
 """
 # Columns added to agents/items after milestone 1; harmless on a fresh DB, needed on the PC's.
 MIGRATIONS = [
@@ -464,7 +466,7 @@ class Hub:
     def _blockers_done(self, task_row):
         for b in json.loads(task_row["blocked_by"] or "[]"):
             r = self.db.execute("select status from tasks where id=?", (b,)).fetchone()
-            if not r or r["status"] != "done":
+            if not r or r["status"] not in ("done", "cancelled"):
                 return False
         return True
 
@@ -512,11 +514,15 @@ class Hub:
         a = self._agent(who) if who else None
         return who == "jack" or bool(a and a["kind"] == "jack")
 
-    def may_manage(self, who, product):
-        """Jack and Darragh (the board), the CEO, and the product's PM may create and release its tasks."""
-        if self.is_board(who) or (who and who == self._chair()):
+    def _ceo_level(self, who):
+        return bool(who) and (who == self._chair() or bool(
+            self.db.execute("select 1 from grants where agent=? and level='ceo'", (who,)).fetchone()))
+
+    def may_manage(self, who, product=None):
+        """Tasks in a product: the board, the CEO (and anyone granted CEO level), and that product's PM."""
+        if self.is_board(who) or self._ceo_level(who):
             return True
-        p = self.db.execute("select pm from products where name=?", (product,)).fetchone()
+        p = self.db.execute("select pm from products where name=?", (product,)).fetchone() if product else None
         return bool(who and p and p["pm"] == who)
 
     def task_note(self, agent, tid, text):
@@ -637,63 +643,188 @@ class Hub:
         with self.lock:
             self.db.execute("update products set pm=? where name=? or id=?", (who or None, product, product))
 
-    MANAGE_HELP = ('fleet portfolio | fleet product add "<name>" "<brief>" ["<metric>"] | '
-                   'fleet product set "<product>" brief|metric|status "<value>" | fleet pm "<product>" <agent> | '
-                   'fleet project add "<product>" "<name>" | '
-                   'fleet task add <project id> "<title>" designer|engineer|marketer|optimizer "<done when>" [<blocker ids,>] | '
-                   'fleet place <agent> "<product>" <role>')
+    MANAGE_HELP = ("fleet portfolio | fleet changes | "
+                   'fleet product add "<name>" "<brief>" ["<goal>"] | fleet product set "<product>" brief|metric|status "<value>" | '
+                   'fleet product rename "<product>" "<new name>" | fleet product remove "<product>" | '
+                   'fleet project add|remove "<product>" "<project>" | fleet project rename "<product>" "<project>" "<new name>" | '
+                   'fleet task add <project id> "<title>" <role> "<done when>" [<blocker ids,>] | '
+                   'fleet task set <id> title|role|done|blocked "<value>" | fleet task remove <id> | fleet task release <id> | '
+                   'fleet pm "<product>" <agent>|none | fleet place <agent> "<product>"|none <role> | fleet seat ceo <agent> | '
+                   'fleet role set <role> "<soul text>" | fleet grant <agent> ceo|none | fleet powers | fleet park|wake <agent> (Jack/Darragh)')
 
     def manage(self, by, line):
         """One company command from an agent (the fleet CLI, or a "fleet ..." line in dot's Slack reply).
-        Products and PMs: the board and the CEO. Projects, tasks, placing agents: also the product's PM."""
+        Every agent runs the business; each change is written to the change log the dashboard shows."""
         import shlex
         a = shlex.split(line)
         with self.lock:
-            def product(ref):
-                r = self.db.execute("select * from products where name=? or cast(id as text)=?", (ref, ref)).fetchone()
-                if not r:
-                    raise ValueError(f"no product {ref!r}")
-                return r
+            if a in (["powers"],):
+                return self.powers(by)
+            if a in (["portfolio"], ["changes"]):
+                return self._portfolio() if a == ["portfolio"] else "\n".join(
+                    f"{time.strftime('%m-%d %H:%M', time.localtime(c['at']))} {c['by']}: {c['line']} → {c['result']}"
+                    for c in self.changes(30)) or "(no changes yet)"
+            self._may_run(by, a)
+            before = {n: self.powers(n) for n in self._names()}
+            result = self._manage(a)
+            if not result.startswith("unknown command"):
+                self.db.execute("insert into changes(by, line, result, at) values(?,?,?,?)", (by, line, result, self.clock()))
+                for n in self._names():                  # anyone whose powers changed is told what they can do now
+                    if before.get(n) != self.powers(n) and n != by:
+                        self._note(n, "what you can do on the hub changed", self.powers(n))
+            return result
 
-            def top():
-                if not (self.is_board(by) or by == self._chair()):
-                    raise PermissionError("only Jack, Darragh or the CEO can do that")
+    def _names(self):
+        return [r["name"] for r in self.db.execute("select name from agents where kind in ('muse','poll','slack') and state='active'")]
 
-            def mgr(name):
-                if not self.may_manage(by, name):
-                    raise PermissionError(f"only Jack, Darragh, the CEO or {name}'s PM can do that")
+    def powers(self, who):
+        """Plain words for what this agent may do, and the commands for it."""
+        pm_of = [r["name"] for r in self.db.execute("select name from products where pm=? and status != 'removed'", (who,))]
+        base = ("Everyone: fleet status, fleet inbox, fleet portfolio, fleet changes, fleet ask, fleet reply, "
+                "fleet task note|done on tasks you hold, fleet task verify when asked, fleet suggest \"<idea>\".")
+        if self._ceo_level(who):
+            seat = "You hold the CEO seat" if who == self._chair() else "You have CEO-level powers (granted)"
+            return (f"{seat}: you can do everything the CEO can — add, change, rename and remove products and projects; "
+                    "add, edit, remove and release tasks; name PMs; place agents on products and roles; hand over the CEO "
+                    "seat; rewrite what each role is told; decide suggestions; and grant or revoke CEO-level powers for "
+                    "other agents (fleet grant <agent> ceo|none). Only Jack and Darragh park or wake agents. "
+                    "Every change is logged on the dashboard. Commands: fleet help.\n" + base)
+        if pm_of:
+            return (f"You are PM of {', '.join(pm_of)}: you manage the tasks in {', '.join(pm_of)} — fleet task add, "
+                    "task set, task remove, task release — and decide suggestions for it. Ask the CEO for anything "
+                    "beyond that (new products, people, powers).\n" + base)
+        return "You do tasks you're given; you can't change the company yourself. Ask the CEO or your PM.\n" + base
 
-            if a == ["portfolio"]:
-                return self._portfolio()
-            if a[:2] == ["product", "add"] and len(a) in (4, 5):
-                top()
-                return f"product #{self.add_product(a[2], brief=a[3], metric=a[4] if len(a) == 5 else None)} {a[2]} created"
-            if a[:2] == ["product", "set"] and len(a) == 5 and a[3] in ("brief", "metric", "status"):
-                p = product(a[2]); mgr(p["name"])
-                self._set("products", p["id"], **{a[3]: a[4]})
-                return f"{p['name']}: {a[3]} set"
-            if a[0] == "pm" and len(a) == 3:
-                top()
-                p = product(a[1])
-                if not self._agent(a[2]):
-                    raise ValueError(f"no agent {a[2]!r}")
-                self.set_pm(p["id"], a[2])
-                return f"{a[2]} is PM of {p['name']}"
-            if a[:2] == ["project", "add"] and len(a) == 4:
-                p = product(a[2]); mgr(p["name"])
-                return f"project #{self.add_project(p['id'], a[3])} {a[3]} added to {p['name']}"
-            if a[:2] == ["task", "add"] and len(a) in (6, 7):
-                if a[4] not in self.roles():
-                    raise ValueError(f"role must be one of {', '.join(self.roles())}")
-                blk = [int(x) for x in a[6].split(",") if x] if len(a) == 7 else ()
-                return f"task #{self.add_task(int(a[2]), a[3], a[4], a[5], blocked_by=blk, by=by)} {a[3]} added"
-            if a[0] == "place" and len(a) == 4:
-                p = product(a[2]); mgr(p["name"])
-                if not self._agent(a[1]) or a[3] not in self.roles():
-                    raise ValueError(f"unknown agent {a[1]!r} or role {a[3]!r}")
-                self.place(a[1], p["name"], a[3])
-                return f"{a[1]} placed on {p['name']} as {a[3]}"
-            return "unknown command. Use: " + self.MANAGE_HELP
+    def _may_run(self, by, a):
+        """The CEO runs the whole company except parking agents; a PM runs its own product's tasks;
+        parking and waking agents is the board's. Nobody else changes the company."""
+        if a[:1] in (["park"], ["wake"]):
+            if not self.is_board(by):
+                raise PermissionError("only Jack or Darragh can park or wake agents")
+            return
+        if self.is_board(by) or self._ceo_level(by):
+            return
+        if a[:1] == ["task"] and len(a) >= 3:
+            if a[1] == "add":
+                prod = self.db.execute("select p.name from projects j join products p on j.product=p.id where j.id=?",
+                                       (int(a[2]),)).fetchone()
+            else:
+                prod = {"name": self._task_product(self._task_row(int(a[2]))["id"])}
+            if prod and self.may_manage(by, prod["name"]):
+                return
+            raise PermissionError("only Jack, Darragh, the CEO or this product's PM can manage its tasks")
+        raise PermissionError("only Jack, Darragh, the CEO or an agent granted CEO level can change the company")
+
+    def changes(self, n=100):
+        return [dict(r) for r in self.db.execute("select * from changes order by id desc limit ?", (n,))]
+
+    def _manage(self, a):
+        def product(ref):
+            r = self.db.execute("select * from products where name=? or cast(id as text)=?", (ref, ref)).fetchone()
+            if not r:
+                raise ValueError(f"no product {ref!r}")
+            return r
+
+        def project(prod, ref):
+            r = self.db.execute("select * from projects where product=? and (name=? or cast(id as text)=?) and status != 'removed'",
+                                (prod["id"], ref, ref)).fetchone()
+            if not r:
+                raise ValueError(f"no project {ref!r} in {prod['name']}")
+            return r
+
+        def agent(name, board_ok=False):
+            g = self._agent(name)
+            if not g or (g["kind"] == "jack" and not board_ok):
+                raise ValueError(f"no agent {name!r}")
+            return g
+
+        def role(r):
+            if r not in self.roles():
+                raise ValueError(f"role must be one of {', '.join(self.roles())}")
+            return r
+
+        def cancel(where, args):
+            self.db.execute(f"update tasks set status='cancelled', owner=null, verifier=null, touched=? "
+                            f"where status != 'done' and {where}", (self.clock(), *args))
+
+        verb = a[:2]
+        if verb == ["product", "add"] and len(a) in (4, 5):
+            return f"product #{self.add_product(a[2], brief=a[3], metric=a[4] if len(a) == 5 else None)} {a[2]} created"
+        if verb == ["product", "set"] and len(a) == 5 and a[3] in ("brief", "metric", "status"):
+            p = product(a[2])
+            self._set("products", p["id"], **{a[3]: a[4]})
+            return f"{p['name']}: {a[3]} set"
+        if verb == ["product", "rename"] and len(a) == 4:
+            p = product(a[2])
+            self._set("products", p["id"], name=a[3])
+            self.db.execute("update agents set current_product=? where current_product=?", (a[3], p["name"]))
+            self.db.execute("update suggestions set product=? where product=?", (a[3], p["name"]))
+            return f"{p['name']} renamed to {a[3]}"
+        if verb == ["product", "remove"] and len(a) == 3:
+            p = product(a[2])
+            self._set("products", p["id"], status="removed")
+            cancel("project in (select id from projects where product=?)", (p["id"],))
+            self.db.execute("update agents set current_product=null, current_role=null where current_product=?", (p["name"],))
+            return f"{p['name']} removed: open tasks cancelled, its agents freed (bring it back with product set ... status active)"
+        if verb == ["project", "add"] and len(a) == 4:
+            p = product(a[2])
+            return f"project #{self.add_project(p['id'], a[3])} {a[3]} added to {p['name']}"
+        if verb == ["project", "rename"] and len(a) == 5:
+            j = project(product(a[2]), a[3])
+            self._set("projects", j["id"], name=a[4])
+            return f"project {a[3]} renamed to {a[4]}"
+        if verb == ["project", "remove"] and len(a) == 4:
+            j = project(product(a[2]), a[3])
+            self._set("projects", j["id"], status="removed")
+            cancel("project=?", (j["id"],))
+            return f"project {j['name']} removed, its open tasks cancelled"
+        if verb == ["task", "add"] and len(a) in (6, 7):
+            role(a[4])
+            blk = [int(x) for x in a[6].split(",") if x] if len(a) == 7 else ()
+            return f"task #{self.add_task(int(a[2]), a[3], a[4], a[5], blocked_by=blk)} {a[3]} added"
+        if verb == ["task", "set"] and len(a) == 5 and a[3] in ("title", "role", "done", "blocked"):
+            t = self._task_row(int(a[2]))
+            col = {"title": "title", "role": "role", "done": "done_def", "blocked": "blocked_by"}[a[3]]
+            val = role(a[4]) if a[3] == "role" else json.dumps([int(x) for x in a[4].split(",") if x]) if a[3] == "blocked" else a[4]
+            self._set("tasks", t["id"], **{col: val})
+            return f"task #{t['id']}: {a[3]} set"
+        if verb == ["task", "remove"] and len(a) == 3:
+            t = self._task_row(int(a[2]))
+            cancel("id=?", (t["id"],))
+            return f"task #{t['id']} removed"
+        if verb == ["task", "release"] and len(a) == 3:
+            self._set("tasks", int(a[2]), owner=None, verifier=None, status="ready", touched=self.clock())
+            return f"task #{a[2]} released"
+        if a[0] == "pm" and len(a) == 3:
+            p = product(a[1])
+            who = None if a[2] == "none" else agent(a[2])["name"]
+            self.set_pm(p["id"], who)
+            return f"{who or 'nobody'} is PM of {p['name']}"
+        if a[0] == "place" and len(a) == 4:
+            g = agent(a[1])
+            if a[2] == "none":
+                self.place(g["name"], None, None)
+                return f"{g['name']} is off all products"
+            self.place(g["name"], product(a[2])["name"], role(a[3]))
+            return f"{g['name']} placed on {a[2]} as {a[3]}"
+        if verb == ["seat", "ceo"] and len(a) == 3:
+            self.seat("ceo", agent(a[2], board_ok=True)["name"] if a[2] != "jack" else "jack")
+            return f"{a[2]} holds the CEO seat"
+        if verb == ["role", "set"] and len(a) == 4:
+            self.set_role(a[2], a[3])
+            return f"role {a[2]} updated"
+        if a[0] == "grant" and len(a) == 3 and a[2] in ("ceo", "none"):
+            g = agent(a[1])
+            if a[2] == "ceo":
+                self.db.execute("insert or replace into grants(agent, level, at) values(?,?,?)", (g["name"], "ceo", self.clock()))
+            else:
+                self.db.execute("delete from grants where agent=?", (g["name"],))
+            return f"{g['name']} {'has CEO-level powers' if a[2] == 'ceo' else 'no longer has CEO-level powers'}"
+        if a[0] in ("park", "wake") and len(a) == 2:
+            g = agent(a[1])
+            self._set("agents", g["name"], state="parked" if a[0] == "park" else "active")
+            return f"{g['name']} {'parked (the hub stops messaging it)' if a[0] == 'park' else 'is active again'}"
+        return "unknown command. Use: " + self.MANAGE_HELP
 
     def _run_lines(self, name, text):
         done = []
@@ -709,9 +840,9 @@ class Hub:
 
     def _portfolio(self):
         out = []
-        for p in self.db.execute("select * from products order by id"):
+        for p in self.db.execute("select * from products where status != 'removed' order by id"):
             out.append(f"product #{p['id']} {p['name']} ({p['status']}) PM {p['pm'] or '(none)'} · goal {p['metric'] or '-'}\n  {p['brief'] or ''}")
-            for j in self.db.execute("select * from projects where product=? order by id", (p["id"],)):
+            for j in self.db.execute("select * from projects where product=? and status != 'removed' order by id", (p["id"],)):
                 out.append(f"  project #{j['id']} {j['name']}")
                 for t in self.db.execute("select * from tasks where project=? and status != 'done' order by id", (j["id"],)):
                     out.append(f"    task #{t['id']} {t['status']} {t['title']} ({t['role']}) {('· ' + t['owner']) if t['owner'] else ''}")
@@ -1040,7 +1171,7 @@ class Hub:
                             "focus": self._focus(a["name"]), "free_since": a["free_since"],
                             "task": next(({"id": t["id"], "title": t["title"], "status": t["status"],
                                            "product": self._task_product(t["id"])} for t in self._open_tasks(a["name"])), None)})
-            return {"now": self.clock(), "agents": out, "needs_jack": self.needs_jack(),
+            return {"now": self.clock(), "agents": out, "needs_jack": self.needs_jack(), "changes": self.changes(30),
                     "revenue": self.revenue(), "products": self.portfolio()}
 
     def org(self):
@@ -1055,9 +1186,9 @@ class Hub:
     def portfolio(self):
         with self.lock:
             out = []
-            for p in self.db.execute("select * from products order by id"):
+            for p in self.db.execute("select * from products where status != 'removed' order by id"):
                 projects = []
-                for pr in self.db.execute("select * from projects where product=? order by id", (p["id"],)):
+                for pr in self.db.execute("select * from projects where product=? and status != 'removed' order by id", (p["id"],)):
                     tasks = [self.task(t["id"]) for t in self.db.execute("select id from tasks where project=? order by id", (pr["id"],))]
                     projects.append({"id": pr["id"], "name": pr["name"], "tasks": tasks})
                 rev = self.db.execute("select coalesce(sum(amount),0) s from sales where product=?", (p["name"],)).fetchone()["s"]
@@ -1068,7 +1199,7 @@ class Hub:
 
 
 # ---- HTTP ---------------------------------------------------------------------------------
-def serve(hub, host, port, password, join_code=None):
+def serve(hub, host, port, password, join_code=None, logins=None):
     page_path = os.path.join(HERE, "dashboard.html")
 
     class H(BaseHTTPRequestHandler):
@@ -1083,12 +1214,24 @@ def serve(hub, host, port, password, join_code=None):
             self.end_headers()
             self.wfile.write(body)
 
+        def _page(self, code, text):
+            import html as _h
+            body = (f"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
+                    f"<body style='font:16px system-ui;background:#0d1117;color:#e6edf3;padding:32px'>"
+                    f"<p>{_h.escape(text)}</p><p><a style='color:#58a6ff' href='/'>Back to the dashboard</a></p>").encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def _jack(self):
             auth = self.headers.get("Authorization", "")
             if auth.startswith("Basic "):
                 try:
-                    _, pw = base64.b64decode(auth[6:]).decode().split(":", 1)
-                    if hmac.compare_digest(pw, password):
+                    user, pw = base64.b64decode(auth[6:]).decode().split(":", 1)
+                    # Jack's password (any user name, as before), or a board member's own login from hub.json "logins"
+                    if hmac.compare_digest(pw, password) or (user in (logins or {}) and hmac.compare_digest(pw, logins[user])):
                         return True
                 except Exception:
                     pass
@@ -1135,7 +1278,27 @@ def serve(hub, host, port, password, join_code=None):
                         self.end_headers()
                         self.wfile.write(body)
                 elif u.path == "/api/board":
-                    self._jack() and self._json(200, hub.board())
+                    if self._jack():
+                        import etsy
+                        self._json(200, dict(hub.board(), etsy=etsy.shops(hub)))
+                elif u.path in ("/etsy/connect", "/etsy/callback"):   # linking an Etsy shop (board login only)
+                    if self._jack():
+                        import etsy
+                        host = self.headers.get("Host", "")
+                        cb = ("http://" if host.startswith(("127.0.0.1", "localhost")) else "https://") + host + "/etsy/callback"
+                        try:
+                            if u.path == "/etsy/connect":
+                                to = etsy.start(hub, q.get("product") or None, cb)
+                                self.send_response(302)
+                                self.send_header("Location", to)
+                                self.send_header("Content-Length", "0")
+                                self.end_headers()
+                            else:
+                                rec = etsy.finish(hub, q.get("state", ""), q.get("code", ""), cb)
+                                self._page(200, f"Linked the Etsy shop {rec['shop_name']} to {rec['product'] or 'no product'}. "
+                                                "Sales show up within the hour.")
+                        except (ValueError, RuntimeError) as e:
+                            self._page(400, f"Etsy link didn't work: {e}")
                 elif u.path == "/api/timeline":
                     self._jack() and self._json(200, hub.timeline(q.get("agent", "")))
                 elif u.path == "/api/telemetry":
@@ -1150,7 +1313,7 @@ def serve(hub, host, port, password, join_code=None):
                     if name:
                         a = hub._agent(name)
                         tasks = [hub.task(t["id"]) for t in hub._open_tasks(name)]
-                        self._json(200, {"agent": name, "product": a["current_product"], "role": a["current_role"],
+                        self._json(200, {"agent": name, "product": a["current_product"], "role": a["current_role"], "can": hub.powers(name),
                             "tasks": [{k: t[k] for k in ("id", "title", "status", "product", "role")} for t in tasks],
                             "queue": [{k: i[k] for k in ("id", "frm", "text", "status")}
                                       for i in hub.items_for(name) if i["status"] in ("queued", "sent")]})
@@ -1272,6 +1435,12 @@ def serve(hub, host, port, password, join_code=None):
                         b = self._body()
                         hub.secret_put(b["name"], b["value"], b.get("scope", "fleet"), by="jack")
                         self._json(200, {"ok": True})
+                elif u.path == "/api/jack/etsy/app":
+                    if self._jack():
+                        import etsy
+                        b = self._body()
+                        etsy.set_app(hub, b["key"], b["secret"])
+                        self._json(200, {"ok": True})
                 elif u.path == "/api/jack/dismiss":
                     if self._jack():
                         hub.resolve_need(int(self._body()["id"]))
@@ -1354,8 +1523,8 @@ def _revenue_fetch(h, cfg):
                                      "product": (c.get("metadata") or {}).get("product"), "at": c["created"]})
     except Exception:
         pass
-    # Etsy: receipts need shop id + OAuth token in the vault (names etsy-shop, etsy-token); wired when added.
-    return rows
+    import etsy                                   # every shop linked on the dashboard (Vault → Etsy)
+    return rows + etsy.sales(h)
 
 
 def register_accounts(h, accounts):
@@ -1417,7 +1586,7 @@ def main(cfg_path, *args):
     if cfg.get("loop", True):               # assigns, nudges and delivers to fleet side chats; off = pure server
         threading.Thread(target=loop, daemon=True).start()
     log.write(time.strftime("%F %T ") + f"hub up on {cfg.get('host', '127.0.0.1')}:{cfg['port']}\n")
-    serve(h, cfg.get("host", "127.0.0.1"), cfg["port"], cfg["password"], cfg.get("join_code")).serve_forever()
+    serve(h, cfg.get("host", "127.0.0.1"), cfg["port"], cfg["password"], cfg.get("join_code"), cfg.get("logins")).serve_forever()
 
 
 def _admin(h, cmd, a):

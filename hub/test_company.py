@@ -278,26 +278,114 @@ def manage():
     back = "\n".join(muse.sent.get("dot", []))
     assert "product #" in back and f"project #{prj}" in back, f"dot hears what its commands did: {back[-400:]}"
 
-    # the PM adds work and staffs its own product through the fleet command
+    # the PM adds work to its product; the CEO staffs it
     r = h.manage("Ada", f'task add {prj} "list 3 planners" marketer "3 live listings"')
     assert "task #" in r, r
-    assert "placed" in h.manage("Ada", 'place Bea "Shop" marketer')
+    assert "placed" in h.manage("dot", 'place Bea "Shop" marketer')
     assert h._agent("Bea")["current_product"] == "Shop"
     assert "Shop" in h.manage("Bea", "portfolio") and "list 3 planners" in h.manage("Bea", "portfolio")
 
-    # an agent with no seat can't run the company, and nothing changes
-    for line in ('product add "Mine" "x"', f'task add {prj} "x" engineer "x"', 'pm "Shop" Bea', 'place Ada "Shop" designer'):
-        try:
-            h.manage("Bea", line)
-            raise AssertionError(f"Bea ran: {line}")
-        except PermissionError:
-            pass
-    assert h._agent("Ada")["current_role"] is None or h._agent("Ada")["current_role"] != "designer"
-    assert h.db.execute("select count(*) from products").fetchone()[0] == 1
     assert "unknown" in h.manage("dot", "fly away").lower()
     print("manage OK")
 
 
+def loose():
+    """The CEO runs the whole business (adds, changes, renames, removes), PMs run their product's tasks,
+    parking agents stays with the board, and every change is logged."""
+    h, muse, clock = new_hub()
+    for n in ("Ada", "Bea", "Cy", "Pam"):
+        h.add_agent(n, "muse")
+    h.seat("ceo", "Bea")
+    h.add_agent("darragh", "jack")
+    m = lambda line, by="Bea": h.manage(by, line)
+
+    assert "product #" in m('product add "Shop" "planner templates" "first sale"')
+    assert "project #" in m('project add "Shop" "launch"')
+    prj = h.db.execute("select id from projects where name='launch'").fetchone()["id"]
+    t1 = int(m(f'task add {prj} "draw sheet" designer "a PNG"').split("#")[1].split()[0])
+    t2 = int(m(f'task add {prj} "list it" marketer "live listing" {t1}').split("#")[1].split()[0])
+    m(f'task set {t1} title "draw the sheet"'); m(f'task set {t1} done "a 300dpi PNG"'); m(f'task set {t1} role engineer')
+    t = h.task(t1)
+    assert (t["title"], t["done_def"], t["role"]) == ("draw the sheet", "a 300dpi PNG", "engineer"), t
+    m(f"task remove {t1}")
+    h.tick()
+    assert h.task(t1)["status"] == "cancelled" and h.task(t2)["status"] != "blocked", "a removed blocker stops blocking"
+
+    m('place Ada "Shop" marketer'); m('pm "Shop" Pam')
+    assert h._agent("Ada")["current_product"] == "Shop"
+    # the PM manages its product's tasks, and nothing else
+    t3 = int(m(f'task add {prj} "price it" optimizer "a price"', by="Pam").split("#")[1].split()[0])
+    m(f'task set {t3} title "price the sheet"', by="Pam"); m(f"task remove {t3}", by="Pam")
+    for line, who in (('product add "X" "y"', "Pam"), ('project add "Shop" "x"', "Pam"), ("seat ceo Pam", "Pam"),
+                      (f'task add {prj} "x" engineer "y"', "Cy"), ('product add "X" "y"', "Cy"),
+                      ("park Ada", "Bea"), ("wake Ada", "Bea"), ("park Ada", "Pam")):
+        try:
+            m(line, by=who)
+            raise AssertionError(f"{who} ran: {line}")
+        except PermissionError:
+            pass
+    assert h._agent("Ada")["state"] == "active"
+    m('role set marketer "You write listings that sell."')
+    assert h.roles()["marketer"] == "You write listings that sell."
+    m('project rename "Shop" "launch" "go-live"')
+    m('product rename "Shop" "Planner Shop"')
+    assert h._agent("Ada")["current_product"] == "Planner Shop", "agents follow a renamed product"
+    assert "go-live" in m("portfolio") and "Planner Shop" in m("portfolio")
+    m("park Ada", by="jack"); assert h._agent("Ada")["state"] == "parked"
+    m("wake Ada", by="darragh"); assert h._agent("Ada")["state"] == "active"
+    m("seat ceo Cy"); assert h._chair() == "Cy"
+    m = lambda line, by="Cy": h.manage(by, line)
+
+    m('product remove "Planner Shop"')
+    assert "Planner Shop" not in m("portfolio"), "a removed product is gone from the portfolio"
+    assert h._agent("Ada")["current_product"] is None, "its agents are freed"
+    assert h.task(t2)["status"] == "cancelled", "its open work is cancelled"
+    m('product set "Planner Shop" status active')
+    assert "Planner Shop" in m("portfolio"), "and it can be brought back"
+
+    log = h.changes()
+    assert log[0]["by"] == "Cy" and "status active" in log[0]["line"], log[:2]
+    assert any("product remove" in c["line"] for c in log)
+    assert h.board()["changes"][0]["line"] == log[0]["line"], "the dashboard shows the change log"
+    for line in ("seat ceo nobody", "fly away"):
+        r = None
+        try:
+            r = m(line)
+        except (ValueError, PermissionError):
+            continue
+        assert "unknown" in r.lower(), (line, r)
+    print("loose OK")
+
+
+def grants():
+    """The CEO can lift anyone to CEO-level powers (not parking); those agents can grant too; every agent
+    is told what it can do, in fleet status and in a note whenever its powers change."""
+    h, muse, clock = new_hub()
+    for n in ("Ada", "Bea", "Cy"):
+        h.add_agent(n, "muse")
+    h.seat("ceo", "Ada")
+    assert "can't change the company" in h.powers("Bea"), h.powers("Bea")
+    h.manage("Ada", "grant Bea ceo")
+    assert "everything the CEO can" in h.powers("Bea"), h.powers("Bea")
+    assert "product #" in h.manage("Bea", 'product add "Shop" "x"'), "a granted agent runs the company"
+    h.manage("Bea", "grant Cy ceo")                      # and can lift others up to its own level
+    try:
+        h.manage("Bea", "park Cy"); raise AssertionError("granted agents still can't park")
+    except PermissionError:
+        pass
+    h.manage("Bea", "grant Cy none")
+    try:
+        h.manage("Cy", 'product add "Mine" "x"'); raise AssertionError("revoked")
+    except PermissionError:
+        pass
+    h.manage("Ada", 'pm "Shop" Cy')
+    assert "tasks in Shop" in h.powers("Cy"), h.powers("Cy")
+    h.tick(); clock.go(61); h.tick()
+    told = "\n".join(muse.sent.get("Bea", []) + muse.sent.get("Cy", []))
+    assert "fleet portfolio" in told and "CEO" in told, f"agents are told what they can now do: {told[-500:]}"
+    print("grants OK")
+
+
 if __name__ == "__main__":
     {"council": council, "lifecycle": lifecycle, "poll": poll, "placement": placement, "org": org, "suggest": suggest,
-     "seats": seats, "manage": manage, "switch_between": switch_between}.get(sys.argv[1] if len(sys.argv) > 1 else "", tasks)()
+     "seats": seats, "manage": manage, "loose": loose, "grants": grants, "switch_between": switch_between}.get(sys.argv[1] if len(sys.argv) > 1 else "", tasks)()
