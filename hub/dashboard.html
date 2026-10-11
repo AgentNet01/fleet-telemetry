@@ -1,27 +1,44 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="dark light">
+<script>/* pick the theme before the first paint: saved choice, else the system's */
+(function(){ let t=null; try{ t=localStorage.getItem("hub-theme"); }catch(e){}
+  if(t!=="light"&&t!=="dark") t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";
+  document.documentElement.dataset.theme=t; })();</script>
 <title>Fleet Hub</title>
 <style>
 :root{
   --bg:#0b0d12; --panel:#141821; --panel2:#1b2029; --panel3:#222835; --line:#2a303d;
   --fg:#e9ecf3; --dim:#9aa2b4; --faint:#868fa2;
   --ok:#3fb950; --idle:#6b7280; --warn:#d6a333; --bad:#f05d57; --accent:#5aa2ff; --money:#44d07b;
+  --on-accent:#06101f; --work:#3fb950; --msg:#8b7cf6; --bad-fg:#f0a9a4; --bad-bg:#2a1416; --bad-line:#5a2327;
+  --hero:#16222a; --me-bg:#14304f; --me-line:#1f4b7a; --shade:rgba(0,0,0,.55);
+  color-scheme:dark;
+}
+:root[data-theme="light"]{
+  --bg:#f5f6f8; --panel:#ffffff; --panel2:#f0f2f5; --panel3:#e6e9ef; --line:#d9dee6;
+  --fg:#141922; --dim:#4a5465; --faint:#5f6878;
+  --ok:#1a7f37; --idle:#8b93a1; --warn:#9a6700; --bad:#cf222e; --accent:#0969da; --money:#1a7f37;
+  --on-accent:#ffffff; --work:#2da44e; --msg:#7c6cf0; --bad-fg:#b42318; --bad-bg:#fdecea; --bad-line:#f3c1bc;
+  --hero:#e8f3ec; --me-bg:#e4eefc; --me-line:#b8cff3; --shade:rgba(15,20,30,.35);
+  color-scheme:light;
 }
 *{box-sizing:border-box}
 html,body{background:var(--bg)}
 body{margin:0;color:var(--fg);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,sans-serif;-webkit-font-smoothing:antialiased}
-main{max-width:1040px;margin:0 auto;padding:16px 16px 72px}
+main{max-width:1680px;margin:0 auto;padding:16px 24px 72px}
+@media(max-width:560px){main{padding:12px 16px 64px}}
 .top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px}
 h1{font-size:17px;margin:0;letter-spacing:.2px;display:flex;align-items:center;gap:8px}
 h1 .live{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.topr{display:flex;align-items:center;gap:12px}
 .fresh{color:var(--faint);font-size:12px;font-variant-numeric:tabular-nums}
-.hero{background:linear-gradient(150deg,#16222a,#141821 60%);border:1px solid var(--line);border-radius:16px;padding:20px 22px;margin-bottom:14px}
+.hero{background:linear-gradient(150deg,var(--hero),var(--panel) 60%);border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin-bottom:10px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px}
 .hero .lbl{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.1em}
-.hero .big{font-size:44px;font-weight:700;color:var(--money);line-height:1.05;margin:4px 0 10px;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+.hero .big{font-size:26px;font-weight:700;color:var(--money);line-height:1.1;margin:0;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--dim)}
 .chip b{color:var(--fg);font-variant-numeric:tabular-nums}
@@ -49,7 +66,7 @@ button.row{cursor:pointer}button.row:hover{background:var(--panel2)}
 .njrow pre{white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:8px;margin:6px 0 0;overflow:auto}
 .btn{background:var(--panel3);border:1px solid var(--line);color:var(--fg);font:inherit;font-size:13px;font-weight:600;padding:7px 13px;border-radius:9px;cursor:pointer}
 .btn:hover{border-color:var(--accent)} .btn.sm{padding:4px 10px;font-size:12px}
-.btn.primary{background:var(--accent);border-color:var(--accent);color:#06101f} .btn.primary:hover{filter:brightness(1.08)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)} .btn.primary:hover{filter:brightness(1.08)}
 .btn:disabled{opacity:.5;cursor:default}
 .prodcard{padding:16px;margin-bottom:12px;cursor:pointer}.prodcard:hover{border-color:var(--accent)}
 .phead{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
@@ -61,11 +78,14 @@ button.row{cursor:pointer}button.row:hover{background:var(--panel2)}
 .kan{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:8px;overflow-x:auto}
 .col{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:8px;min-width:150px}
 .colh{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin:2px 4px 8px;display:flex;justify-content:space-between}
-.tcard{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--idle);border-radius:8px;padding:8px 9px;margin-bottom:6px;font-size:13px}
+.tcard{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--idle);border-radius:8px;padding:8px 9px;margin-bottom:6px;font-size:13px;cursor:pointer;min-width:0}
+.tcard:hover,.tcard:focus-visible{background:var(--panel3);outline:none}
+.tcard .one{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tcard .tn{color:var(--dim);font-size:12px;margin-top:3px}
 .tcard.blocked{border-left-color:var(--warn)} .tcard.ready{border-left-color:var(--accent)}
 .tcard.working{border-left-color:var(--ok)} .tcard.verifying{border-left-color:var(--accent)} .tcard.done{border-left-color:var(--money)}
 .tcard .tt{font-weight:550}.tcard .tm{color:var(--faint);font-size:12px;margin-top:3px}
-.tcard .blk{color:var(--warn);font-size:12px;margin-top:3px;cursor:help}
+.tcard .blk{color:var(--warn);font-size:12px;margin-top:3px}
 .colempty{color:var(--faint);font-size:12px;padding:4px}
 /* agent cockpit */
 .stathead{display:flex;align-items:center;gap:10px;padding:14px;border-bottom:1px solid var(--line)}
@@ -79,20 +99,90 @@ details.sec>summary::-webkit-details-marker{display:none}
 details.sec>summary::after{content:"▸";color:var(--faint)}details.sec[open]>summary::after{content:"▾"}
 .secbody{padding:4px 14px 12px}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-.ln{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-top:1px solid var(--line);font-size:13px}
+.ln{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-top:1px solid var(--line);font-size:13px;min-width:0}
+/* long paths keep their file name: the ellipsis eats the folders on the left */
+.ln .path{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
 .ln:first-child{border-top:0}.ln .r{color:var(--faint);white-space:nowrap;font-variant-numeric:tabular-nums}
-.chat{padding:14px;max-height:52vh;overflow:auto}
+/* agent page: the conversation owns the height; the machine sits in a side rail */
+.ag{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:12px;align-items:start}
+.convo{display:flex;flex-direction:column;height:calc(100vh - 150px);min-height:420px}
+.convo .stathead{flex:0 0 auto}
+.chat{flex:1 1 auto;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.rail{position:sticky;top:56px;max-height:calc(100vh - 150px);overflow-y:auto;overflow-x:hidden}
+.railh{padding:11px 14px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);border-bottom:1px solid var(--line)}
+.sys{align-self:stretch;color:var(--faint);font-size:12px;padding:2px 2px}
+.sys details summary{cursor:pointer;list-style:none}.sys details summary::-webkit-details-marker{display:none}
+.sys details pre{white-space:pre-wrap;word-break:break-word;font:12px/1.4 inherit;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:4px 0 2px}
+.sys .who{color:var(--dim);font-weight:600}
+.sys.bad{color:var(--bad-fg)}
+.state{display:block;font-size:11px;color:var(--faint);margin-top:4px;text-align:right}
+.state.wait{color:var(--warn)}
+.empty-chat{margin:auto;text-align:center;color:var(--dim);max-width:340px;font-size:14px}
+.actbar{display:flex;flex-wrap:nowrap;gap:10px;align-items:center;margin:8px 0 10px;overflow-x:auto}
+.actbar .seg{flex-wrap:nowrap}.actbar>*{flex:0 0 auto}
+.chartrow{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:12px;margin:0 0 12px}
+.chartrow .spark{margin:0;display:flex;flex-direction:column}
+.chartrow #spark{flex:1 1 auto;height:auto;min-height:96px}
+#spark i{height:100%;border-bottom:2px solid var(--line)}
+#actkey{padding:6px}#actkey .rng{color:var(--faint);font-size:11px;padding:4px 8px 6px}
+#actkey button{display:grid;grid-template-columns:10px 1fr auto;gap:8px;align-items:center;width:100%;background:none;border:0;border-radius:7px;color:var(--dim);font:inherit;font-size:13px;padding:5px 8px;cursor:pointer;text-align:left}
+#actkey button:hover{background:var(--panel2);color:var(--fg)}#actkey button[aria-pressed=true]{background:var(--panel3);color:var(--fg)}
+#actkey button b{font-variant-numeric:tabular-nums;color:var(--fg);font-weight:600}#actkey .bad b{color:var(--bad-fg)}
+#actkey i{width:10px;height:10px;border-radius:2px;display:block}
+#feed{max-height:calc(100vh - 140px);min-height:320px;overflow-y:auto}
+#feed .hourh{position:sticky;top:0;z-index:1}
+dialog#taskdlg{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:14px;padding:0;width:min(640px,calc(100vw - 32px));max-height:calc(100vh - 64px)}
+dialog#taskdlg::backdrop{background:var(--shade)}
+.dlgh{display:flex;justify-content:space-between;align-items:start;gap:12px;padding:16px 18px 10px;border-bottom:1px solid var(--line)}
+.dlgh h3{margin:0;font-size:17px}.dlgb{padding:6px 18px 16px;overflow:auto}
+.kv{display:grid;grid-template-columns:120px minmax(0,1fr);gap:4px 14px;padding:9px 0;border-top:1px solid var(--line);font-size:14px}
+.kv:first-child{border-top:0}.kv>span:first-child{color:var(--faint);font-size:12px;padding-top:2px}
+.kv .note{white-space:pre-wrap;word-break:break-word;color:var(--dim)}
+@media(max-width:820px){.chartrow{grid-template-columns:1fr}.kv{grid-template-columns:1fr}}
+.seg{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px}.actbar .seg{margin:0}
+.seg .btn[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.spark{padding:12px 14px 8px;margin:10px 0 12px}
+#spark i{display:flex;flex-direction:column-reverse;background:none;opacity:1}
+#spark i b{display:block;width:100%}
+.k-work{background:var(--work)}.k-task{background:var(--accent)}.k-msg{background:var(--msg)}.k-error{background:var(--bad)}
+.custom input{width:auto;padding:5px 8px;font-size:12px}.agentsel{width:auto;padding:5px 8px;font-size:13px}
+.nowrow{display:grid;grid-template-columns:10px 140px 1fr auto;gap:10px;align-items:baseline;cursor:pointer}.nowrow:hover{background:var(--panel2)}
+.nowrow .what{white-space:normal}
+.hourh{padding:7px 14px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);background:var(--panel2);border-top:1px solid var(--line)}
+.hourh:first-child{border-top:0}
+.ev{grid-template-columns:62px 1fr}
+.ev.t-work .ic{color:var(--work)}
+.tk{font-size:13px}.tk .tt{font-weight:600}.tk .tm{color:var(--faint);font-size:12px}
+@media (max-width:820px){.nowrow{grid-template-columns:10px 1fr}.nowrow .what,.nowrow .ages{grid-column:2}}
+#spark{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;align-items:end;height:96px}
+.sparkl{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;color:var(--faint);font-size:11px;margin-top:5px;font-variant-numeric:tabular-nums}
+.sparkl span{white-space:nowrap;overflow:hidden}.sparkl .end{text-align:right}
+.actgrid{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:12px;align-items:start}
+.ev{display:grid;grid-template-columns:52px 1fr;gap:10px;align-items:baseline;cursor:pointer}
+.ev:hover{background:var(--panel2)}
+.ev .tm{color:var(--faint);font-size:12px;font-variant-numeric:tabular-nums}
+.ev .ln1{font-size:14px;min-width:0}.ev .ln1 b{font-weight:600}
+.ev .txt{color:var(--dim);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ev .ic{display:inline-block;width:18px;color:var(--faint)}
+.ev.fixed .ic,.ev.fixed .txt{color:var(--faint)!important}
+.ev.t-reply .ic{color:var(--ok)}.ev.t-error .ic,.ev.t-error .txt{color:var(--bad-fg)}.ev.t-change .ic{color:var(--warn)}.ev.t-task .ic{color:var(--accent)}
+.aa{display:grid;grid-template-columns:10px 1fr auto;gap:9px;align-items:center;cursor:pointer}
+.aa:hover{background:var(--panel2)}.aa .n{font-size:14px;font-weight:600}.aa .m{color:var(--faint);font-size:12px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+@media (max-width:820px){.actgrid{grid-template-columns:1fr}}
+@media (max-width:820px){.ag{grid-template-columns:1fr}.convo{height:72vh}.rail{position:static;max-height:none}}
 .bub{max-width:82%;padding:9px 12px;border-radius:13px;margin:3px 0;white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.4}
 .bub small{display:block;color:var(--faint);font-size:11px;margin-bottom:3px;white-space:normal}
-.to{background:var(--panel2);border:1px solid var(--line);border-top-left-radius:4px;margin-right:auto}
-.from{background:#13331f;border:1px solid #1f5235;border-top-right-radius:4px;margin-left:auto}.from small{text-align:right}
+.them{background:var(--panel2);border:1px solid var(--line);border-top-left-radius:4px;align-self:flex-start}
+.me{background:var(--me-bg);border:1px solid var(--me-line);border-top-right-radius:4px;align-self:flex-end}.me small{text-align:right}
 .pending{background:var(--panel2);border:1px dashed var(--line);border-top-left-radius:4px;margin-right:auto;opacity:.8}
 .aside{background:none;border:0;border-left:3px solid var(--line);color:var(--dim);max-width:100%;font-size:13px;margin:3px 0 3px 4px;padding:3px 10px}
-.err{background:#2a1416;border:1px solid #5a2327;color:#f0a9a4;max-width:100%}
+.err{background:var(--bad-bg);border:1px solid var(--bad-line);color:var(--bad-fg);max-width:100%}
 .compose{display:flex;gap:8px;padding:12px 14px;border-top:1px solid var(--line)}
 textarea,input,select{background:var(--panel2);border:1px solid var(--line);color:var(--fg);font:inherit;font-size:14px;border-radius:9px;padding:9px 11px;width:100%}
 textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus{outline:none;border-color:var(--accent)}
 .form{display:grid;gap:8px;padding:14px}.form .r2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.teamrow{display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:12px;align-items:center}.teamrow .sub{color:var(--faint);font-size:12px}
+@media (max-width:600px){.teamrow{grid-template-columns:1fr}}
 .vrow{display:grid;grid-template-columns:1fr auto;gap:10px;font-size:14px}.vrow .sc{color:var(--dim);font-size:12px;margin-left:4px}
 .sct{display:inline-block;font-size:11px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:1px 8px;margin-left:6px}
 .back{background:none;border:0;color:var(--accent);font:inherit;padding:0;margin-bottom:12px;cursor:pointer}
@@ -122,10 +212,11 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
 </head>
 <body>
 <main>
-  <div class="top"><h1><span class="live"></span>Fleet Hub</h1><span class="fresh" id="fresh">Loading…</span></div>
+  <div class="top"><h1><span class="live"></span>Fleet Hub</h1><span class="topr"><span class="fresh" id="fresh">Loading…</span><button class="btn sm" id="theme" type="button"></button></span></div>
   <div class="hero"><div class="lbl">Revenue · made so far</div><div class="big" id="money">$0.00</div><div class="chips" id="revchips"></div></div>
   <div class="tabs" id="tabs" role="tablist">
     <button class="tab" role="tab" data-tab="overview" aria-selected="true">Overview</button>
+    <button class="tab" role="tab" data-tab="activity">Activity</button>
     <button class="tab" role="tab" data-tab="portfolio">Portfolio</button>
     <button class="tab" role="tab" data-tab="org">Org</button>
     <button class="tab" role="tab" data-tab="suggestions">Suggestions <span id="sugn"></span></button>
@@ -139,9 +230,31 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <h2>Agents</h2>
     <div class="hint">Click an agent for its machine, files, activity, current task, and to message it. Agents with no task are never pinged; when more than three sit free over 12 h the CEO is told.</div>
     <div class="card" id="agents"></div>
-    <h2>Changes</h2>
-    <div class="hint">What the CEO, PMs and the board changed in the company, newest first.</div>
-    <div class="card" id="changes"></div>
+    <div class="hint" style="margin-top:12px">What the agents changed, said and did lately is under <b>Activity</b>.</div>
+  </section>
+  <section id="activity" hidden>
+    <h2>Working now</h2>
+    <div class="card" id="now"></div>
+    <div class="actbar">
+      <div class="seg" role="group" aria-label="Time window" id="ranges"></div>
+      <form class="seg custom" id="customrange">
+        <label class="vh" for="rng_from">From</label><input type="datetime-local" id="rng_from">
+        <label class="vh" for="rng_to">To</label><input type="datetime-local" id="rng_to">
+        <button class="btn sm" type="submit">Show</button>
+      </form>
+      <label class="vh" for="act_agent">Agent</label><select id="act_agent" class="agentsel"></select>
+    </div>
+    <div class="chartrow">
+      <div class="card spark" aria-label="Activity over the window"><div id="spark"></div><div class="sparkl" id="sparkl"></div></div>
+      <div class="card" id="actkey" role="group" aria-label="Show in the list below"></div>
+    </div>
+    <div class="actgrid">
+      <div class="card" id="feed"></div>
+      <aside aria-label="Progress and people">
+        <h2 style="margin-top:6px">Tasks</h2><div class="card" id="acttasks"></div>
+        <h2>Agents</h2><div class="card" id="actagents"></div>
+      </aside>
+    </div>
   </section>
   <section id="portfolio" hidden>
     <h2>Portfolio <button class="btn sm" id="addprod">+ Product</button></h2>
@@ -155,7 +268,7 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
   </section>
   <section id="org" hidden>
     <h2>Org</h2>
-    <div class="hint">Every seat is interchangeable: an agent, Jack or Darragh can hold it. Anything sent to a board member lands in Needs Jack with their name on it. Agents stay on their product where they can — files and programs on a VM don't move with a switch.</div>
+    <div class="hint">Every seat is interchangeable: an agent, Jack or Darragh can hold it. Anything sent to a board member lands in Needs Jack with their name on it. Products aren't fixed to people: each task brings its product's context with it.</div>
     <div id="orgbody"></div>
   </section>
   <section id="suggestions" hidden>
@@ -188,10 +301,20 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
   </section>
   <section id="detail" hidden>
     <button class="back" data-back="overview">← All agents</button>
-    <h2 id="dname"></h2>
-    <div class="card" id="cockpit"></div>
+    <div class="ag">
+      <div class="card convo">
+        <div id="dhead"></div>
+        <div class="chat" id="tl" aria-live="polite"></div>
+        <form class="compose" id="composer">
+          <textarea id="msg" rows="1" aria-label="Your message"></textarea>
+          <button class="btn primary" id="sendbtn" type="submit">Send</button>
+        </form>
+      </div>
+      <aside class="card rail" aria-label="Machine"><div class="railh">Machine</div><div id="machine"></div></aside>
+    </div>
   </section>
 </main>
+<dialog id="taskdlg" aria-labelledby="taskdlgh"></dialog>
 <div class="toast" id="toast"></div>
 <script>
 const $ = id => document.getElementById(id);
@@ -205,6 +328,7 @@ function freeFor(a){ if(a.task||!a.free_since) return ""; const h=Math.floor((no
 function ago(t){ if(!t) return "never"; const s=Math.max(0,now-t);
   return s<90?`${Math.round(s)}s ago`:s<5400?`${Math.round(s/60)}m ago`:s<129600?`${Math.round(s/3600)}h ago`:`${Math.round(s/86400)}d ago`; }
 function dur(s){ if(!s) return "—"; s=Math.round(s); const d=s/86400|0,h=s%86400/3600|0,m=s%3600/60|0; return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`; }
+function size(kb){ kb=+kb||0; return kb>=1048576?(kb/1048576).toFixed(1)+" GB":kb>=1024?(kb/1024).toFixed(1)+" MB":Math.round(kb)+" KB"; }
 function toast(m){ const t=$("toast"); t.textContent=m; t.classList.add("show"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),2400); }
 async function jget(p){ const r=await fetch(p,{cache:"no-store"}); return r.ok?r.json():null; }
 async function jpost(p,body){ const r=await fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
@@ -247,14 +371,14 @@ async function load(){
     el.disabled=true; try{ await jpost("api/jack/dismiss",{id:+el.dataset.dismiss}); toast("Dismissed"); load(); }catch(e){ el.disabled=false; toast(e.message); }});
 
   const ch=b.changes||[];
-  $("changes").innerHTML = ch.length ? ch.map(c=>`<div class="row"><div class="t"><b>${esc(c.by)}</b> ${esc(c.line)}
+  if($("changes")) $("changes").innerHTML = ch.length ? ch.map(c=>`<div class="row"><div class="t"><b>${esc(c.by)}</b> ${esc(c.line)}
       <div class="what">${esc(c.result)}</div></div><div class="when">${ago(c.at)}</div></div>`).join("")
     : `<div class="row empty">No changes yet.</div>`;
 
   const ags=(b.agents||[]).slice().sort((x,y)=>x.name.localeCompare(y.name,undefined,{numeric:true}));
   $("agents").innerHTML = ags.map(a=>{
     const seats=seatsOf(a.name).map(x=>`<span class="tag">${esc(x)}</span>`).join("");
-    const tag=(a.product?`<span class="tag">${esc(a.product)} · ${esc(a.role||"")}</span>`:"")+seats;
+    const tag=(a.kind!=="slack"?`<span class="tag">${esc(a.team||"generalist")}</span>`:"")+(a.product?`<span class="tag" style="color:var(--faint)">in ${esc(a.product)}</span>`:"")+seats;
     return `<button class="row agent" data-agent="${esc(a.name)}"><span class="dot s-${stateOf(a)}"></span>
       <span style="min-width:0"><div class="nm">${esc(a.name)}${tag}</div><div class="what">${esc(label(a))}</div></span>
       <span class="ages">${freeFor(a)||(a.last_in?"msg "+ago(a.last_in):"—")}<br>${a.kind==="slack"?"via Slack":a.last_out?"said "+ago(a.last_out):"—"}</span></button>`;}).join("");
@@ -268,6 +392,7 @@ async function load(){
   if(tab==="council") renderCouncil();
   if(tab==="vault") renderVault();
   if(openAgent) showAgent(openAgent, true);
+  else if(tab==="activity") renderActivity();
 }
 
 // ---- portfolio ----
@@ -301,17 +426,18 @@ function renderProduct(pid, quiet){
   $("productbody").innerHTML=`<h2>${esc(p.name)} <span class="sct">${money(p.revenue)}</span>
       <button class="btn sm" id="addproj">+ Project</button></h2>
     <div class="brief" style="margin:0 2px 6px">${esc(p.brief||"")}${p.metric?` · goal: ${esc(p.metric)}`:""}</div>
+    <div class="pmeta" style="margin:0 2px 10px"><span class="chip">PM <b>${esc(p.pm||"none")}</b></span><span class="chip">${esc(p.status||"active")}</span>
+      <span class="chip">${(p.projects||[]).reduce((n,pr)=>n+(pr.tasks||[]).filter(t=>!["done","cancelled"].includes(t.status)).length,0)} open tasks</span></div>
     <div id="projform"></div>
     ${(p.projects||[]).map(pr=>`<div class="proj">
       <div class="projname"><span>${esc(pr.name)}</span><button class="btn sm" data-addtask="${pr.id}">+ Task</button></div>
       <div class="kan">${COLS.map(([k,lbl])=>{ const ts=(pr.tasks||[]).filter(t=>bucket(t.status)===k);
         return `<div class="col"><div class="colh"><span>${lbl}</span><span>${ts.length||""}</span></div>
-          ${ts.map(t=>`<div class="tcard ${k}"><div class="tt">#${t.id} ${esc(t.title)}</div>
-            <div class="tm">${esc(t.role||"")}${t.owner?" · "+esc(t.owner):""}${t.verifier&&k==="verifying"?" · checking: "+esc(t.verifier):""}</div>
-            ${t.blocked_by&&t.blocked_by.length?`<div class="blk" title="can't start until these are done">⛔ waits on ${t.blocked_by.map(b=>esc(titleOf(b))).join(", ")}</div>`:""}
-            ${t.progress_note&&k!=="done"?`<div class="tn">${esc(t.progress_note)}</div>`:""}
-            ${t.evidence?`<a href="${esc(t.evidence)}" target="_blank" rel="noopener">evidence</a>`:""}
-            ${["working","verifying"].includes(k)?`<div class="tact"><button class="btn sm" data-release="${t.id}">Release</button></div>`:""}</div>`).join("")
+          ${ts.map(t=>`<div class="tcard ${k}" data-task="${t.id}" role="button" tabindex="0" aria-label="#${t.id} ${esc(t.title)} — open details">
+            <div class="tt one">#${t.id} ${esc(t.title)}</div>
+            <div class="tm one">${esc(t.role||"")}${t.owner?" · "+esc(t.owner):t.pin?" · for "+esc(t.pin):""}${t.touched?" · "+ago(t.touched):""}</div>
+            ${k==="blocked"&&openBlockers(t).length?`<div class="blk one">⛔ waits on ${openBlockers(t).map(b=>`#${b} `+esc(titleOf(b))).join(", ")}</div>`
+              :t.progress_note&&k!=="done"?`<div class="tn one">${esc(t.progress_note)}</div>`:""}</div>`).join("")
           ||`<div class="colempty">—</div>`}</div>`;}).join("")}</div>
       <div id="addtask-${pr.id}"></div></div>`).join("")||`<div class="muted" style="padding:8px 2px">No projects yet — add one.</div>`}`;
   $("addproj").onclick=()=>{ const h=$("projform"); if(h.dataset.open){h.innerHTML="";h.dataset.open="";return;} h.dataset.open="1";
@@ -321,10 +447,44 @@ function renderProduct(pid, quiet){
     h.querySelector("form").onsubmit=async e=>{ e.preventDefault();
       try{ await jpost("api/jack/project",{product:pid,name:e.target.name.value.trim()}); toast("Project added"); load(); }catch(err){ toast(err.message); }}; };
   document.querySelectorAll("[data-addtask]").forEach(el=>el.onclick=()=>taskForm(+el.dataset.addtask, p));
-  document.querySelectorAll("[data-release]").forEach(el=>el.onclick=async()=>{ el.disabled=true;
-    try{ await jpost("api/jack/release",{task:+el.dataset.release}); toast("Released — it goes to the next free agent"); load(); }catch(e){ el.disabled=false; toast(e.message); }});
+  document.querySelectorAll("#productbody [data-task]").forEach(el=>{ const open=()=>openTask(+el.dataset.task);
+    el.onclick=open; el.onkeydown=e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); open(); } }; });
   if(!quiet) showOnly("product");
 }
+const STATUS={blocked:"Blocked — waiting on other tasks",ready:"Ready — goes to the next free agent who fits",open:"Ready — goes to the next free agent who fits",
+  working:"Being worked on",verifying:"Being checked",done:"Done",cancelled:"Cancelled"};
+function findTask(id){ for(const p of (board&&board.products)||[]) for(const pr of p.projects||[]) for(const t of pr.tasks||[]) if(t.id===id) return {t,pr,p}; return null; }
+function openTask(id){
+  const f=findTask(id); if(!f) return; const {t,pr,p}=f, dlg=$("taskdlg");
+  const ag=n=>(board.agents||[]).find(a=>a.name===n);
+  const w=t.owner&&ag(t.owner), lw=w&&w.last_work;
+  const holder=t.owner?`<b>${esc(t.owner)}</b> <span class="faint">(${esc(w&&w.team||"generalist")} team)</span>`
+    :t.pin?`Goes to <b>${esc(t.pin)}</b> as soon as they're free`:`Nobody yet — the next free ${esc(t.role||"")} or generalist takes it`;
+  const kv=(k,v)=>v?`<div class="kv"><span>${k}</span><span>${v}</span></div>`:"";
+  const blk=(t.blocked_by||[]).map(b=>{ const x=findTask(b); return `#${b} ${esc(x?x.t.title:"")} <span class="faint">· ${esc(x?x.t.status:"?")}</span>`; }).join("<br>");
+  dlg.innerHTML=`<div class="dlgh"><div><h3 id="taskdlgh">#${t.id} ${esc(t.title)}</h3>
+      <div class="faint" style="font-size:13px;margin-top:3px">${esc(p.name)} · ${esc(pr.name)} · ${esc(t.role||"")}</div></div>
+      <button class="btn sm" data-close aria-label="Close">Close</button></div>
+    <div class="dlgb">
+      ${kv("Status",esc(STATUS[t.status]||t.status))}
+      ${kv("Who",holder)}
+      ${w?kv("Last activity",`${lw?`${esc(lw.title)} <span class="faint">· ${ago(lw.at)}</span><br>`:""}<span class="faint">last said something ${ago(w.last_out)}</span>`):""}
+      ${t.verifier?kv("Checked by",esc(t.verifier)):""}
+      ${kv("Done when",esc(t.done_def||""))}
+      ${blk?kv("Waits on",blk):""}
+      ${t.progress_note?kv("Latest note",`<div class="note">${esc(t.progress_note)}</div>`):""}
+      ${t.evidence?kv("Evidence",`<a href="${esc(t.evidence)}" target="_blank" rel="noopener">${esc(t.evidence)}</a>`):""}
+      ${["working","verifying"].includes(t.status)?kv("Stuck?",`<button class="btn sm" data-release="${t.id}">Release</button>
+        <div class="faint" style="font-size:12px;margin-top:5px">You don't need this normally — tasks move on their own. Release takes it back from ${esc(t.owner||"its holder")} so the next free agent can pick it up.</div>`):""}
+    </div>`;
+  dlg.querySelector("[data-close]").onclick=()=>dlg.close();
+  const rb=dlg.querySelector("[data-release]");
+  if(rb) rb.onclick=async()=>{ rb.disabled=true;
+    try{ await jpost("api/jack/release",{task:t.id}); toast("Released — it goes to the next free agent"); dlg.close(); load(); }catch(e){ rb.disabled=false; toast(e.message); } };
+  dlg.onclick=e=>{ if(e.target===dlg) dlg.close(); };
+  if(!dlg.open) dlg.showModal();
+}
+function openBlockers(t){ return (t.blocked_by||[]).filter(b=>{ const x=findTask(b); return !x||x.t.status!=="done"; }); }
 function titleOf(id){ for(const p of (board&&board.products)||[]) for(const pr of p.projects||[]) for(const t of pr.tasks||[]) if(t.id===id) return t.title; return "#"+id; }
 function taskForm(projectId, product){ const host=$("addtask-"+projectId);
   if(host.dataset.open){host.innerHTML="";host.dataset.open="";return;} host.dataset.open="1";
@@ -351,21 +511,27 @@ async function renderOrg(){
       <div class="fld"><label class="vh" for="ceo_sel">CEO</label><select id="ceo_sel">${opt("","— empty —")}${ppl.map(n=>opt(n,n,n===o.ceo)).join("")}</select></div></div>
     ${prods.map((p,i)=>`<div class="row orgrow"><div><div class="who">PM · ${esc(p)}</div><div class="sub">owns this product's tasks</div></div>
       <div class="fld"><label class="vh" for="pmsel-${i}">PM of ${esc(p)}</label><select id="pmsel-${i}" data-pm="${esc(p)}">${opt("","— none —")}${ppl.map(n=>opt(n,n,n===o.pms[p])).join("")}</select></div></div>`).join("")}</div>
-    <h2>Agents</h2><div class="hint">Where each agent works. Changing it here records the placement; the agent's own files stay put.</div>
-    <div class="card">${(o.agents||[]).filter(a=>a.kind!=="slack").map(a=>`<div class="row pl"><div class="who">${esc(a.name)}</div>
-      <select data-pp="${esc(a.name)}" aria-label="product for ${esc(a.name)}">${opt("","no product")}${prods.map(p=>opt(p,p,p===a.product)).join("")}</select>
-      <select data-pr="${esc(a.name)}" aria-label="role for ${esc(a.name)}">${opt("","no role")}${roles.map(r=>opt(r,r,r===a.role)).join("")}</select>
-      <button class="btn sm" data-place="${esc(a.name)}">Save</button></div>`).join("")||`<div class="row muted">No agents yet.</div>`}</div>
+    <h2>Teams</h2><div class="hint">Each agent is on a team — a role, or generalist (takes any role). Tasks for a role go to that team first, then to generalists, for any product: the hub switches the agent's product context per task. Agents can pick their own team; the CEO can move anyone.</div>
+    <div class="card">${(o.agents||[]).filter(a=>a.kind!=="slack").map(a=>`<div class="row teamrow"><div><div class="who">${esc(a.name)}</div>
+      <div class="sub">${a.product?`working context: ${esc(a.product)} · ${esc(a.role||"")}`:"no product context loaded yet"}</div></div>
+      <div class="fld"><label class="vh" for="team-${esc(a.name)}">Team for ${esc(a.name)}</label>
+      <select id="team-${esc(a.name)}" data-team="${esc(a.name)}">${["generalist",...roles].map(r=>opt(r,r,r===a.team)).join("")}</select></div></div>`).join("")||`<div class="row muted">No agents yet.</div>`}</div>
     <h2>Roles</h2><div class="hint">The role section an agent's SOUL.md gets when it takes a task in that role. The rest of its soul and its identity never change.</div>
-    <div class="card">${roles.map((r,i)=>`<form class="form" data-role="${esc(r)}"><div class="fld"><label for="rolesoul-${i}">${esc(r)}</label>
+    <div class="card"><form class="form" id="newrole"><div class="r2">
+      <div class="fld"><label for="nr_name">New role</label><input id="nr_name" placeholder="e.g. researcher" autocomplete="off" required></div>
+      <div class="fld"><label for="nr_soul">What it's told</label><input id="nr_soul" placeholder="You dig up facts and sources for the product." autocomplete="off" required></div></div>
+      <div><button class="btn sm primary" type="submit">Add role</button></div></form></div>
+    <div class="card" style="margin-top:10px">${roles.map((r,i)=>`<form class="form" data-role="${esc(r)}"><div class="fld"><label for="rolesoul-${i}">${esc(r)}</label>
       <textarea name="soul" rows="4">${esc(o.roles[r])}</textarea></div><div><button class="btn sm" type="submit">Save ${esc(r)}</button></div></form>`).join("")}</div>`;
   $("ceo_sel").onchange=async e=>{ const who=e.target.value;
     try{ await jpost("api/jack/seat",{role:"ceo",who}); toast(who?"CEO is now "+who:"CEO seat is empty"); }catch(err){ toast(err.message); }};
   document.querySelectorAll("[data-pm]").forEach(el=>el.onchange=async()=>{
     try{ await jpost("api/jack/pm",{product:el.dataset.pm,who:el.value}); toast(`PM of ${el.dataset.pm}: ${el.value||"none"}`); load(); }catch(err){ toast(err.message); }});
-  document.querySelectorAll("[data-place]").forEach(el=>el.onclick=async()=>{ const n=el.dataset.place;
-    const product=document.querySelector(`[data-pp="${CSS.escape(n)}"]`).value, role=document.querySelector(`[data-pr="${CSS.escape(n)}"]`).value;
-    try{ await jpost("api/jack/place",{agent:n,product,role}); toast(`${n}: ${product||"no product"} · ${role||"no role"}`); load(); }catch(err){ toast(err.message); }});
+  document.querySelectorAll("[data-team]").forEach(el=>el.onchange=async()=>{ const n=el.dataset.team;
+    try{ await jpost("api/jack/team",{agent:n,team:el.value}); toast(`${n} is on the ${el.value} team`); load(); }catch(err){ toast(err.message); }});
+  $("newrole").onsubmit=async e=>{ e.preventDefault(); const name=$("nr_name").value.trim().toLowerCase(), soul=$("nr_soul").value.trim();
+    if(!/^[a-z][a-z0-9-]*$/.test(name)) return toast("A role name is one word, like researcher");
+    try{ await jpost("api/jack/role",{name,soul}); toast("Added the "+name+" role"); renderOrg(); }catch(err){ toast(err.message); }};
   document.querySelectorAll("[data-role]").forEach(f=>f.onsubmit=async e=>{ e.preventDefault();
     try{ await jpost("api/jack/role",{name:f.dataset.role,soul:f.soul.value}); toast("Saved "+f.dataset.role); }catch(err){ toast(err.message); }});
 }
@@ -444,63 +610,195 @@ function telemetrySections(t){
   const sys=t.system||{}, cpu=t.cpu||{}, disk=t.disk||{}, mem=t.mem||{}, obs=t.observed||{}, act=t.activity||{}, files=t.files||{}, hl=t.health||{};
   const strip=`<div class="strip">
     ${sys.os?`<span class="stat">${esc(sys.os)}</span>`:""}
-    ${cpu.load1!=null?`<span class="stat">load <b>${cpu.load1}</b> · ${cpu.count||"?"} cpu</span>`:""}
+    ${cpu.load1!=null?`<span class="stat">load <b>${(+cpu.load1).toFixed(2)}</b> · ${cpu.count||"?"} cpu</span>`:""}
     ${sys.limit_mb?`<span class="stat">mem cap <b>${(sys.limit_mb/1024).toFixed(1)}G</b></span>`:""}
     ${disk.total_gb?`<span class="stat">disk <b>${disk.used_gb}</b>/${disk.total_gb}G</span>`:""}
     ${t.uptime_s?`<span class="stat">up <b>${dur(t.uptime_s)}</b></span>`:""}
     ${sys.tailscale_ip?`<span class="stat mono">${esc(sys.tailscale_ip)}</span>`:""}
     <span class="stat">reported <b>${ago(t._at||t.ts)}</b></span></div>`;
   const procs=(mem.all||mem.top||[]);
-  const procSec=`<details class="sec"><summary>Processes <span class="faint">${procs.length}</span></summary><div class="secbody">
+  const procSec=`<details class="sec"><summary data-k="p">Processes <span class="faint">${procs.length}</span></summary><div class="secbody">
     ${procs.slice(0,20).map(p=>`<div class="ln"><span class="mono">${esc(p[0])}</span><span class="r">${p[2]!=null?p[2].toFixed(0)+"% · ":""}${p[1]!=null?Math.round(p[1])+" MB":""}</span></div>`).join("")||'<div class="muted">none</div>'}</div></details>`;
   const ents=files.entries||[];
-  const filesSec=`<details class="sec"><summary>Files <span class="faint">${files.count||0} · ${files.mb||0} MB</span></summary><div class="secbody">
-    ${ents.slice(0,60).map(e=>`<div class="ln"><span class="mono">${esc(e[0])}</span><span class="r">${e[1]} KB · ${ago(e[2])}</span></div>`).join("")||'<div class="muted">workspace empty</div>'}
+  const filesSec=`<details class="sec"><summary data-k="f">Files <span class="faint">${files.count||0} · ${files.mb||0} MB</span></summary><div class="secbody">
+    ${ents.slice(0,60).map(e=>`<div class="ln" title="${esc(e[0])}"><span class="mono path"><bdi>${esc(e[0])}</bdi></span><span class="r">${size(e[1])} · ${ago(e[2])}</span></div>`).join("")||'<div class="muted">No files in ~/workspace yet.</div>'}
     ${ents.length>60?`<div class="faint" style="margin-top:6px">+${ents.length-60} more</div>`:""}</div></details>`;
   const feed=act.entries||[];
-  const actSec=`<details class="sec"><summary>Activity ${act.current?`<span class="faint">${esc(act.current)}</span>`:""}</summary><div class="secbody">
+  const actSec=`<details class="sec"><summary data-k="a">Activity <span class="faint">${act.current?esc(act.current):(act.entries||[]).length}</span></summary><div class="secbody">
     ${feed.map(e=>`<div class="ln"><span>${esc(e.title||e.status_title||e.activity_type||"—")}</span><span class="r">${esc(e.status||"")}</span></div>`).join("")||'<div class="muted">no recent activity</div>'}</div></details>`;
-  const sysSec=`<details class="sec"><summary>System & health</summary><div class="secbody">
+  const sysSec=`<details class="sec"><summary data-k="s">System & health</summary><div class="secbody">
     ${Object.entries({host:sys.hostname,kernel:sys.kernel,cpu:sys.cpu_model,listener:hl.listener,"telemetry posts":hl.post&&`${hl.post.ok} ok / ${hl.post.fail} fail`}).filter(([,v])=>v!=null&&v!==false).map(([k,v])=>`<div class="ln"><span>${k}</span><span class="r mono">${esc(String(v))}</span></div>`).join("")}
     ${(obs.signals||[]).map(s=>`<div class="ln"><span class="faint">signal</span><span class="r">${esc(s)}</span></div>`).join("")}</div></details>`;
   return strip+procSec+filesSec+actSec+sysSec;
 }
+function lines(t){ return String(t||"").split("\n"); }
+function bubble(e, name){
+  const when=ago(e.at);
+  if(e.dir==="out") return `<div class="bub them"><small>${esc(name)} · ${when}</small>${esc(e.text)}</div>`;
+  if((e.dir==="in"||e.dir==="waiting") && e.kind==="request" && board && e.frm===board.you){
+    const st = e.item_status==="queued" ? `<span class="state wait">Sending…</span>`
+      : e.item_status==="sent" ? `<span class="state wait">Delivered · waiting for a reply</span>`
+      : e.item_status==="failed" ? `<span class="state" style="color:var(--bad)">No reply came back</span>`
+      : `<span class="state">Delivered</span>`;
+    return `<div class="bub me"><small>You · ${when}</small>${esc(e.item_text)}${st}</div>`;
+  }
+  // agent-to-agent asks read the same in both agents' chats; only Jack's own messages get the right-hand bubble
+  if((e.dir==="in"||e.dir==="waiting") && e.kind==="request")
+    return `<div class="sys"><span class="who">${esc(who(e.frm))}</span> asked ${esc(name)}${e.dir==="waiting"?" (sending…)":""}: ${esc(e.item_text)} · ${when}</div>`;
+  if(e.dir==="err") return `<div class="sys bad">Couldn't reach ${esc(name)}${e.count>1?` (${e.count} tries)`:""} · ${when} — ${esc(String(e.text).replace(/^#\d+ /,""))}</div>`;
+  if(e.dir==="asked") return `<div class="sys"><span class="who">${esc(name)}</span> asked ${esc(String(e.text).replace(/^to /,""))} · ${when}</div>`;
+  // hub notices, tasks, nudges and other agents' requests: one line, full text on click
+  const body=e.item_text||e.text, from=e.frm&&e.frm!=="hub"?e.frm:"Hub", head=lines(body)[0];
+  const label=e.dir==="waiting"?`queued for ${esc(name)}`:`to ${esc(name)}`;
+  return `<div class="sys"><details><summary><span class="who">${esc(from)}</span> ${label}: ${esc(head.slice(0,140))} · ${when}</summary><pre>${esc(body)}</pre></details></div>`;
+}
+let shownFor=null;
 async function showAgent(name, quiet){
   openAgent=name;
   const a=(board&&board.agents||[]).find(x=>x.name===name)||{}, f=a.focus||{}, st=stateOf(a);
-  const [evs,tel]=await Promise.all([jget("api/timeline?agent="+encodeURIComponent(name)), jget("api/telemetry?agent="+encodeURIComponent(name))]);
-  $("dname").textContent=name;
+  const [evs,tel]=await Promise.all([jget("api/timeline?agent="+encodeURIComponent(name)),
+                                     a.kind==="slack"?null:jget("api/telemetry?agent="+encodeURIComponent(name))]);
+  if(openAgent!==name) return;
+  const fresh=shownFor!==name; shownFor=name;
   const statusLine = f.task?`working on “${f.task.title}” (#${f.task.id})`:(f.doing||(st==="working"?"working":st==="parked"?"parked — not messaged":"idle"));
-  const head=`<div class="stathead"><span class="dot s-${st}"></span>
-    <span><div class="big">${esc(statusLine)}</div><div class="sub">${a.product?esc(a.product)+" · "+esc(a.role||""):"no product assigned"}${f.reporting?" · reporting live":" · no live report"}</div></span></div>`;
-  const chat=`<div class="chat" id="tl">${(evs||[]).length?(evs).map(e=>{ const t=esc(e.text);
-    if(e.dir==="out") return `<div class="bub from"><small>${esc(name)} · ${ago(e.at)}</small>${t}</div>`;
-    if(e.dir==="in") return `<div class="bub to"><small>→ ${esc(name)} · #${e.item||"-"} · ${ago(e.at)}</small>${t}</div>`;
-    if(e.dir==="waiting") return `<div class="bub pending"><small>queued · ${ago(e.at)}</small>${t}</div>`;
-    if(e.dir==="asked") return `<div class="bub aside"><small>${esc(name)} asked · ${ago(e.at)}</small>${t}</div>`;
-    if(e.dir==="err") return `<div class="bub err"><small>error · ${ago(e.at)}</small>${t}</div>`;
-    return `<div class="bub aside"><small>${esc(e.dir)} · ${ago(e.at)}</small>${t}</div>`; }).join("")
-    :`<div class="muted" style="padding:8px">No messages yet.</div>`}</div>`;
-  const compose = a.state==="parked"
-    ? `<div class="compose muted" style="font-size:13px">${esc(name)} is parked — not messaged.</div>`
-    : `<div class="compose"><textarea id="msg" placeholder="Message ${esc(name)} (you can message it any time, even while it works)…" rows="1"></textarea><button class="btn primary" id="sendbtn">Send</button></div>`;
-  $("cockpit").innerHTML = head + telemetrySections(tel) + chat + compose;
-  if(a.state!=="parked"){
-    $("sendbtn").onclick=async()=>{ const text=$("msg").value.trim(); if(!text) return; $("sendbtn").disabled=true;
-      try{ await jpost("api/jack/send",{to:name,text}); $("msg").value=""; toast("Sent to "+name); await showAgent(name,true); }
-      catch(err){ toast(err.message); }finally{ $("sendbtn").disabled=false; }};
-    $("msg").onkeydown=e=>{ if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)) $("sendbtn").click(); };
-  }
-  if(!quiet){ showOnly("detail"); const tl=$("tl"); if(tl) tl.scrollTop=tl.scrollHeight; }
+  $("dhead").innerHTML=`<div class="stathead"><span class="dot s-${st}"></span>
+    <span style="min-width:0"><div class="big">${esc(name)} <span class="faint" style="font-weight:400">· ${esc(statusLine)}</span></div>
+    <div class="sub">${a.product?esc(a.product)+" · "+esc(a.role||""):"no product yet"}${a.kind==="slack"?" · reached in Slack":""}</div></span></div>`;
+  const tl=$("tl"), atBottom=fresh||tl.scrollHeight-tl.scrollTop-tl.clientHeight<40;
+  tl.innerHTML=(evs||[]).length?(evs).map(e=>bubble(e,name)).join("")
+    :`<div class="empty-chat">No messages with ${esc(name)} yet. Say something below — it lands in ${a.kind==="slack"?"the hub's Slack thread":"its “fleet” side chat"}, and its reply shows up here, usually within a minute.</div>`;
+  if(atBottom) tl.scrollTop=tl.scrollHeight;
+  // keep whichever machine sections were open across refreshes
+  const open=[...document.querySelectorAll("#machine details[open] summary")].map(x=>x.dataset.k);
+  $("machine").innerHTML = a.kind==="slack"
+    ? `<div class="secbody muted" style="padding:12px 14px">${esc(name)} is reached in Slack, so there's no machine to report on.</div>`
+    : telemetrySections(tel);
+  open.forEach(k=>{ const el=document.querySelector(`#machine summary[data-k="${k}"]`); if(el) el.parentElement.open=true; });
+  const parked=a.state==="parked";
+  $("msg").disabled=parked; $("sendbtn").disabled=parked;
+  $("msg").placeholder=parked?`${name} is parked — not messaged`:`Message ${name}…  (Enter sends, Shift+Enter for a new line)`;
+  if(!quiet){ showOnly("detail"); $("msg").value=""; $("msg").focus(); }
 }
+$("composer").onsubmit=async ev=>{ ev.preventDefault();
+  const name=openAgent, text=$("msg").value.trim(); if(!text||!name) return;
+  $("sendbtn").disabled=true;
+  try{ await jpost("api/jack/send",{to:name,text}); $("msg").value=""; await showAgent(name,true); const tl=$("tl"); tl.scrollTop=tl.scrollHeight; }
+  catch(err){ toast(err.message); } finally{ $("sendbtn").disabled=false; $("msg").focus(); }};
+$("msg").onkeydown=e=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); $("composer").requestSubmit(); } };
 
-function showOnly(id){ ["overview","portfolio","product","org","suggestions","council","vault","detail"].forEach(s=>$(s).hidden=s!==id); }
+
+// ---- activity: what the company is doing, over any window ----
+const RANGES=[["15m",.25],["1h",1],["6h",6],["24h",24],["7d",168]];
+let act={hours:1, since:null, until:null, agent:"", type:"all", older:[], more:true, busy:false, d:null};
+// one key beside the chart: colour, count and filter in one place
+const ACT_TYPES=[["all","Everything",""],["work","Agent actions","k-work"],["task","Task steps","k-task"],["sent","Messages to agents","k-msg"],
+  ["reply","Replies","k-msg"],["notice","Hub notices","k-msg"],["change","Changes",""],["error","Failures","k-error"]];
+function resetOlder(){ act.older=[]; act.more=true; }
+const ACT_ICON={sent:"→",reply:"↩",task:"✓",notice:"•",change:"⚙",error:"⚠",work:"▸"};
+const STEP={assigned:"picked up",note:"posted progress on",done:"finished",verify:"is checking",verified:"approved","sent back":"sent back",released:"was taken off"};
+function pl(n, one, many){ return `${n} ${n===1?one:many}`; }
+function who(n){ if(!n||n==="hub") return "Hub"; if(board&&n===board.you) return "You"; return n.charAt(0).toUpperCase()+n.slice(1); }
+function hhmm(t, sec){ return new Date(t*1000).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:sec?"2-digit":undefined,hour12:false}); }
+function dayLabel(t){ const d=new Date(t*1000), today=new Date(); const y=new Date(); y.setDate(today.getDate()-1);
+  const same=(a,b)=>a.toDateString()===b.toDateString();
+  return (same(d,today)?"Today":same(d,y)?"Yesterday":d.toLocaleDateString([], {weekday:"short",month:"short",day:"numeric"}))+" · "+hhmm(Math.floor(t/3600)*3600); }
+function firstLine(t){ return String(t||"").replace(/^\[fleet[^\]]*\]\n?/,"").split("\n").filter(Boolean)[0]||""; }
+function evLine(e){
+  let head, body=firstLine(e.text);
+  if(e.type==="reply") head=`<b>${esc(e.agent)}</b> replied`;
+  else if(e.type==="sent") head=`<b>${esc(who(e.from))}</b> → <b>${esc(e.agent)}</b>${e.queued?` <span class="faint">(sending…)</span>`:""}`;
+  else if(e.type==="notice"){ const m=String(e.text||"").match(/^([^\n]+)/); head=`Hub → <b>${esc(e.agent)}</b>`; body=m?m[1]:body; }
+  else if(e.type==="task"){ head=`<b>${esc(e.agent)}</b> ${STEP[e.what]||e.what} <b>#${e.task}</b> “${esc(e.title||"")}”`; body=(e.product?e.product+(e.text?" · ":""):"")+(e.text||""); }
+  else if(e.type==="work"){ head=`<b>${esc(e.agent)}</b> ${e.status==="running"?"is":""} ${esc(e.text)}`; body=e.detail||""; }
+  else if(e.type==="change") head=`<b>${esc(who(e.agent))}</b> changed: ${esc(e.text)}`, body=e.result||"";
+  else head=e.recovered?`Couldn't reach <b>${esc(e.agent)}</b> <span class="faint">· worked on retry</span>`:`Couldn't reach <b>${esc(e.agent)}</b>`;
+  return `<div class="row ev t-${e.type}${e.recovered?" fixed":""}" data-open="${esc(e.agent)}" title="${esc(e.text)}">
+    <span class="tm">${hhmm(e.at,true)}</span>
+    <span class="ln1"><span class="ic">${ACT_ICON[e.type]||"•"}</span>${head}${body?`<div class="txt">${esc(body)}</div>`:""}</span></div>`;
+}
+function actQuery(){ const q=new URLSearchParams(); if(act.since){ q.set("since",act.since); if(act.until) q.set("until",act.until); } else q.set("hours",act.hours);
+  if(act.agent) q.set("agent",act.agent); return "api/activity?"+q; }
+async function renderActivity(){
+  const d=await jget(actQuery()); if(!d||tab!=="activity") return;
+  // working now
+  $("now").innerHTML=d.live.length?d.live.map(l=>`<div class="row nowrow" data-open="${esc(l.agent)}"><span class="dot s-working"></span>
+      <span class="nm">${esc(l.agent)}</span><span class="what">${l.task?`task #${l.task.id} “${esc(l.task.title)}”`:esc(l.doing||"")}${l.task&&l.doing?` <span class="faint">— ${esc(l.doing)}</span>`:""}</span>
+      <span class="ages">for ${dur(d.now-l.since)}</span></div>`).join("")
+    :`<div class="row empty">Nobody is mid-task or busy on their machine right now.</div>`;
+  // controls
+  $("ranges").innerHTML=RANGES.map(([l,h])=>`<button class="btn sm" data-h="${h}" aria-pressed="${!act.since&&act.hours===h}">${l}</button>`).join("");
+  document.querySelectorAll("#ranges [data-h]").forEach(b=>b.onclick=()=>{ act.hours=+b.dataset.h; act.since=act.until=null; resetOlder(); renderActivity(); });
+  const names=Object.keys(d.agents);
+  $("act_agent").innerHTML=`<option value="">all agents</option>`+names.map(n=>`<option${n===act.agent?" selected":""}>${esc(n)}</option>`).join("");
+  $("act_agent").onchange=e=>{ act.agent=e.target.value; resetOlder(); renderActivity(); };
+  // chart, with its key (counts and filters) on the right
+  const c=d.counts, span=d.until-d.since; act.d=d;
+  const fmt=t=>new Date(t*1000).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:false});
+  $("actkey").innerHTML=`<div class="rng">${fmt(d.since)} → ${act.until?fmt(d.until):"now"}</div>`+ACT_TYPES.map(([k,l,cls])=>{
+    const n=k==="all"?Object.values(c).reduce((a,b)=>a+b,0):(c[k]||0);
+    return `<button data-type="${k}" aria-pressed="${k===act.type}"${k==="error"&&n?' class="bad"':""}><i class="${cls}"></i><span>${l}</span><b>${n}</b></button>`; }).join("");
+  document.querySelectorAll("#actkey [data-type]").forEach(b=>b.onclick=()=>{ act.type=b.dataset.type; renderActivity(); });
+  const tot=b=>b.work+b.task+b.sent+b.reply+b.notice+b.error, mx=Math.max(1,...d.buckets.map(tot));
+  $("spark").innerHTML=d.buckets.map(b=>{ const h=v=>`${(v/mx*100).toFixed(1)}%`;
+    return `<i title="${hhmm(b.start)}: ${b.work} actions, ${b.task} task steps, ${b.sent+b.reply+b.notice} messages, ${b.error} failures">
+      <b class="k-work" style="height:${h(b.work)}"></b><b class="k-task" style="height:${h(b.task)}"></b><b class="k-msg" style="height:${h(b.sent+b.reply+b.notice)}"></b><b class="k-error" style="height:${h(b.error)}"></b></i>`; }).join("");
+  const lbl=t=>span>36*3600?new Date(t*1000).toLocaleString([], {weekday:"short",hour:"2-digit",hour12:false})+"h":hhmm(t);
+  const n=d.buckets.length;
+  $("sparkl").innerHTML=d.buckets.map((b,i)=>i%2||i>=n-2?"":`<span style="grid-column:${i+1}/span 2">${lbl(b.start)}</span>`).join("")
+    +`<span class="end" style="grid-column:${n-1}/span 2">${act.until?lbl(d.until):"now"}</span>`;
+  renderFeed();
+  // tasks
+  const T=d.tasks, tk=t=>`<div class="row tk" data-open="${esc(t.owner||"")}"><div class="tt">#${t.id} ${esc(t.title)}</div>
+    <div class="tm">${esc(t.product||"")} · ${esc(t.role||"")}${t.owner?" · "+esc(t.owner):""}${t.progress_note?` — ${esc(t.progress_note)}`:""}</div>
+    ${t.evidence&&t.status==="done"?`<a href="${esc(t.evidence)}" target="_blank" rel="noopener">evidence</a>`:""}</div>`;
+  $("acttasks").innerHTML=`<div class="hourh">Finished in this window · ${T.finished.length}</div>${T.finished.map(tk).join("")||`<div class="row muted">None yet.</div>`}
+    <div class="hourh">In progress · ${T.in_progress.length}</div>${T.in_progress.map(tk).join("")||`<div class="row muted">Nothing in progress.</div>`}
+    <div class="hourh">Waiting for someone · ${T.waiting}</div>`;
+  // agents
+  const ags=Object.entries(d.agents).sort((x,y)=>(y[1].work+y[1].tasks+y[1].reply)-(x[1].work+x[1].tasks+x[1].reply)||(y[1].last_said||0)-(x[1].last_said||0));
+  $("actagents").innerHTML=ags.map(([n,a])=>{
+    const live=d.live.some(l=>l.agent===n), st=a.state==="parked"?"parked":a.failing?"unresponsive":live?"working":"idle";
+    const bits=[a.work&&pl(a.work,"action","actions"), a.tasks&&pl(a.tasks,"task step","task steps"), a.reply&&pl(a.reply,"reply","replies"),
+      a.error&&(a.failing?`<span style="color:var(--bad-fg)">can't reach it</span>`:`<span title="a send failed, then it worked again">${a.error} retried</span>`)].filter(Boolean);
+    return `<div class="row aa" data-open="${esc(n)}"><span class="dot s-${st}"></span><span class="n">${esc(n)}</span>
+      <span class="m">${bits.join(" · ")||"quiet"}<br>${a.last_said?"said "+ago(a.last_said):"never replied"}</span></div>`;}).join("");
+  document.querySelectorAll("#activity [data-open]").forEach(el=>el.onclick=()=>el.dataset.open&&showAgent(el.dataset.open));
+}
+function feedKey(e){ return e.type+"|"+e.at+"|"+e.agent+"|"+(e.task||"")+"|"+String(e.text||"").slice(0,40); }
+function renderFeed(){
+  const d=act.d; if(!d) return;
+  const seen=new Set(d.feed.map(feedKey)), all=d.feed.concat(act.older.filter(e=>!seen.has(feedKey(e))));
+  const rows=all.filter(e=>act.type==="all"||e.type===act.type);
+  let html="", hour=null;
+  for(const e of rows){ const h=Math.floor(e.at/3600); if(h!==hour){ hour=h; html+=`<div class="hourh">${dayLabel(e.at)}</div>`; } html+=evLine(e); }
+  html+=act.more?`<div class="row muted" id="feedmore">${act.busy?"Loading older…":"Scroll for older activity"}</div>`:`<div class="row muted">That's everything${act.agent?" for "+esc(act.agent):""}.</div>`;
+  $("feed").innerHTML=rows.length||act.older.length?html:`<div class="row empty">Nothing ${act.type==="all"?"happened":"of this kind"} in this window${act.agent?" for "+esc(act.agent):""}. Scroll down or pick a longer range.</div>`+html;
+  document.querySelectorAll("#feed [data-open]").forEach(el=>el.onclick=()=>el.dataset.open&&showAgent(el.dataset.open));
+}
+// infinite list: near the bottom, pull the week before the oldest item shown
+async function loadOlder(){
+  if(act.busy||!act.more||!act.d) return; act.busy=true;
+  const all=act.d.feed.concat(act.older), oldest=all.length?Math.min(...all.map(e=>e.at)):act.d.since;
+  const q=new URLSearchParams({since:oldest-7*86400, until:oldest-0.001}); if(act.agent) q.set("agent",act.agent);
+  try{ const r=await jget("api/activity?"+q); const got=(r&&r.feed)||[];
+    if(!got.length) act.more=false; else act.older=act.older.concat(got); }
+  finally{ act.busy=false; renderFeed(); }
+}
+$("feed").addEventListener("scroll",e=>{ const f=e.target; if(f.scrollHeight-f.scrollTop-f.clientHeight<200) loadOlder(); });
+$("customrange").onsubmit=e=>{ e.preventDefault(); const f=$("rng_from").value, t=$("rng_to").value; if(!f) return toast("Pick a start time");
+  act.since=new Date(f).getTime()/1000; act.until=t?new Date(t).getTime()/1000:null; resetOlder(); renderActivity(); };
+function showOnly(id){ if(id!=="detail") shownFor=null; document.querySelector(".hero").hidden = id==="detail"; ["overview","activity","portfolio","product","org","suggestions","council","vault","detail"].forEach(s=>$(s).hidden=s!==id); }
 function selectTab(name){ tab=name; openAgent=null; openProduct=null;
   document.querySelectorAll(".tab").forEach(t=>t.setAttribute("aria-selected", t.dataset.tab===name));
-  showOnly(name); if(name==="council") renderCouncil(); if(name==="vault") renderVault();
+  showOnly(name); if(name==="activity") renderActivity(); if(name==="council") renderCouncil(); if(name==="vault") renderVault();
   if(name==="org") renderOrg(); if(name==="suggestions") renderSuggestions(); }
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>selectTab(t.dataset.tab));
 document.querySelectorAll("[data-back]").forEach(b=>b.onclick=()=>selectTab(b.dataset.back));
+function paintTheme(){ const light=document.documentElement.dataset.theme==="light", b=$("theme");
+  b.textContent=light?"☾ Dark":"☀ Light"; b.setAttribute("aria-label",light?"Switch to dark mode":"Switch to light mode"); }
+$("theme").onclick=()=>{ const t=document.documentElement.dataset.theme==="light"?"dark":"light";
+  document.documentElement.dataset.theme=t; try{ localStorage.setItem("hub-theme",t); }catch(e){} paintTheme(); };
+paintTheme();
 load(); setInterval(load, 10000);
 </script>
 </body>

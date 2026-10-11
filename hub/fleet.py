@@ -31,7 +31,8 @@
     fleet task set <id> title|role|done|blocked "<value>"
     fleet task remove <id>
     fleet pm "<product>" <agent>|none
-    fleet place <agent> "<product>" <role>   (or: fleet place <agent> none -)  roles: designer engineer marketer optimizer
+    fleet team <agent> <role>|generalist   put an agent on a team (CEO); tasks for that role come to it, any product
+    fleet team me <role>|generalist  pick your own team
     fleet seat ceo <agent>           hand the CEO seat to someone
     fleet role set <role> "<soul text>"   rewrite what a role is told to be
     fleet grant <agent> ceo|none     give or take back CEO-level powers (anyone at CEO level can)
@@ -230,7 +231,7 @@ def main(args):
         call("POST", "/api/task/" + verb, body)
         print({"note": f"Noted on #{tid}.", "done": f"#{tid} is done and goes to verification.",
                "verify": f"Verification of #{tid} recorded.", "release": f"#{tid} released."}[verb])
-    elif cmd in ("portfolio", "changes", "product", "project", "pm", "place", "seat", "role", "park", "wake", "grant", "powers") \
+    elif cmd in ("portfolio", "changes", "product", "project", "pm", "place", "seat", "role", "park", "wake", "grant", "powers", "team") \
             or args[:2] in (["task", "add"], ["task", "set"], ["task", "remove"]):
         import shlex
         print(call("POST", "/api/manage", {"line": shlex.join(args)})["result"])

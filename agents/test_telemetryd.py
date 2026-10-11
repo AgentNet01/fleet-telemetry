@@ -96,6 +96,11 @@ with tempfile.TemporaryDirectory() as sp:
 t.PROXY_FILE = "/nonexistent/proxy.conf"
 assert t.opener() is not None
 
+# the agent's home is found from wherever the daemon was installed: ~/.fleet (setup.py) or the
+# old ~/workspace/telemetry. Getting it wrong made Files read 0 on every agent (Oct 10).
+assert t.home_of("/home/hatch/.fleet") == "/home/hatch", t.home_of("/home/hatch/.fleet")
+assert t.home_of("/home/hatch/workspace/telemetry") == "/home/hatch"
+
 # burst caps still hold against hostile input
 assert t.handle_cmd({"burst": True, "interval": 0, "until": 1e12}, 100.0) == (2, 400.0)
 # when the current route keeps failing, the daemon moves to another route that answers, and remembers it

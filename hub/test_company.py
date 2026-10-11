@@ -6,6 +6,7 @@
 import os
 import sys
 import tempfile
+import time
 
 import hub
 from test_hub import Clock, FakeMuse
@@ -204,6 +205,31 @@ def suggest():
     assert h.suggestions()[0]["status"] == "accepted", h.suggestions()
     h.tick()
     assert any("accepted" in m.lower() and "bigger thumbnails" in m for m in muse.sent.get("Opt", [])), "the optimizer hears back"
+    assert any("carry it out" in m and "bigger thumbnails" in m for m in muse.sent.get("Cee", [])), \
+        "accepting isn't the end: the CEO is told to carry it out"
+    before = len(muse.sent.get("Cee", []))
+    sid2 = h.suggest("Opt", "drop the price"); h.tick(); before = len(muse.sent.get("Cee", []))
+    h.decide_suggestion("Cee", sid2, True); h.tick()
+    assert not any("carry it out" in m for m in muse.sent.get("Cee", [])[before:]), "the CEO who accepted it isn't told twice"
+
+    # the PM suggests; the CEO hears, talks it over with the PM, decides, does it and logs it — no board needed
+    before = len(muse.sent.get("Cee", []))
+    sid3 = h.suggest("Pam", "move Wes to the designer team"); h.tick()
+    assert h.suggestions()[0]["product"] == "P", "a PM's suggestion belongs to the product it runs"
+    got = "\n".join(muse.sent.get("Cee", [])[before:])
+    assert "move Wes" in got and "Talk it over with Pam" in got and f"fleet suggestion accept {sid3}" in got, got
+    assert any(f"#{sid3}" in m and "Cee" in m for m in muse.sent.get("Pam", [])), "the suggester knows who decides it"
+    assert not any("Talk it over with Pam" in m for m in muse.sent.get("Pam", [])), "the PM isn't asked to decide its own idea"
+    h.manage("Cee", "team Wes designer")
+    out = h.manage("Cee", f'suggestion accept {sid3} "agreed with Pam; Wes is on designer now"')
+    sg = h.suggestions()[0]
+    assert sg["status"] == "accepted" and sg["decided_by"] == "Cee" and "Wes is on designer" in sg["note"], (out, sg)
+    assert any(f"suggestion accept {sid3}" in c["line"] for c in h.changes()), "the decision is in the change log"
+    try:
+        h.manage("Wes", f"suggestion reject {sid3}"); raise AssertionError("a worker decided a suggestion")
+    except PermissionError:
+        pass
+    assert "suggestion accept" in h.MANAGE_HELP
     print("suggest OK")
 
 
@@ -386,6 +412,303 @@ def grants():
     print("grants OK")
 
 
+def timeline():
+    """An agent's page reads like a conversation: each message says who sent it, and a failure
+    repeated on every retry shows once with a count instead of flooding the page."""
+    h, muse, clock = new_hub()
+    h.add_agent("Ada", "muse")
+    for i in range(5):
+        h._log(None, "Ada", "err", f"#{700 + i} no slack-bot-token in the vault")
+        clock.go(15)
+    h.ask("jack", "Ada", "how's the shop?")
+    h.tick()
+    tl = h.timeline("Ada")
+    errs = [e for e in tl if e["dir"] == "err"]
+    assert len(errs) == 1 and errs[0]["count"] == 5, errs
+    sent = [e for e in tl if e["dir"] == "in"]
+    assert sent and sent[-1]["frm"] == "jack", sent
+    assert sent[-1]["item_text"] == "how's the shop?" and sent[-1]["kind"] == "request", "the page shows what Jack wrote, not the envelope"
+    assert sent[-1]["item_status"] == "sent", "and whether it's still waiting for a reply"
+    h._log(None, "Ada", "err", "recovered")              # once the agent is reachable again, the old failures go away
+    assert not [e for e in h.timeline("Ada") if e["dir"] == "err"], h.timeline("Ada")
+    h._log(None, "Ada", "err", "#800 connection refused")  # a new failure after that does show
+    assert [e["text"] for e in h.timeline("Ada") if e["dir"] == "err"] == ["#800 connection refused"]
+    print("timeline OK")
+
+
+def send_now():
+    """Jack's message goes out the moment he sends it, not on the next loop; a slow send racing the
+    loop still goes out exactly once."""
+    import threading, time as _t
+    h, muse, clock = new_hub()
+    h.add_agent("Ada", "muse")
+    real = muse.deliver
+    def slow(agent, text):
+        _t.sleep(0.3)
+        return real(agent, text)
+    muse.deliver = slow
+    h.ask("jack", "Ada", "hi there")
+    h.deliver_now("Ada")
+    racer = threading.Thread(target=h.tick); racer.start()
+    for _ in range(50):
+        if muse.sent.get("Ada"):
+            break
+        _t.sleep(0.05)
+    racer.join()
+    for th in threading.enumerate():
+        if th is not threading.current_thread() and th.daemon:
+            th.join(timeout=2)
+    assert len([t for t in muse.sent.get("Ada", []) if "hi there" in t]) == 1, muse.sent
+
+    # the reply is picked up within seconds, without waiting for the loop, and logged once
+    h.REPLY_WATCH = (0.05, 3)
+    h.ask("jack", "Ada", "second question")
+    muse.deliver = real
+    h.deliver_now("Ada")
+    _t.sleep(0.2)
+    muse.say("Ada", "second answer")
+    for _ in range(60):
+        if any(e["text"] == "second answer" for e in h.timeline("Ada")):
+            break
+        _t.sleep(0.05)
+    h.tick()
+    assert [e["text"] for e in h.timeline("Ada") if e["dir"] == "out"].count("second answer") == 1, h.timeline("Ada")
+    print("send_now OK")
+
+
+def dry():
+    """A product with no work left asks its PM (or the CEO when it has none) to plan the next tasks,
+    at most every 12 hours; a product with work in flight is left alone."""
+    h, muse, clock = new_hub()
+    for n in ("Ada", "dot", "Pam"):
+        h.add_agent(n, "muse")
+    h.seat("ceo", "dot")
+    shop = h.add_product("Shop", brief="planners")
+    h.add_product("Stickers", brief="stickers", pm="Pam")
+    prj = h.add_project(shop, "launch")
+    h.tick(); clock.go(61); h.tick()
+    told = lambda who: [t for t in muse.sent.get(who, []) if "no work lined up" in t]
+    assert len(told("dot")) == 1 and "Shop" in told("dot")[0], muse.sent.get("dot")
+    assert len(told("Pam")) == 1 and "Stickers" in told("Pam")[0], muse.sent.get("Pam")
+    clock.go(3600); h.tick(); clock.go(61); h.tick()
+    assert len(told("dot")) == 1, "not again within 12 hours"
+    h.add_task(prj, "draw a planner", role="designer", done_def="a PNG")
+    clock.go(13 * 3600); h.tick(); clock.go(61); h.tick()
+    assert len(told("dot")) == 1, "a product with open work isn't nagged"
+    assert len(told("Pam")) == 2, "Stickers is still dry after 12 h, so Pam hears again"
+    h.manage("dot", 'product set "Stickers" status paused')
+    clock.go(13 * 3600); h.tick(); clock.go(61); h.tick()
+    assert len(told("Pam")) == 2, "a paused product isn't nagged"
+    print("dry OK")
+
+
+def activity():
+    """One feed of everything the company did in a window: messages both ways, task moves, changes and
+    failures, newest first, with per-agent counts and messages-per-hour for the last day."""
+    h, muse, clock = new_hub()
+    for n in ("Ada", "Bea", "dot"):
+        h.add_agent(n, "muse")
+    h.seat("ceo", "dot")
+    h.ask("jack", "Ada", "status?"); h.tick()
+    muse.say("Ada", "all good"); h.tick(); clock.go(61); h.tick()
+    h.manage("dot", 'product add "Shop" "x"')
+    h._log(None, "Bea", "err", "#9 connection refused")
+    clock.go(2 * 3600)
+    h.ask("jack", "Bea", "you there?"); h.tick()
+    a = h.activity(since=clock() - 3600)
+    texts = [e["text"] for e in a["feed"]]
+    assert any("you there?" in t for t in texts) and not any("status?" in t for t in texts), "the window is respected"
+    day = h.activity(since=clock() - 24 * 3600)
+    kinds = {e["type"] for e in day["feed"]}
+    assert {"sent", "reply", "change", "error"} <= kinds, kinds
+    assert day["feed"][0]["at"] >= day["feed"][-1]["at"], "newest first"
+    sent = [e for e in day["feed"] if e["type"] == "sent" and e["agent"] == "Ada"][0]
+    assert sent["from"] == "jack" and sent["text"] == "status?", sent
+    assert day["counts"]["reply"] == 1 and day["counts"]["change"] == 1 and day["counts"]["error"] == 1, day["counts"]
+    ada = day["agents"]["Ada"]
+    assert ada["reply"] == 1 and ada["sent"] >= 1 and ada["last_said"], ada
+    assert len(day["per_hour"]) == 24 and sum(day["per_hour"]) >= 3, day["per_hour"]
+    # a failure the next try fixed is marked, so a Muse blip doesn't read like a broken agent
+    h.db.execute("insert into events(agent, dir, text, at) values('Ada','err','#1 boom',?)", (clock(),))
+    clock.go(5)
+    h.db.execute("insert into events(agent, dir, text, at) values('Ada','err','recovered',?)", (clock(),))
+    clock.go(5)
+    h.db.execute("insert into events(agent, dir, text, at) values('Bea','err','#2 still down',?)", (clock(),))
+    errs = {e["agent"]: e for e in h.activity(since=clock() - 60)["feed"] if e["type"] == "error"}
+    assert errs["Ada"]["recovered"] and not errs["Bea"]["recovered"], errs
+    w = h.activity(since=clock() - 60)
+    assert w["counts"]["error"] == 1 and sum(b["error"] for b in w["buckets"]) == 1, "only the unresolved failure counts"
+
+    # the real cause survives: muse-cli's last line, not the middle of its traceback
+    import muse
+    t = muse.MuseTransport([sys.executable, "-c", "import sys; sys.stderr.write('Traceback\\n  File x\\n' + 'y'*400 + "
+                            "'\\ncurl_cffi.curl.CurlError: Failed to perform, curl: (28) Operation timed out'); sys.exit(1)"], {"Ada": "/tmp"})
+    try:
+        t._run("Ada", "raw"); raise AssertionError("no error raised")
+    except RuntimeError as e:
+        assert "(28) Operation timed out" in str(e)[:160], str(e)
+    print("activity OK")
+
+
+def observe():
+    """Jack can see the company working: what each agent's machine says it's doing (kept as history, not just
+    the latest snapshot), every step of every task, who sent each message, any time window, per agent."""
+    h, muse, clock = new_hub(evidence_ok=lambda link: True)
+    for n in ("Ada", "Bea"):
+        h.add_agent(n, "muse")
+    h.add_agent("darragh", "jack")
+    t0 = clock()
+    iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+    blob = {"activity": {"current": "drafting a response", "entries": [
+        {"timestamp": iso(t0 - 60), "activity_type": "goal", "status": "success", "title": "Checked the Etsy listing",
+         "subtitle": "3 views today", "message_id": "m1"},
+        {"timestamp": iso(t0 - 30), "activity_type": "tool", "status": "running", "title": "Writing listing copy", "message_id": "m2"}]}}
+    h.ingest("Ada", blob); h.ingest("Ada", blob)                      # the same snapshot twice is kept once
+    pid = h.add_product("Shop", brief="b"); prj = h.add_project(pid, "launch")
+    h.place("Ada", "Shop", "marketer"); h.place("Bea", "Shop", "marketer")
+    tid = h.add_task(prj, "write the listing", role="marketer", done_def="live listing")
+    h.tick()
+    holder = h.task(tid)["owner"]; other = "Bea" if holder == "Ada" else "Ada"
+    h.task_note(holder, tid, "first draft done")
+    h.task_done(holder, tid, "https://etsy.com/listing/1")
+    h.tick()
+    h.task_verify(other, tid, True)
+    h.ask("darragh", "Bea", "how's it going?")
+    a = h.activity(since=t0 - 3600)
+    work = [e for e in a["feed"] if e["type"] == "work" and e["agent"] == "Ada"]
+    assert [e["text"] for e in work] == ["Writing listing copy", "Checked the Etsy listing"], work
+    steps = [e["what"] for e in a["feed"] if e["type"] == "task"][::-1]
+    assert steps == ["assigned", "note", "done", "verify", "verified"], steps
+    assert any(e["type"] == "sent" and e["from"] == "darragh" for e in a["feed"]), "the sender is whoever sent it"
+    assert [t["id"] for t in a["tasks"]["finished"]] == [tid], a["tasks"]
+    assert a["counts"]["work"] == 2 and a["counts"]["task"] == 5, a["counts"]
+    only = h.activity(since=t0 - 3600, agent="Bea")
+    assert only["feed"] and all(e["agent"] == "Bea" for e in only["feed"]), only["feed"]
+    early = h.activity(since=t0 - 3600, until=t0 - 45)
+    assert [e["text"] for e in early["feed"]] == ["Checked the Etsy listing"], early["feed"]
+    assert len(a["buckets"]) == 24 and sum(b["work"] for b in a["buckets"]) == 2, a["buckets"][-3:]
+    print("observe OK")
+
+
+def teams():
+    """Agents carry a standing team (a role, or generalist), not a product. A task goes to someone whose team
+    fits it — specialists before generalists — and the product's context is switched in per task."""
+    h, muse, clock = new_hub()
+    for n in ("Des", "Gen", "Mar", "dot"):
+        h.add_agent(n, "muse")
+    h.seat("ceo", "dot")
+    h.manage("dot", "team Des designer"); h.manage("dot", "team Mar marketer"); h.manage("dot", "team Gen generalist")
+    assert h._agent("Mar")["team"] == "marketer"
+    pid = h.add_product("Etsy", brief="planners"); prj = h.add_project(pid, "launch")
+    switched = lambda n: [m for m in muse.sent.get(n, []) if "fleet switch" in m]
+
+    h.add_task(prj, "write listing copy", role="marketer", done_def="copy in the doc")
+    for _ in range(3): h.tick()
+    assert switched("Mar") and not switched("Des") and not switched("Gen"), "the marketer, not a designer or the generalist"
+    h.add_task(prj, "price the bundle", role="optimizer", done_def="a price")
+    for _ in range(3): h.tick()
+    assert switched("Gen") and not switched("Des"), "nobody on the optimizer team: the generalist covers it, never the designer"
+
+    # an agent can join a team itself; anyone else's team is the CEO's call
+    h.add_agent("Neo", "muse")
+    assert "marketer" in h.manage("Neo", "team me marketer") and h._agent("Neo")["team"] == "marketer"
+    try:
+        h.manage("Neo", "team Des marketer"); raise AssertionError("Neo moved someone else")
+    except PermissionError:
+        pass
+    h.manage("dot", 'role set researcher "You dig up facts and sources."')      # new roles are just new teams
+    h.manage("dot", "team Des researcher")
+    assert h._agent("Des")["team"] == "researcher"
+    assert "team" in h.powers("Neo") and "fleet team me" in h.powers("Neo"), h.powers("Neo")
+    assert {a["name"]: a["team"] for a in h.org()["agents"]}["Mar"] == "marketer", "the Org page shows each team"
+    print("teams OK")
+
+
+def pin():
+    """The CEO can give a task to one named agent: only that agent gets it, whatever its team, and the
+    agent holding it now hands it over. "owner none" lets the hub route it again."""
+    h, muse, clock = new_hub()
+    for n in ("Mar", "Per", "dot"):
+        h.add_agent(n, "muse")
+    h.seat("ceo", "dot")
+    h.manage("dot", "team Mar marketer"); h.manage("dot", "team Per designer")
+    pid = h.add_product("Etsy", brief="planners"); prj = h.add_project(pid, "launch")
+    h.place("Mar", "Etsy", "marketer")
+    t = h.add_task(prj, "publish listing", role="marketer", done_def="live on Etsy")
+    h.tick()
+    assert h.task(t)["owner"] == "Mar"
+    assert "Per" in h.manage("dot", f"task set {t} owner Per")
+    assert h.task(t)["owner"] is None and h.task(t)["pin"] == "Per", "Mar hands it over"
+    for _ in range(3): h.tick()
+    assert h.task(t)["owner"] == "Per" and any("fleet switch" in m for m in muse.sent.get("Per", [])), \
+        "only Per gets it, moved into the task's context at once even though Per is a designer and hasn't run the switch"
+    h.manage("dot", f"task release {t}")
+    h.tick()
+    assert h.task(t)["owner"] == "Per", "a released pinned task goes back to its agent, not to Mar"
+    h.manage("dot", f"task set {t} owner none"); h.manage("dot", f"task release {t}")
+    h.place("Per", "Etsy", "designer")
+    h.tick()
+    assert h.task(t)["owner"] == "Mar", "unpinned: normal routing again"
+    for bad in ("nobody", "jack"):
+        try:
+            h.manage("dot", f"task set {t} owner {bad}"); raise AssertionError(f"pinned to {bad}")
+        except (ValueError, PermissionError):
+            pass
+    h.add_agent("Neo", "muse")
+    try:
+        h.manage("Neo", f"task set {t} owner Neo"); raise AssertionError("a plain agent pinned a task")
+    except PermissionError:
+        pass
+    assert "owner" in h.MANAGE_HELP
+    h._run_lines("dot", 'fleet ask Per "can you publish today?"')
+    h.tick()
+    assert any("can you publish today?" in m for m in muse.sent.get("Per", [])), "dot reaches an agent with a fleet ask line"
+    print("pin OK")
+
+
+def handoff():
+    """A finished task tells everyone else holding a task in the same project (and the PM) where its result is,
+    so agents waiting on it informally don't sit idle."""
+    h, muse, clock = new_hub()
+    for n in ("Eng", "Mar", "Des", "Pam", "Out"):
+        h.add_agent(n, "muse")
+    pid = h.add_product("Shop", brief="b", pm="Pam"); prj = h.add_project(pid, "launch"); other = h.add_project(pid, "later")
+    t1 = h.add_task(prj, "build template", role="engineer", done_def="zip")
+    t2 = h.add_task(prj, "copy pack", role="marketer", done_def="doc")
+    t3 = h.add_task(other, "next idea", role="designer", done_def="png")
+    for n, r in (("Eng", "engineer"), ("Mar", "marketer"), ("Out", "designer")):
+        h.manage("jack", f"team {n} {r}"); h.place(n, "Shop", r)
+    h.tick()
+    assert [h.task(t)["owner"] for t in (t1, t2, t3)] == ["Eng", "Mar", "Out"]
+    before = {n: len(muse.sent.get(n, [])) for n in ("Eng", "Mar", "Out", "Pam")}
+    h.task_done("Eng", t1, "https://example.com/v1.zip")
+    h.tick(); clock.go(61); h.tick()
+    new = lambda n: "\n".join(muse.sent.get(n, [])[before[n]:])
+    assert "build template" in new("Mar") and "https://example.com/v1.zip" in new("Mar"), new("Mar")
+    assert "https://example.com/v1.zip" in new("Pam"), "the PM hears too"
+    assert "v1.zip" not in new("Out"), "another project's people aren't pinged"
+    assert "v1.zip" not in new("Eng"), "not told about its own work"
+    print("handoff OK")
+
+
+def links():
+    """muse.ai posts a link on its own line as a separate external_link event; the reply keeps it, in place."""
+    import muse
+    t = muse.MuseTransport(["true"], {"Ada": "/tmp"})
+    url = "https://muse.ai/files/1/2/abc/creatives.zip"
+    t._events = lambda name, limit: [
+        {"seq": 10, "event_name": "message.user", "display_text": "send the link"},
+        {"seq": 11, "event_name": "message.assistant", "display_text": "Evidence link:"},
+        {"seq": 12, "event_name": "delta.presentation", "display_text": url,
+         "payload": {"kind": "external_link", "data": {"url": url, "fallback_text": url}}},
+        {"seq": 13, "event_name": "message.assistant", "display_text": "Expires Oct 12."},
+        {"seq": 14, "event_name": "delta.presentation", "payload": {"kind": "something_else", "data": {}}},
+    ]
+    got = t.replies("Ada", 10)
+    assert [x[1] for x in got] == ["Evidence link:", url, "Expires Oct 12."], got
+    print("links OK")
+
+
 if __name__ == "__main__":
     {"council": council, "lifecycle": lifecycle, "poll": poll, "placement": placement, "org": org, "suggest": suggest,
-     "seats": seats, "manage": manage, "loose": loose, "grants": grants, "switch_between": switch_between}.get(sys.argv[1] if len(sys.argv) > 1 else "", tasks)()
+     "seats": seats, "manage": manage, "loose": loose, "grants": grants, "timeline": timeline, "send_now": send_now, "dry": dry, "activity": activity, "observe": observe, "teams": teams, "pin": pin, "handoff": handoff, "links": links, "switch_between": switch_between}.get(sys.argv[1] if len(sys.argv) > 1 else "", tasks)()

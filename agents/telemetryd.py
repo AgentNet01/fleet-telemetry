@@ -42,8 +42,14 @@ HOME = os.path.expanduser("~")
 # Resolved from the script path, NOT from $HOME: the daemon may run as a
 # different user (e.g. root) than the agent who installed it.
 TDIR = os.path.dirname(os.path.abspath(__file__))
-# Agent home = parent of workspace (TDIR is <home>/workspace/telemetry).
-HOME = os.path.dirname(os.path.dirname(TDIR))
+
+
+def home_of(tdir):
+    """The agent's home: setup.py installs the daemon in <home>/.fleet; older installs in <home>/workspace/telemetry."""
+    return os.path.dirname(tdir) if os.path.basename(tdir) == ".fleet" else os.path.dirname(os.path.dirname(tdir))
+
+
+HOME = home_of(TDIR)
 CONFIG_FILE = os.path.join(TDIR, "config.json")
 
 # set from config.json at startup (see main())

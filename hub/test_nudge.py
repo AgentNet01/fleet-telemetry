@@ -38,14 +38,14 @@ def cadence():
     h, muse, clock, prj = world()
     h.add_task(prj, "write the listing", role="engineer", done_def="x")
     h.tick()
-    hours(h, clock, 11)
-    assert nudges(muse, "Ada", "write the listing") == [], "nudge: none before 12 h"
-    hours(h, clock, 1)
-    assert len(nudges(muse, "Ada", "write the listing")) == 1, "nudge: exactly one at 12 h"
-    hours(h, clock, 11)
-    assert len(nudges(muse, "Ada", "write the listing")) == 1, "nudge: not again before another 12 h"
-    hours(h, clock, 1)
-    assert len(nudges(muse, "Ada", "write the listing")) == 2, "nudge: again after 12 more hours"
+    clock.go(55 * 60); h.tick()
+    assert nudges(muse, "Ada", "write the listing") == [], "nudge: none before an hour of silence"
+    clock.go(6 * 60); h.tick()
+    assert len(nudges(muse, "Ada", "write the listing")) == 1, "nudge: exactly one after an hour"
+    clock.go(55 * 60); h.tick()
+    assert len(nudges(muse, "Ada", "write the listing")) == 1, "nudge: not again within the hour"
+    clock.go(6 * 60); h.tick()
+    assert len(nudges(muse, "Ada", "write the listing")) == 2, "nudge: again after another silent hour"
     print("cadence OK")
 
 
@@ -53,9 +53,9 @@ def rotate():
     h, muse, clock, prj = world()
     h.add_task(prj, "write the listing", role="engineer", done_def="x")
     h.tick()
-    hours(h, clock, 12 * 5)
+    hours(h, clock, 5)
     got = nudges(muse, "Ada", "write the listing")
-    assert len(got) == 5, f"nudge: five in 60 h, got {len(got)}"
+    assert len(got) == 5, f"nudge: five in 5 silent hours, got {len(got)}"
     firsts = [m.splitlines()[0] for m in got]
     assert all(a != b for a, b in zip(firsts, firsts[1:])), f"nudge: never the same wording twice in a row: {firsts}"
     assert len(set(firsts[:4])) == 4, f"nudge: four different phrasings: {firsts}"
@@ -66,7 +66,7 @@ def content():
     h, muse, clock, prj = world()
     t = h.add_task(prj, "write the listing", role="engineer", done_def="x")
     h.tick()
-    hours(h, clock, 12)
+    hours(h, clock, 1)
     n = nudges(muse, "Ada", "write the listing")[0]
     for part in (f"#{t}", "write the listing", "Shop", "engineer", "fleet task"):
         assert part in n, f"nudge: missing {part!r} in {n!r}"
@@ -85,13 +85,37 @@ def reset():
     h, muse, clock, prj = world()
     t = h.add_task(prj, "write the listing", role="engineer", done_def="x")
     h.tick()
-    hours(h, clock, 11)
+    clock.go(50 * 60); h.tick()
     h.task_note("Ada", t, "draft done")
-    hours(h, clock, 11)
-    assert nudges(muse, "Ada", "write the listing") == [], "nudge: a progress note restarts the 12 h clock"
-    hours(h, clock, 1)
-    assert len(nudges(muse, "Ada", "write the listing")) == 1, "nudge: 12 h after the note"
+    clock.go(50 * 60); h.tick()
+    assert nudges(muse, "Ada", "write the listing") == [], "nudge: a progress note restarts the hour"
+    clock.go(15 * 60); h.tick()
+    assert len(nudges(muse, "Ada", "write the listing")) == 1, "nudge: an hour after the note"
     print("reset OK")
+
+
+def escalate():
+    """Still silent an hour after the reminder: the PM (or the CEO when there's no PM) is told, once per stretch."""
+    h, muse, clock, prj = world(workers=("Ada", "Pam", "Cee"))
+    h.seat("ceo", "Cee"); h.set_pm("Shop", "Pam")
+    t = h.add_task(prj, "write the listing", role="engineer", done_def="x", owner=None)
+    h.manage("jack", f"task set {t} owner Ada")
+    h.tick()
+    pm = lambda: [m for m in muse.sent.get("Pam", []) if "write the listing" in m and "silent" in m]
+    hours(h, clock, 1)
+    assert pm() == [], "one silent hour: only the holder is reminded"
+    hours(h, clock, 1)
+    assert len(pm()) == 1 and "Ada" in pm()[0], "two silent hours: the PM hears"
+    hours(h, clock, 3)
+    assert len(pm()) == 1, "the PM is told once per silent stretch, not every hour"
+    h.task_note("Ada", t, "back on it")
+    hours(h, clock, 2)
+    assert len(pm()) == 2, "a new silent stretch tells the PM again"
+    h.set_pm("Shop", None)
+    h.task_note("Ada", t, "still going")
+    hours(h, clock, 2)
+    assert any("write the listing" in m and "silent" in m for m in muse.sent.get("Cee", [])), "no PM: the CEO hears"
+    print("escalate OK")
 
 
 def ceo_world(n_idle, parked=0):
@@ -109,11 +133,11 @@ def ceo_world(n_idle, parked=0):
 def ceo_threshold():
     h, muse, clock, names = ceo_world(4)
     hours(h, clock, 13)
-    notes = muse.sent.get("Cee", [])
+    notes = [m for m in muse.sent.get("Cee", []) if "no task for over" in m]
     assert len(notes) == 1 and all(n in notes[0] for n in names), f"CEO: one note naming all four idle agents: {notes}"
     h3, muse3, clock3, _ = ceo_world(3)
     hours(h3, clock3, 13)
-    assert not muse3.sent.get("Cee"), f"CEO: three idle agents is not a problem yet: {muse3.sent.get('Cee')}"
+    assert not [m for m in muse3.sent.get("Cee", []) if "no task for over" in m], f"CEO: three idle agents is not a problem yet: {muse3.sent.get('Cee')}"
     print("ceo_threshold OK")
 
 
@@ -121,9 +145,9 @@ def ceo_once():
     h, muse, clock, names = ceo_world(4)
     hours(h, clock, 13)
     hours(h, clock, 11)
-    assert len(muse.sent.get("Cee", [])) == 1, "CEO: not re-notified about the same idle stretch"
+    assert len([m for m in muse.sent.get("Cee", []) if "no task for over" in m]) == 1, "CEO: not re-notified about the same idle stretch"
     hours(h, clock, 1)
-    assert len(muse.sent.get("Cee", [])) == 2, "CEO: reminded once 12 more hours pass"
+    assert len([m for m in muse.sent.get("Cee", []) if "no task for over" in m]) == 2, "CEO: reminded once 12 more hours pass"
     print("ceo_once OK")
 
 
@@ -137,11 +161,11 @@ def ceo_only():
 def ceo_parked():
     h, muse, clock, names = ceo_world(3, parked=2)
     hours(h, clock, 13)
-    assert not muse.sent.get("Cee"), "CEO: parked agents don't count as idle"
+    assert not [m for m in muse.sent.get("Cee", []) if "no task for over" in m], "CEO: parked agents don't count as idle"
     print("ceo_parked OK")
 
 
-CASES = [cadence, rotate, content, idle_silent, reset, ceo_threshold, ceo_once, ceo_only, ceo_parked]
+CASES = [cadence, rotate, content, idle_silent, reset, escalate, ceo_threshold, ceo_once, ceo_only, ceo_parked]
 
 if __name__ == "__main__":
     pick = sys.argv[1] if len(sys.argv) > 1 else None

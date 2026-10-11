@@ -41,7 +41,9 @@ class MuseTransport:
         p = subprocess.run(self.cli + list(args), env=env, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=120)
         if p.returncode != 0:
-            raise RuntimeError(f"muse-cli {args[0]} for {name}: {(p.stderr or p.stdout).strip()[-300:]}")
+            # a traceback's last line is the cause; the frames above it are noise once truncated
+            lines = [ln.strip() for ln in (p.stderr or p.stdout).strip().splitlines() if ln.strip()]
+            raise RuntimeError(f"muse-cli {args[0]} for {name}: {(lines[-1] if lines else 'exit ' + str(p.returncode))[-300:]}")
         return json.loads(p.stdout)
 
     def session(self, name):
@@ -78,6 +80,13 @@ class MuseTransport:
         for e in sorted(self._events(name, 30), key=lambda e: int(e.get("seq") or 0)):
             p = e.get("payload") if isinstance(e.get("payload"), dict) else {}
             text = p.get("display_text") or p.get("content") or e.get("display_text")
+            if (e.get("event_name") == "delta.presentation" and p.get("kind") == "external_link"
+                    and (e.get("role") or p.get("role") or "assistant") == "assistant"):
+                # muse.ai lifts a link on its own line out of the message into its own event
+                url = (p.get("data") or {}).get("url") or text
+                if int(e.get("seq") or 0) > (after or 0) and url:
+                    out.append((int(e["seq"]), url.strip()))
+                continue
             if (e.get("event_name") == "message.assistant" and int(e.get("seq") or 0) > (after or 0)
                     and not (e.get("reply_to_message_id") or p.get("reply_to_message_id"))
                     and e.get("display_text_ready", p.get("display_text_ready", True)) is not False and text):

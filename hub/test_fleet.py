@@ -302,6 +302,15 @@ def join():
     assert board("darragh", "d-pass") == 200 and board("jack", "d-pass") == 401 and board("darragh", "nope") == 401
     assert run("join", "Sneaky", "d-pass", hub_url).returncode != 0, "a dashboard login isn't a join code"
 
+    # a message sent from the dashboard is from whoever is logged in; Claude's scripted sends say so
+    def send(user, pw, body):
+        req = urllib.request.Request(hub_url + "/api/jack/send", data=json.dumps(body).encode(), method="POST", headers={
+            "Content-Type": "application/json", "Authorization": "Basic " + base64.b64encode(f"{user}:{pw}".encode()).decode()})
+        return json.load(urllib.request.urlopen(req))["id"]
+    assert h.item(send("darragh", "d-pass", {"to": "Boboe 3", "text": "hi from D"}))["frm"] == "darragh"
+    assert h.item(send("jack", PASSWORD, {"to": "Boboe 3", "text": "hi from J"}))["frm"] == "jack"
+    assert h.item(send("jack", PASSWORD, {"to": "Boboe 3", "text": "test", "as": "claude"}))["frm"] == "claude"
+
     # Jack's own code still re-claims a Boboe (VM replaced), but never a board member or dot
     r = run("join", "Boboe 3", PASSWORD, hub_url)
     assert r.returncode == 0, r

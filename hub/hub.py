@@ -13,11 +13,13 @@ deeper than 5 goes to Needs Jack. Holders of an open task get a rotating nudge a
 progress; idle agents are never woken — the CEO hears when more than three sit idle over 12 h.
 """
 import base64
+import calendar
 import hashlib
 import hmac
 import html
 import json
 import os
+import re
 import secrets
 import sqlite3
 import sys
@@ -100,6 +102,10 @@ create table if not exists suggestions(
   decided_by text, note text, at real, decided_at real);
 create table if not exists nudges(agent text primary key, last_at real, idx integer default -1);
 create table if not exists ceo_notes(id integer primary key, agents text, at real);
+create table if not exists work(agent text, key text, at real, kind text, title text, status text, detail text,
+  primary key(agent, key));
+create table if not exists task_events(id integer primary key, task integer, agent text, what text, text text, at real);
+create table if not exists dry_notes(product integer primary key, at real);
 create table if not exists grants(agent text primary key, level text, by text, at real);
 create table if not exists changes(id integer primary key, by text, line text, result text, at real);
 """
@@ -115,11 +121,16 @@ MIGRATIONS = [
     "create table if not exists telemetry(agent text primary key, blob text, at real)",
     "alter table tasks add column verifier text",
     "alter table agents add column free_since real",
+    "alter table agents add column team text",            # standing role (or 'generalist'); product comes per task
+    "alter table tasks add column pin text",
+    "alter table switches add column from_product text",
+    "alter table nudges add column streak integer default 0",   # reminders since the holder's last progress              # the one agent this task may go to, whatever its team
 ]
 WORKERS = ("muse", "poll")            # kinds that take tasks; 'slack' (dot) and 'jack' (the board) don't
 PUSH = ("muse", "slack")              # kinds the hub sends to; 'poll' agents fetch with `fleet inbox`
 ONE_SHOT = ("note", "task", "verify", "nudge")
-NUDGE_AFTER = IDLE_AFTER = 12 * 3600
+NUDGE_AFTER = 3600                     # a task holder silent this long is reminded, then its PM an hour later
+IDLE_AFTER = 12 * 3600
 CEO_IDLE_COUNT = 3                    # more than this many idle workers → the CEO hears about it
 NUDGES = (                            # same meaning, different words: agents tune out a repeated message
     "Checking in on your open fleet task — how's it going?",
@@ -151,6 +162,8 @@ class Hub:
         self.evidence_ok = evidence_ok or _evidence_ok
         self.db = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
+        self._polling = {}               # agent -> lock held while its chat is being read
+        self._sending = {}               # agent -> lock held while a message to it is going out
         self._fails = {}                 # agent -> consecutive servicing failures (transient blips don't page Jack)
         self.db.executescript(SCHEMA)
         for m in MIGRATIONS:
@@ -293,6 +306,7 @@ class Hub:
             self._track_free()
             self._nudge()
             self._ceo_idle()
+            self._dry()
             agents = [dict(a) for a in self.db.execute(
                 "select * from agents where kind in ('muse','poll','slack') and state != 'parked' order by name")]
         # Two passes so cross-agent effects (a reply that queues a note for someone else) land in
@@ -333,10 +347,19 @@ class Hub:
     def _poll_agent(self, a, now):
         if a["kind"] not in PUSH:
             return
+        lk = self._polling.setdefault(a["name"], threading.Lock())
+        if not lk.acquire(blocking=False):          # someone is already reading this agent's chat
+            return
+        try:
+            self._poll_one(a, now)
+        finally:
+            lk.release()
+
+    def _poll_one(self, a, now):
         name = a["name"]
         with self.lock:
             it = self._inflight(name)
-            seen = a["seen_seq"] or 0
+            seen = self._agent(name)["seen_seq"] or 0      # fresh: the reply watcher may have moved it
             it_mark = it["mark"] if it else None
         fresh = self.transport.replies(name, seen)                   # I/O, no lock
         rep = self.transport.replies(name, it_mark) if (fresh and it_mark is not None) else None
@@ -355,7 +378,37 @@ class Hub:
             if it and it["last_reply"] and now - it["last_reply"] >= QUIET:
                 self._answered(it, it["reply"])
 
+    REPLY_WATCH = (5, 120)               # after Jack sends: check that agent for a reply every 5 s for 2 min
+
+    def deliver_now(self, name):
+        """Send what's waiting for this agent right away, then watch for its reply, in the background."""
+        a = self._agent(name)
+        if not (a and a["kind"] in PUSH and a["state"] != "parked"):
+            return
+
+        def run():
+            self._guarded(name, lambda: self._deliver_agent(name, a["kind"], self.clock()))
+            every, total = self.REPLY_WATCH
+            end = time.time() + total
+            while time.time() < end:
+                time.sleep(every)
+                self._guarded(name, lambda: self._poll_agent(dict(self._agent(name)), self.clock()))
+                it = self._inflight(name)
+                if not it or it["last_reply"]:
+                    break
+        threading.Thread(target=run, daemon=True).start()
+
     def _deliver_agent(self, name, kind, now):
+        # one send at a time per agent: the loop and a Send click never both deliver the same message
+        lk = self._sending.setdefault(name, threading.Lock())
+        if not lk.acquire(blocking=False):
+            return
+        try:
+            self._deliver_one(name, kind, now)
+        finally:
+            lk.release()
+
+    def _deliver_one(self, name, kind, now):
         with self.lock:
             it = self._inflight(name)
             nextitem = None
@@ -470,16 +523,24 @@ class Hub:
                 return False
         return True
 
-    def _idle(self, product=None, role=None):
-        """An active, un-parked agent with nothing in flight and nothing queued, optionally in a given brain."""
+    def _idle(self, product=None, role=None, pin=None):
+        """An active, un-parked agent with nothing in flight and nothing queued, optionally in a given brain.
+        A pinned task skips team routing: only the named agent counts."""
         for a in self.db.execute(f"select * from agents where kind in {WORKERS} and state='active' order by name").fetchall():
             if self._open_tasks(a["name"]):
                 continue                             # only holding a task makes an agent busy; a pending question doesn't
+            if pin and a["name"] != pin:
+                continue
             if product and a["current_product"] != product:
                 continue
-            if role and a["current_role"] != role:
+            if role and (a["current_role"] != role or not (pin or self._fits(a, role))):
                 continue
             yield a["name"]
+
+    @staticmethod
+    def _fits(a, role):
+        """Skill routing: a task's role goes to that team, or to a generalist (an unset team counts as one)."""
+        return a["team"] in (None, "", "generalist", role)
 
     def _assign_tasks(self):
         # a task becomes ready once its blockers are done; ready+unowned tasks go to a matching idle agent
@@ -492,9 +553,10 @@ class Hub:
             if not ready or t["owner"]:
                 continue
             product = self._task_product(t["id"])
-            owner = next(self._idle(product, t["role"]), None)
+            owner = next(self._idle(product, t["role"], t["pin"]), None)
             if owner:
                 self._set("tasks", t["id"], owner=owner, status="working", touched=self.clock())
+                self._task_event(t["id"], owner, "assigned")
                 self.db.execute(
                     "insert into items(kind, frm, too, text, ref, depth, status, created) values('task','hub',?,?,?,0,'queued',?)",
                     (owner, f"{t['title']} — {product}, as {t['role']}.\nDone when: {t['done_def']}", t["id"], self.clock()))
@@ -525,6 +587,10 @@ class Hub:
         p = self.db.execute("select pm from products where name=?", (product,)).fetchone() if product else None
         return bool(who and p and p["pm"] == who)
 
+    def _task_event(self, tid, agent, what, text=""):
+        self.db.execute("insert into task_events(task, agent, what, text, at) values(?,?,?,?,?)",
+                        (tid, agent, what, text, self.clock()))
+
     def task_note(self, agent, tid, text):
         with self.lock:
             t = self._task_row(tid)
@@ -532,6 +598,7 @@ class Hub:
                 raise PermissionError(f"#{tid} isn't a task you're working on")
             self._set("tasks", tid, progress_note=text, touched=self.clock())
             self._log(None, agent, "out", f"task #{tid} note: {text}")
+            self._task_event(tid, agent, "note", text)
 
     def task_done(self, agent, tid, link):
         with self.lock:
@@ -543,6 +610,16 @@ class Hub:
         with self.lock:
             self._set("tasks", tid, status="verifying", evidence=link, verifier=None, touched=self.clock())
             self._log(None, agent, "out", f"task #{tid} done: {link}")
+            self._task_event(tid, agent, "done", link)
+            # work often waits on a task without a formal blocker: tell the project's other holders and its PM
+            pm = self.db.execute("select p.pm from projects j join products p on j.product=p.id where j.id=?",
+                                 (t["project"],)).fetchone()
+            peers = [r["owner"] for r in self.db.execute(
+                "select distinct owner from tasks where project=? and status='working' and owner is not null", (t["project"],))]
+            for who in dict.fromkeys(peers + [pm["pm"] if pm else None]):
+                if who and who != agent:
+                    self._note(who, f"{agent} finished task #{tid} \"{t['title']}\"",
+                               f"Result: {link}\nIf your work was waiting on this, carry on. — No reply needed.")
             self._assign_verifiers()
 
     def task_verify(self, agent, tid, ok, reason=""):
@@ -551,6 +628,7 @@ class Hub:
             if t["status"] != "verifying" or t["verifier"] != agent:
                 raise PermissionError(f"#{tid} isn't waiting on your verification")
             self._log(None, agent, "out", f"task #{tid} verify: {'pass' if ok else 'fail — ' + reason}")
+            self._task_event(tid, agent, "verified" if ok else "sent back", reason)
             if ok:
                 self._set("tasks", tid, status="done", verified_by=agent, touched=self.clock())
             else:
@@ -566,6 +644,7 @@ class Hub:
                 raise PermissionError("only Jack, Darragh, the CEO or this product's PM can release a task")
             self._set("tasks", tid, owner=None, verifier=None, status="ready", touched=self.clock(),
                       progress_note=f"released by {by}")
+            self._task_event(tid, by, "released")
 
     def _assign_verifiers(self):
         for t in self.db.execute("select * from tasks where status='verifying' and verifier is null").fetchall():
@@ -575,6 +654,7 @@ class Hub:
             who = (same or free or [None])[0]
             if who:
                 self._set("tasks", t["id"], verifier=who)
+                self._task_event(t["id"], who, "verify")
                 self.db.execute(
                     "insert into items(kind, frm, too, text, ref, depth, status, created) values('verify','hub',?,?,?,0,'queued',?)",
                     (who, f"{t['title']} — {product}, done by {t['owner']}.\nDone when: {t['done_def']}\n"
@@ -591,8 +671,9 @@ class Hub:
                 self._set("agents", a["name"], free_since=self.clock())
 
     def _nudge(self):
-        """A holder with no progress for 12 h gets one nudge, worded differently each time; the clock
-        restarts on any `fleet task` call (it updates `touched`). Agents without a task are left alone."""
+        """A holder with no progress for an hour gets a nudge, worded differently each time; the clock
+        restarts on any `fleet task` call (it updates `touched`). Still silent at the second nudge: its PM (or the
+        CEO) is told once for that stretch. Agents without a task are left alone."""
         now = self.clock()
         for a in self.db.execute("select * from agents where state='active'").fetchall():
             ts = self._open_tasks(a["name"])
@@ -602,6 +683,8 @@ class Hub:
             if n and now - n["last_at"] < NUDGE_AFTER:
                 continue
             idx = ((n["idx"] if n else -1) + 1) % len(NUDGES)
+            last_progress = max(t["touched"] or 0 for t in ts)
+            streak = (n["streak"] or 0) + 1 if n and n["last_at"] > last_progress else 1
             lines = []
             for t in ts:
                 prod = self._task_product(t["id"])
@@ -612,9 +695,21 @@ class Hub:
                     lines.append(f"#{t['id']} “{t['title']}” — {prod}, as {t['role']}: progress with "
                                  f"`fleet task note {t['id']} \"...\"`, finished with `fleet task done {t['id']} <link>`")
             self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('nudge','hub',?,?,0,'queued',?)",
-                            (a["name"], NUDGES[idx] + "\n" + "\n".join(lines), now))
-            self.db.execute("insert into nudges(agent, last_at, idx) values(?,?,?) on conflict(agent) "
-                            "do update set last_at=excluded.last_at, idx=excluded.idx", (a["name"], now, idx))
+                            (a["name"], NUDGES[idx] + f"\nNo progress posted for {int((now - last_progress) // 3600)}h.\n"
+                             + "\n".join(lines), now))
+            self.db.execute("insert into nudges(agent, last_at, idx, streak) values(?,?,?,?) on conflict(agent) "
+                            "do update set last_at=excluded.last_at, idx=excluded.idx, streak=excluded.streak",
+                            (a["name"], now, idx, streak))
+            if streak == 2:
+                for t in ts:
+                    pm = self.db.execute("select pm from products where name=?", (self._task_product(t["id"]),)).fetchone()
+                    boss = (pm["pm"] if pm and pm["pm"] != a["name"] else None) or self._chair()
+                    if boss and boss != a["name"]:
+                        self._note(boss, f"{a['name']} has been silent on task #{t['id']} “{t['title']}” for "
+                                         f"{int((now - last_progress) // 3600)}h",
+                                   "It was reminded and still hasn't posted progress. It may be stuck on a permission "
+                                   "pop-up, blocked, or done without closing the task. Check in with it, or reassign: "
+                                   f"fleet task set {t['id']} owner <agent>.")
 
     def _ceo_idle(self):
         """More than three workers free for over 12 h → one note to whoever holds the CEO seat. Again only
@@ -638,19 +733,41 @@ class Hub:
                          f"{who}\n\nProducts and PMs:\n{pms or '- (no products yet)'}\n"
                          "Ask the PMs for work these agents can take, or add tasks yourself.")
 
+    def _dry(self):
+        """An active product with nothing open, ready, blocked or in progress asks its PM (or the CEO) for the
+        next tasks — at most once every 12 h — so the business keeps moving after its first batch is done."""
+        now = self.clock()
+        for p in self.db.execute("select * from products where status='active'").fetchall():
+            busy = self.db.execute("select 1 from tasks t join projects j on t.project=j.id where j.product=? "
+                                   "and t.status not in ('done','cancelled')", (p["id"],)).fetchone()
+            last = self.db.execute("select at from dry_notes where product=?", (p["id"],)).fetchone()
+            if busy or (last and now - last["at"] < IDLE_AFTER):
+                continue
+            who = p["pm"] or self._chair()
+            if not who:
+                continue
+            self.db.execute("insert or replace into dry_notes(product, at) values(?,?)", (p["id"], now))
+            projects = ", ".join(f"#{j['id']} {j['name']}" for j in self.db.execute(
+                "select * from projects where product=? and status != 'removed'", (p["id"],))) or "none yet"
+            self._deliver_to(who, f"{p['name']} has no work lined up",
+                             f"Goal: {p['metric'] or '(none set)'}. {p['brief'] or ''}\nProjects: {projects}\n"
+                             "Plan the next steps and add them: fleet task add <project id> \"<title>\" <role> \"<done when>\" "
+                             "(fleet project add first if it needs a new one). Or pause it: fleet product set "
+                             f"\"{p['name']}\" status paused.")
+
     # ---- seats, PMs, roles, suggestions -------------------------------------------------
     def set_pm(self, product, who):
         with self.lock:
             self.db.execute("update products set pm=? where name=? or id=?", (who or None, product, product))
 
-    MANAGE_HELP = ("fleet portfolio | fleet changes | "
+    MANAGE_HELP = ("fleet portfolio | fleet changes | fleet ask \"<agent>\" \"<message>\" | "
                    'fleet product add "<name>" "<brief>" ["<goal>"] | fleet product set "<product>" brief|metric|status "<value>" | '
                    'fleet product rename "<product>" "<new name>" | fleet product remove "<product>" | '
                    'fleet project add|remove "<product>" "<project>" | fleet project rename "<product>" "<project>" "<new name>" | '
                    'fleet task add <project id> "<title>" <role> "<done when>" [<blocker ids,>] | '
-                   'fleet task set <id> title|role|done|blocked "<value>" | fleet task remove <id> | fleet task release <id> | '
-                   'fleet pm "<product>" <agent>|none | fleet place <agent> "<product>"|none <role> | fleet seat ceo <agent> | '
-                   'fleet role set <role> "<soul text>" | fleet grant <agent> ceo|none | fleet powers | fleet park|wake <agent> (Jack/Darragh)')
+                   'fleet task set <id> title|role|done|blocked "<value>" | fleet task set <id> owner <agent>|none | fleet task remove <id> | fleet task release <id> | '
+                   'fleet pm "<product>" <agent>|none | fleet team <agent>|me <role>|generalist | fleet seat ceo <agent> | '
+                   'fleet role set <role> "<soul text>" | fleet suggestion accept|reject <id> "<what you decided>" | fleet grant <agent> ceo|none | fleet powers | fleet park|wake <agent> (Jack/Darragh)')
 
     def manage(self, by, line):
         """One company command from an agent (the fleet CLI, or a "fleet ..." line in dot's Slack reply).
@@ -664,9 +781,17 @@ class Hub:
                 return self._portfolio() if a == ["portfolio"] else "\n".join(
                     f"{time.strftime('%m-%d %H:%M', time.localtime(c['at']))} {c['by']}: {c['line']} → {c['result']}"
                     for c in self.changes(30)) or "(no changes yet)"
+            if a[0] == "ask" and len(a) >= 3:              # dot (Slack) has no CLI; this is its way to message an agent
+                iid = self.ask(by, a[1], " ".join(a[2:]))
+                return f"sent to {a[1]} (#{iid}); the reply comes back to you"
+            if a[:2] in (["suggestion", "accept"], ["suggestion", "reject"]) and len(a) >= 3:
+                self.decide_suggestion(by, int(a[2]), a[1] == "accept", " ".join(a[3:]))   # checks who may decide
+                result = f"suggestion #{a[2]} {a[1]}ed"
+                self.db.execute("insert into changes(by, line, result, at) values(?,?,?,?)", (by, line, result, self.clock()))
+                return result
             self._may_run(by, a)
             before = {n: self.powers(n) for n in self._names()}
-            result = self._manage(a)
+            result = self._manage(a, by)
             if not result.startswith("unknown command"):
                 self.db.execute("insert into changes(by, line, result, at) values(?,?,?,?)", (by, line, result, self.clock()))
                 for n in self._names():                  # anyone whose powers changed is told what they can do now
@@ -680,12 +805,17 @@ class Hub:
     def powers(self, who):
         """Plain words for what this agent may do, and the commands for it."""
         pm_of = [r["name"] for r in self.db.execute("select name from products where pm=? and status != 'removed'", (who,))]
-        base = ("Everyone: fleet status, fleet inbox, fleet portfolio, fleet changes, fleet ask, fleet reply, "
+        a = self._agent(who)
+        team = (a["team"] if a else None) or "generalist"
+        base = (f"Your team: {team}. Tasks for your team's role come to you for any product; the hub switches your "
+                "product context per task. Pick your own team with fleet team me <role|generalist> (roles: "
+                f"{', '.join(self.roles())}).\n"
+                "Everyone: fleet status, fleet inbox, fleet portfolio, fleet changes, fleet ask, fleet reply, "
                 "fleet task note|done on tasks you hold, fleet task verify when asked, fleet suggest \"<idea>\".")
         if self._ceo_level(who):
             seat = "You hold the CEO seat" if who == self._chair() else "You have CEO-level powers (granted)"
             return (f"{seat}: you can do everything the CEO can — add, change, rename and remove products and projects; "
-                    "add, edit, remove and release tasks; name PMs; place agents on products and roles; hand over the CEO "
+                    "add, edit, remove and release tasks; name PMs; put agents on teams (fleet team <agent> <role>|generalist); hand over the CEO "
                     "seat; rewrite what each role is told; decide suggestions; and grant or revoke CEO-level powers for "
                     "other agents (fleet grant <agent> ceo|none). Only Jack and Darragh park or wake agents. "
                     "Every change is logged on the dashboard. Commands: fleet help.\n" + base)
@@ -698,6 +828,8 @@ class Hub:
     def _may_run(self, by, a):
         """The CEO runs the whole company except parking agents; a PM runs its own product's tasks;
         parking and waking agents is the board's. Nobody else changes the company."""
+        if a[:1] == ["team"] and len(a) == 3 and a[1] in ("me", by):
+            return                                       # anyone can pick their own team
         if a[:1] in (["park"], ["wake"]):
             if not self.is_board(by):
                 raise PermissionError("only Jack or Darragh can park or wake agents")
@@ -718,7 +850,7 @@ class Hub:
     def changes(self, n=100):
         return [dict(r) for r in self.db.execute("select * from changes order by id desc limit ?", (n,))]
 
-    def _manage(self, a):
+    def _manage(self, a, by_name=None):
         def product(ref):
             r = self.db.execute("select * from products where name=? or cast(id as text)=?", (ref, ref)).fetchone()
             if not r:
@@ -788,6 +920,16 @@ class Hub:
             val = role(a[4]) if a[3] == "role" else json.dumps([int(x) for x in a[4].split(",") if x]) if a[3] == "blocked" else a[4]
             self._set("tasks", t["id"], **{col: val})
             return f"task #{t['id']}: {a[3]} set"
+        if verb == ["task", "set"] and len(a) == 5 and a[3] == "owner":
+            t = self._task_row(int(a[2]))
+            who = None if a[4] == "none" else agent(a[4])["name"]
+            if t["status"] in ("done", "cancelled"):
+                raise ValueError(f"task #{t['id']} is {t['status']}")
+            if who and t["owner"] != who and t["status"] in ("working", "verifying"):
+                self._set("tasks", t["id"], owner=None, verifier=None, status="ready", touched=self.clock())
+                self._task_event(t["id"], t["owner"], "released", f"handed to {who}")
+            self._set("tasks", t["id"], pin=who)
+            return f"task #{t['id']} goes to {who}" if who else f"task #{t['id']} goes to whoever fits"
         if verb == ["task", "remove"] and len(a) == 3:
             t = self._task_row(int(a[2]))
             cancel("id=?", (t["id"],))
@@ -813,6 +955,11 @@ class Hub:
         if verb == ["role", "set"] and len(a) == 4:
             self.set_role(a[2], a[3])
             return f"role {a[2]} updated"
+        if a[0] == "team" and len(a) == 3:
+            g = agent(by_name if a[1] == "me" else a[1])
+            team = None if a[2] == "none" else a[2] if a[2] == "generalist" else role(a[2])
+            self._set("agents", g["name"], team=team)
+            return f"{g['name']} is on the {team or 'generalist'} team"
         if a[0] == "grant" and len(a) == 3 and a[2] in ("ceo", "none"):
             g = agent(a[1])
             if a[2] == "ceo":
@@ -867,14 +1014,21 @@ class Hub:
     def suggest(self, agent, text):
         with self.lock:
             a = self._agent(agent)
-            product = a["current_product"] if a else None
+            runs = [r["name"] for r in self.db.execute("select name from products where pm=? and status != 'removed'", (agent,))]
+            product = (a["current_product"] if a else None) or (runs[0] if len(runs) == 1 else None)
             sid = self.db.execute("insert into suggestions(frm, product, text, at) values(?,?,?,?)",
                                   (agent, product, text, self.clock())).lastrowid
             pm = self.db.execute("select pm from products where name=?", (product,)).fetchone()
-            body = f"From {agent} ({product or 'no product'}): {text}\n" \
-                   f"Decide with `fleet suggestion accept {sid} \"note\"` or `fleet suggestion reject {sid} \"why\"`."
-            for who in dict.fromkeys(w for w in ((pm["pm"] if pm else None), self._chair()) if w):
+            body = (f"From {agent} ({product or 'no product'}): {text}\n"
+                    f"Talk it over with {agent} (fleet ask \"{agent}\" ...), decide what to do, if anything, and make the "
+                    f"changes. Then log the decision: fleet suggestion accept {sid} \"what you decided and did\" or "
+                    f"fleet suggestion reject {sid} \"why\".")
+            deciders = [w for w in dict.fromkeys(((pm["pm"] if pm else None), self._chair())) if w and w != agent]
+            for who in deciders:
                 self._deliver_to(who, f"suggestion #{sid}", body)
+            if deciders:
+                self._note(agent, f"your suggestion #{sid} went to {', '.join(deciders)}",
+                           f"{text}\n{' and '.join(deciders)} will talk it over with you, decide and log the decision.")
             return sid
 
     def decide_suggestion(self, by, sid, accept, note=""):
@@ -888,6 +1042,12 @@ class Hub:
             self.db.execute("update suggestions set status=?, decided_by=?, note=?, decided_at=? where id=?",
                             (status, by, note, self.clock(), sid))
             self._note(sg["frm"], f"your suggestion #{sid} was {status} by {by}", f"{sg['text']}" + (f"\n{note}" if note else ""))
+            chair = self._chair()
+            if accept and chair and chair not in (by, sg["frm"]):
+                # accepting only records the decision; someone with the power to change things has to do it
+                self._note(chair, f"suggestion #{sid} from {sg['frm']} was accepted by {by}: carry it out",
+                           f"{sg['text']}" + (f"\n{by}: {note}" if note else "") +
+                           "\nMake the changes it needs with fleet commands (fleet team, fleet task, fleet role set...).")
 
     def suggestions(self):
         with self.lock:
@@ -985,7 +1145,7 @@ class Hub:
             prod = self.db.execute("select brief from products where name=?", (sw["product"],)).fetchone()
             memory = f"# MEMORY.md (product: {sw['product']})\n{prod['brief'] if prod else ''}"
             return {"product": sw["product"], "role": sw["role"], "soul": soul, "memory": memory,
-                    "from_product": self._agent(agent)["current_product"]}
+                    "from_product": sw["from_product"]}
 
     def issue_switch(self, agent, product, role):
         with self.lock:
@@ -993,12 +1153,16 @@ class Hub:
             prod = self.db.execute("select brief from products where name=?", (product,)).fetchone()
             memory = f"# MEMORY.md (product: {product})\n{prod['brief'] if prod else ''}"
             expect = hashlib.sha256((soul + "\n" + memory).encode()).hexdigest()
-            self.db.execute("insert into switches(agent, product, role, expect, issued, status) values(?,?,?,?,?,'issued') "
-                            "on conflict(agent) do update set product=excluded.product, role=excluded.role, expect=excluded.expect, issued=excluded.issued, status='issued'",
-                            (agent, product, role, expect, self.clock()))
+            # the move takes effect now: the agent loading its brain files follows, it doesn't gate the work
+            was = self._agent(agent)["current_product"]
+            self.db.execute("insert into switches(agent, product, role, expect, issued, status, from_product) values(?,?,?,?,?,'issued',?) "
+                            "on conflict(agent) do update set product=excluded.product, role=excluded.role, expect=excluded.expect, "
+                            "issued=excluded.issued, status='issued', from_product=excluded.from_product",
+                            (agent, product, role, expect, self.clock(), was))
+            self._set("agents", agent, current_product=product, current_role=role)
             self.db.execute(
                 "insert into items(kind, frm, too, text, depth, status, created) values('note','hub',?,?,0,'queued',?)",
-                (agent, f"switch to {product} as {role}\nYour next task is in {product} as {role}. Run: fleet switch \"{product}\" \"{role}\"\n"
+                (agent, f"switch to {product} as {role}\nYou've been moved to {product} as {role}; your next task follows. Load that context now: fleet switch \"{product}\" \"{role}\"\n"
                         f"It changes only the role section of SOUL.md and, if the product changes, saves your current "
                         f"product's memory to ~/fleet-brains/ (it comes back when you return) and loads {product}'s. "
                         "IDENTITY.md never changes. This is the fleet's normal hand-off between tasks.",
@@ -1019,20 +1183,20 @@ class Hub:
         # a ready, unowned task with no matching idle agent, but an idle agent exists → switch one to fill it
         for t in self.db.execute("select * from tasks where status='ready' and owner is null").fetchall():
             product = self._task_product(t["id"])
-            if next(self._idle(product, t["role"]), None):
+            if next(self._idle(product, t["role"], t["pin"]), None):
                 continue                                       # someone already fits; _assign_tasks will take it
             if self.db.execute("select 1 from switches where status='issued' and product=? and role=?",
                                (product, t["role"])).fetchone():
                 continue                                       # a switch to fill this is already on its way
             pending = {r["agent"] for r in self.db.execute("select agent from switches where status='issued'")}
-            free = [n for n in self._idle() if n not in pending]
-            # hold people constant: files and programs on a VM don't move with a switch, so prefer
-            # someone already on this product (a role-only switch), then someone on no product yet
-            on = lambda n: self._agent(n)["current_product"]
-            ranked = [n for n in free if on(n) == product] + [n for n in free if not on(n)] + \
-                     [n for n in free if on(n) and on(n) != product]
+            free = [self._agent(n) for n in self._idle() if n not in pending]
+            free = [a for a in free if (a["name"] == t["pin"] if t["pin"] else self._fits(a, t["role"]))]
+            # specialists before generalists; then hold people constant — files and programs on a VM don't move
+            # with a switch, so prefer someone whose loaded context is already this product, then none, then another
+            loaded = lambda a: 0 if a["current_product"] == product else 1 if not a["current_product"] else 2
+            ranked = sorted(free, key=lambda a: (0 if a["team"] == t["role"] else 1, loaded(a)))
             if ranked:
-                self.issue_switch(ranked[0], product, t["role"])
+                self.issue_switch(ranked[0]["name"], product, t["role"])
 
     # ---- vault --------------------------------------------------------------------------
     def secret_put(self, name, value, scope, by):
@@ -1115,13 +1279,108 @@ class Hub:
 
     def timeline(self, agent, limit=200):
         with self.lock:
-            evs = [dict(r) for r in self.db.execute(
-                "select * from (select * from events where agent=? order by id desc limit ?) order by id", (agent, limit))]
-            waiting = [{"item": r["id"], "agent": agent, "dir": "waiting", "text": f"from {r['frm']}: {r['text']}", "at": r["created"]}
+            evs = []
+            for r in self.db.execute("select * from (select e.*, i.frm, i.kind, i.text as item_text, i.status as item_status from events e left join items i on e.item=i.id "
+                                     "where e.agent=? order by e.id desc limit ?) order by id", (agent, limit)):
+                e = dict(r)
+                # the same failure retried every tick shows once, with how many times and when it last happened
+                key = re.sub(r"^#\d+ ", "", e["text"] or "")
+                if e["dir"] == "err" and evs and evs[-1]["dir"] == "err" and evs[-1]["_key"] == key:
+                    evs[-1].update(count=evs[-1]["count"] + 1, at=e["at"])
+                    continue
+                evs.append(dict(e, _key=key, count=1))
+            # a "recovered" marker clears every failure before it: only errors still unresolved show
+            last_ok = max((i for i, e in enumerate(evs) if e["dir"] == "err" and e["_key"] == "recovered"), default=-1)
+            evs = [e for i, e in enumerate(evs) if not (e["dir"] == "err" and i <= last_ok)]
+            for e in evs:
+                e.pop("_key")
+            waiting = [{"item": r["id"], "agent": agent, "dir": "waiting", "text": f"from {r['frm']}: {r['text']}", "at": r["created"],
+                        "frm": r["frm"], "kind": r["kind"], "item_text": r["text"], "item_status": "queued"}
                        for r in self.db.execute("select * from items where too=? and status='queued' order by id", (agent,))]
             asked = [{"item": r["id"], "agent": agent, "dir": "asked", "text": f"to {r['too']}: {r['text']}", "at": r["created"]}
                      for r in self.db.execute("select * from items where frm=? and kind in ('request','question') order by id", (agent,))]
             return sorted(evs + waiting + asked, key=lambda e: e["at"] or 0)
+
+    def _failing(self, a):
+        """Still failing: its latest delivery error came after its last recovery and its last reply."""
+        r = self.db.execute("select max(case when text != 'recovered' then at end) bad, max(case when text = 'recovered' "
+                            "then at end) ok from events where agent=? and dir='err'", (a["name"],)).fetchone()
+        return bool(r["bad"]) and r["bad"] > max(r["ok"] or 0, a["last_out"] or 0)
+
+    def activity(self, since, until=None, agent=None):
+        """What the company did in [since, until], newest first, optionally for one agent: messages both ways
+        (with who sent them), every task step, what each agent's machine reported doing, changes and failures.
+        Plus counts, 24 time buckets across the window, task progress, and who is working right now."""
+        with self.lock:
+            now = self.clock()
+            until = until or now
+            win, feed = (since, until), []
+            who = (" and agent=?", (agent,)) if agent else ("", ())
+            for r in self.db.execute("select e.agent, e.dir, e.text, e.at, i.frm, i.kind, i.text as item_text from events e "
+                                     "left join items i on e.item=i.id where e.at between ? and ?" + who[0].replace("agent", "e.agent") +
+                                     " order by e.at desc, e.id desc limit 500", (*win, *who[1])):
+                if r["dir"] == "in":
+                    kind = r["kind"] or ""
+                    if kind in ("task", "verify"):
+                        continue                                  # shown as task steps instead
+                    typ = "sent" if kind in ("request", "question") else "notice"
+                    feed.append({"type": typ, "agent": r["agent"], "from": r["frm"] or "hub", "kind": kind,
+                                 "text": r["item_text"] or r["text"], "at": r["at"]})
+                elif r["dir"] == "out":
+                    if re.match(r"task #\d+ (note|done|verify):", r["text"] or ""):
+                        continue                                  # the task step says it better
+                    feed.append({"type": "reply", "agent": r["agent"], "text": r["text"], "at": r["at"]})
+                elif r["dir"] == "err" and (r["text"] or "") != "recovered":
+                    ok = self.db.execute("select 1 from events where agent=? and dir='err' and text='recovered' and at>=? limit 1",
+                                         (r["agent"], r["at"])).fetchone()
+                    feed.append({"type": "error", "agent": r["agent"], "text": re.sub(r"^#\d+ ", "", r["text"] or ""), "at": r["at"],
+                                 "recovered": bool(ok)})
+            for r in self.db.execute("select * from items where status='queued' and kind in ('request','question') "
+                                     "and created between ? and ?" + who[0].replace("agent", "too"), (*win, *who[1])):
+                feed.append({"type": "sent", "agent": r["too"], "from": r["frm"], "kind": r["kind"], "text": r["text"],
+                             "at": r["created"], "queued": True})
+            for w in self.db.execute("select * from work where at between ? and ?" + who[0] + " order by at desc limit 500", (*win, *who[1])):
+                feed.append({"type": "work", "agent": w["agent"], "text": w["title"], "detail": w["detail"],
+                             "status": w["status"], "kind": w["kind"], "at": w["at"]})
+            for e in self.db.execute("select e.*, t.title from task_events e left join tasks t on e.task=t.id "
+                                     "where e.at between ? and ?" + who[0].replace("agent", "e.agent") + " order by e.at desc, e.id desc limit 300", (*win, *who[1])):
+                feed.append({"type": "task", "agent": e["agent"], "what": e["what"], "task": e["task"], "title": e["title"],
+                             "text": e["text"] or "", "product": self._task_product(e["task"]), "at": e["at"]})
+            for c in self.db.execute("select * from changes where at between ? and ?" + who[0].replace("agent", "by") +
+                                     " order by at desc limit 200", (*win, *who[1])):
+                feed.append({"type": "change", "agent": c["by"], "text": c["line"], "result": c["result"], "at": c["at"]})
+            feed.sort(key=lambda e: -e["at"])
+            types = ("sent", "reply", "work", "task", "notice", "change", "error")
+            counts = {t: sum(1 for e in feed if e["type"] == t and not e.get("recovered")) for t in types}
+            step = (until - since) / 24 or 1
+            buckets = [dict({t: 0 for t in types}, start=since + i * step) for i in range(24)]
+            for e in feed:
+                if not e.get("recovered"):             # a blip the retry fixed isn't a red bar
+                    buckets[min(23, max(0, int((e["at"] - since) // step)))][e["type"]] += 1
+            done_ids = [e["task"] for e in feed if e["type"] == "task" and e["what"] == "verified"]
+            tasks = {"finished": [self.task(i) for i in dict.fromkeys(done_ids)],
+                     "in_progress": [self.task(r["id"]) for r in self.db.execute(
+                         "select id from tasks where status in ('working','verifying') order by touched desc")],
+                     "waiting": self.db.execute("select count(*) from tasks where status in ('open','ready','blocked')").fetchone()[0]}
+            agents, live = {}, []
+            for a in self.db.execute("select * from agents where kind in ('muse','poll','slack') order by name"):
+                mine = [e for e in feed if e["agent"] == a["name"]]
+                agents[a["name"]] = {"sent": sum(e["type"] in ("sent", "notice") for e in mine),
+                                     "reply": sum(e["type"] == "reply" for e in mine),
+                                     "work": sum(e["type"] == "work" for e in mine),
+                                     "tasks": sum(e["type"] == "task" for e in mine),
+                                     "error": sum(e["type"] == "error" for e in mine),
+                                     "failing": self._failing(a),
+                                     "last_said": a["last_out"], "state": a["state"],
+                                     "product": a["current_product"], "role": a["current_role"]}
+                held = self._open_tasks(a["name"])
+                last = self.db.execute("select * from work where agent=? order by at desc limit 1", (a["name"],)).fetchone()
+                if held or (last and now - last["at"] < 600):
+                    live.append({"agent": a["name"], "task": ({"id": held[0]["id"], "title": held[0]["title"]} if held else None),
+                                 "doing": last["title"] if last else None, "since": (held[0]["touched"] if held else last["at"])})
+            return {"now": now, "since": since, "until": until, "feed": feed[:400], "counts": counts, "buckets": buckets,
+                    "tasks": tasks, "agents": agents, "live": live,
+                    "per_hour": [sum(b[t] for t in ("sent", "reply")) for b in buckets]}
 
     def needs_jack(self):
         with self.lock:
@@ -1134,6 +1393,16 @@ class Hub:
     # ---- telemetry (machine heartbeat from each agent's telemetryd) ---------------------
     def ingest(self, name, blob):
         with self.lock:
+            for e in ((blob.get("activity") or {}).get("entries") or [])[:50]:
+                try:
+                    at = calendar.timegm(time.strptime(str(e.get("timestamp"))[:19], "%Y-%m-%dT%H:%M:%S"))
+                except (ValueError, TypeError):
+                    continue
+                key = e.get("message_id") or f"{e.get('timestamp')}|{e.get('title')}"
+                self.db.execute("insert into work(agent, key, at, kind, title, status, detail) values(?,?,?,?,?,?,?) "
+                                "on conflict(agent, key) do update set status=excluded.status, title=excluded.title, detail=excluded.detail",
+                                (name, key, at, e.get("activity_type"), e.get("title") or e.get("status_title") or "",
+                                 e.get("status"), e.get("subtitle") or e.get("status_title") or ""))
             self.db.execute("insert into telemetry(agent, blob, at) values(?,?,?) "
                             "on conflict(agent) do update set blob=excluded.blob, at=excluded.at",
                             (name, json.dumps(blob), self.clock()))
@@ -1167,8 +1436,10 @@ class Hub:
                 out.append({"name": a["name"], "kind": a["kind"], "state": a["state"], "queue": queue,
                             "current": {"id": cur["id"], "text": cur["text"][:200], "sent_at": cur["sent_at"]} if cur else None,
                             "last_in": a["last_in"], "last_out": a["last_out"], "login_expires": a["login_expires"],
-                            "product": a["current_product"], "role": a["current_role"], "onboarded": a["onboarded"],
+                            "product": a["current_product"], "role": a["current_role"], "onboarded": a["onboarded"], "team": a["team"] or "generalist",
                             "focus": self._focus(a["name"]), "free_since": a["free_since"],
+                            "last_work": (lambda w: {"title": w["title"], "at": w["at"]} if w else None)(self.db.execute(
+                                "select title, at from work where agent=? order by at desc limit 1", (a["name"],)).fetchone()),
                             "task": next(({"id": t["id"], "title": t["title"], "status": t["status"],
                                            "product": self._task_product(t["id"])} for t in self._open_tasks(a["name"])), None)})
             return {"now": self.clock(), "agents": out, "needs_jack": self.needs_jack(), "changes": self.changes(30),
@@ -1178,9 +1449,10 @@ class Hub:
         with self.lock:
             return {"ceo": self._chair(),
                     "board": sorted({"jack"} | {r["name"] for r in self.db.execute("select name from agents where kind='jack'")}),
-                    "pms": {p["name"]: p["pm"] for p in self.db.execute("select name, pm from products order by id")},
+                    "pms": {p["name"]: p["pm"] for p in self.db.execute("select name, pm from products where status != 'removed' order by id")},
                     "roles": self.roles(),
-                    "agents": [{"name": a["name"], "kind": a["kind"], "product": a["current_product"], "role": a["current_role"]}
+                    "agents": [{"name": a["name"], "kind": a["kind"], "team": a["team"] or "generalist",
+                                "product": a["current_product"], "role": a["current_role"]}
                                for a in self.db.execute("select * from agents where kind!='jack' and state!='parked' order by name")]}
 
     def portfolio(self):
@@ -1231,7 +1503,11 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                 try:
                     user, pw = base64.b64decode(auth[6:]).decode().split(":", 1)
                     # Jack's password (any user name, as before), or a board member's own login from hub.json "logins"
-                    if hmac.compare_digest(pw, password) or (user in (logins or {}) and hmac.compare_digest(pw, logins[user])):
+                    if user in (logins or {}) and hmac.compare_digest(pw, logins[user]):
+                        self.who = user                    # a board member's own login: messages are from them
+                        return True
+                    if hmac.compare_digest(pw, password):
+                        self.who = "jack"
                         return True
                 except Exception:
                     pass
@@ -1280,7 +1556,7 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                 elif u.path == "/api/board":
                     if self._jack():
                         import etsy
-                        self._json(200, dict(hub.board(), etsy=etsy.shops(hub)))
+                        self._json(200, dict(hub.board(), etsy=etsy.shops(hub), you=self.who))
                 elif u.path in ("/etsy/connect", "/etsy/callback"):   # linking an Etsy shop (board login only)
                     if self._jack():
                         import etsy
@@ -1331,6 +1607,11 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                     self._jack() and self._json(200, {"reads": hub.secret_reads(), "secrets": hub.secret_names()})
                 elif u.path == "/api/council":
                     self._jack() and self._json(200, hub.council(int(q.get("id", 0))) or {})
+                elif u.path == "/api/activity":
+                    if self._jack():
+                        until = float(q["until"]) if q.get("until") else None
+                        since = float(q["since"]) if q.get("since") else (until or hub.clock()) - float(q.get("hours", 1)) * 3600
+                        self._json(200, hub.activity(since, until, q.get("agent") or None))
                 elif u.path == "/api/org":
                     self._jack() and self._json(200, hub.org())
                 elif u.path == "/api/suggestions":
@@ -1429,7 +1710,10 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         if not a or a["state"] == "parked":
                             self._json(400, {"error": "unknown or parked agent"})
                         else:
-                            self._json(200, {"id": hub.ask("jack", b["to"], b["text"])})
+                            # whoever is logged in sends it; Claude's scripted checks are labelled as Claude's
+                            iid = hub.ask("claude" if b.get("as") == "claude" else self.who, b["to"], b["text"])
+                            hub.deliver_now(b["to"])
+                            self._json(200, {"id": iid})
                 elif u.path == "/api/jack/secret":
                     if self._jack():
                         b = self._body()
@@ -1466,6 +1750,11 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         b = self._body()
                         hub.set_role(b["name"].strip(), b["soul"])
                         self._json(200, {"ok": True})
+                elif u.path == "/api/jack/team":            # board puts an agent on a team; logged like any change
+                    if self._jack():
+                        import shlex
+                        b = self._body()
+                        self._json(200, {"result": hub.manage(self.who, shlex.join(["team", b["agent"], b["team"]]))})
                 elif u.path == "/api/jack/place":           # put an agent on a product in a role (no file moves)
                     if self._jack():
                         b = self._body()
