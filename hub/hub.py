@@ -41,6 +41,8 @@ def _evidence_ok(link):
         req = urllib.request.Request(link, method="HEAD", headers={"User-Agent": "fleet-hub"})
         with urllib.request.urlopen(req, timeout=15) as r:
             return r.status < 400
+    except urllib.error.HTTPError as e:
+        return e.code in (401, 403, 405, 429)    # the page is there but walls off bots (Etsy answers 403); 404 still fails
     except Exception:
         return False
 
@@ -448,6 +450,14 @@ class Hub:
                           sent_at=self.clock(), tries=1)
                 self._log(it["id"], agent, "in", self._format(it))
             return {"id": it["id"], "kind": it["kind"], "from": it["frm"], "text": it["text"]}
+
+    def status(self, name):
+        a = self._agent(name)
+        tasks = [self.task(t["id"]) for t in self._open_tasks(name)]
+        return {"agent": name, "product": a["current_product"], "role": a["current_role"], "can": self.powers(name),
+                "tasks": [{k: t[k] for k in ("id", "title", "status", "product", "role")} for t in tasks],
+                "queue": [{k: i[k] for k in ("id", "frm", "text", "status")}
+                          for i in self.items_for(name) if i["status"] in ("queued", "sent")]}
 
     def reply(self, agent, item_id, text):
         with self.lock:
@@ -1527,6 +1537,25 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                 hub.note_onboarded(name)       # a token call proves fleet is installed and reaching the hub
             return name
 
+        def _base(self):
+            host = self.headers.get("Host", "")
+            return ("http://" if host.startswith(("127.0.0.1", "localhost")) else "https://") + host
+
+        def _html(self, code, text):
+            body = text.encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _form(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(n).decode() if n else ""
+            if "json" in self.headers.get("Content-Type", ""):
+                return json.loads(raw or "{}")
+            return {k: v[0] for k, v in parse_qs(raw).items()}
+
         def _body(self):
             n = int(self.headers.get("Content-Length") or 0)
             return json.loads(self.rfile.read(n) or b"{}") if n else {}
@@ -1553,6 +1582,24 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         self.send_header("Content-Length", str(len(body)))
                         self.end_headers()
                         self.wfile.write(body)
+                elif u.path.startswith("/.well-known/oauth-protected-resource"):   # the ChatGPT connector (mcp.py)
+                    import mcp
+                    self._json(200, mcp.resource_meta(self._base()))
+                elif u.path in ("/.well-known/oauth-authorization-server", "/.well-known/openid-configuration"):
+                    import mcp
+                    self._json(200, mcp.server_meta(self._base()))
+                elif u.path == "/oauth/authorize":
+                    if self._jack():
+                        import mcp
+                        try:
+                            self._html(200, mcp.authorize_page(hub, q, self.who))
+                        except ValueError as e:
+                            self._page(400, f"Can't connect: {e}")
+                elif u.path == "/mcp":
+                    self.send_response(405)
+                    self.send_header("Allow", "POST")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
                 elif u.path == "/api/board":
                     if self._jack():
                         import etsy
@@ -1586,13 +1633,7 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                     name and self._json(200, {"item": hub.inbox(name)})
                 elif u.path == "/api/status":
                     name = self._agent()
-                    if name:
-                        a = hub._agent(name)
-                        tasks = [hub.task(t["id"]) for t in hub._open_tasks(name)]
-                        self._json(200, {"agent": name, "product": a["current_product"], "role": a["current_role"], "can": hub.powers(name),
-                            "tasks": [{k: t[k] for k in ("id", "title", "status", "product", "role")} for t in tasks],
-                            "queue": [{k: i[k] for k in ("id", "frm", "text", "status")}
-                                      for i in hub.items_for(name) if i["status"] in ("queued", "sent")]})
+                    name and self._json(200, hub.status(name))
                 elif u.path == "/api/secret":
                     name = self._agent()
                     if name:
@@ -1626,7 +1667,52 @@ def serve(hub, host, port, password, join_code=None, logins=None):
         def do_POST(self):
             u = urlparse(self.path)
             try:
-                if u.path == "/api/ask":
+                if u.path == "/mcp":
+                    import mcp
+                    tok = self.headers.get("Authorization", "")
+                    name = hub.agent_by_token(tok[7:]) if tok.startswith("Bearer ") else None
+                    if not name:
+                        meta = self._base() + "/.well-known/oauth-protected-resource"
+                        body = b'{"error": "invalid_token"}'
+                        self.send_response(401)
+                        self.send_header("WWW-Authenticate", f'Bearer resource_metadata="{meta}"')
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                    else:
+                        hub.note_onboarded(name)
+                        out = mcp.rpc(hub, name, self._body())
+                        if out is None:
+                            self.send_response(202)
+                            self.send_header("Content-Length", "0")
+                            self.end_headers()
+                        else:
+                            self._json(200, out)
+                elif u.path == "/oauth/register":
+                    import mcp
+                    try:
+                        self._json(201, mcp.register(self._body()))
+                    except ValueError as e:
+                        self._json(400, {"error": "invalid_redirect_uri", "error_description": str(e)})
+                elif u.path == "/oauth/authorize":
+                    if self._jack():
+                        import mcp
+                        try:
+                            to = mcp.approve(hub, self._form(), self.who)
+                            self.send_response(302)
+                            self.send_header("Location", to)
+                            self.send_header("Content-Length", "0")
+                            self.end_headers()
+                        except ValueError as e:
+                            self._page(400, f"Can't connect: {e}")
+                elif u.path == "/oauth/token":
+                    import mcp
+                    try:
+                        self._json(200, mcp.token(hub, self._form()))
+                    except ValueError as e:
+                        self._json(400, {"error": str(e) if str(e) in ("invalid_grant", "unsupported_grant_type") else "invalid_request"})
+                elif u.path == "/api/ask":
                     name = self._agent()
                     if name:
                         b = self._body()
