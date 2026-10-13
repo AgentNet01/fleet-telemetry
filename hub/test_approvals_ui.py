@@ -15,7 +15,7 @@ h.add_agent("brutus", "muse")
 h.clock.t = time.time()
 h.transport.pending["brutus"] = [{"id": "connector-1", "label": "Upload a file and create a public link",
     "detail": "File: pet-portrait-style-sheet-v2.png", "options": ["allow_once", "deny"], "expires": time.time() + 3000}]
-h.observe()
+h.scan_approvals()
 port = free_port(); srv = hub.serve(h, "127.0.0.1", port, PASSWORD)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 with sync_playwright() as p:

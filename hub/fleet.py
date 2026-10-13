@@ -22,9 +22,9 @@
     fleet portfolio                  every product, project, open task, and who is where
     fleet changes                    the latest changes and who made them
     fleet product add "<name>" "<brief>" ["<goal>"]
-    fleet product set "<product>" brief|metric|status "<value>"
+    fleet product set "<product>" brief|metric "<value>"   (status: Jack/Darragh only)
     fleet product rename "<product>" "<new name>"
-    fleet product remove "<product>"    cancels its open tasks, frees its agents (undo: status active)
+    fleet product remove "<product>"    (Jack/Darragh only) cancels its open tasks, frees its agents (undo: status active)
     fleet project add|remove "<product>" "<project>"
     fleet project rename "<product>" "<project>" "<new name>"
     fleet task add <project id> "<title>" <role> "<done when>" [<blocker task ids,>]

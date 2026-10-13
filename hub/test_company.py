@@ -366,15 +366,15 @@ def loose():
     m("seat ceo Cy"); assert h._chair() == "Cy"
     m = lambda line, by="Cy": h.manage(by, line)
 
-    m('product remove "Planner Shop"')
+    m('product remove "Planner Shop"', by="jack")
     assert "Planner Shop" not in m("portfolio"), "a removed product is gone from the portfolio"
     assert h._agent("Ada")["current_product"] is None, "its agents are freed"
     assert h.task(t2)["status"] == "cancelled", "its open work is cancelled"
-    m('product set "Planner Shop" status active')
+    m('product set "Planner Shop" status active', by="darragh")
     assert "Planner Shop" in m("portfolio"), "and it can be brought back"
 
     log = h.changes()
-    assert log[0]["by"] == "Cy" and "status active" in log[0]["line"], log[:2]
+    assert log[0]["by"] == "darragh" and "status active" in log[0]["line"], log[:2]
     assert any("product remove" in c["line"] for c in log)
     assert h.board()["changes"][0]["line"] == log[0]["line"], "the dashboard shows the change log"
     for line in ("seat ceo nobody", "fly away"):
@@ -503,7 +503,7 @@ def dry():
     # Jack, Oct 13: work in progress isn't enough while agents sit free — once the queue is empty, plan more
     assert len(told("dot")) == 2, "its work all taken and agents still free: Shop is planned again"
     assert len(told("Pam")) == 2, "Stickers is still dry after 12 h, so Pam hears again"
-    h.manage("dot", 'product set "Stickers" status paused')
+    h.manage("jack", 'product set "Stickers" status paused')
     clock.go(13 * 3600); h.tick(); clock.go(61); h.tick()
     assert len(told("Pam")) == 2, "a paused product isn't nagged"
     print("dry OK")

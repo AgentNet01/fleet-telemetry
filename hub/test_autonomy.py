@@ -278,7 +278,7 @@ def approvals():
     soon = clock() + 3000
     muse.pending["brutus"] = [{"id": "connector-1", "label": "Upload a file and create a public link",
                                "detail": "File: pet-portrait-style-sheet-v2.png", "options": ["allow_once", "deny"], "expires": soon}]
-    h.observe()
+    h.scan_approvals()
     got = h.board()["approvals"]
     assert [(a["agent"], a["id"], a["label"]) for a in got] == [("brutus", "connector-1", "Upload a file and create a public link")], \
         f"approvals: the board lists brutus's pending approval: {got}"
@@ -292,11 +292,69 @@ def approvals():
     assert h.board()["approvals"] == [], "decided → gone"
     assert any("allow_once" in c["result"] or "allowed" in c["result"] for c in h.changes(5)), "logged"
     muse.pending["Ada"] = [{"id": "x", "label": "Open a site", "detail": "", "options": ["allow_once", "deny"], "expires": clock() + 60}]
-    h.observe(); clock.go(61)
+    h.scan_approvals(); clock.go(61)
     assert h.board()["approvals"] == [], "an expired request isn't shown"
     print("approvals OK")
 
 
+def paused():
+    """Jack, Oct 13: a paused product is kept, but nobody takes its tasks and no new ones can be added."""
+    h, muse, clock = new_hub("Ada", "Bo")
+    old = h.add_product("Templates", brief="budget templates")
+    prj = h.add_project(old, "launch")
+    waiting = h.add_task(prj, "extra polish", "engineer", "polished")
+    h.manage("jack", 'product set "Templates" status paused')
+    h.tick(); h.tick()
+    assert h.task(waiting)["owner"] is None and h.task(waiting)["status"] != "working", f"paused: nobody takes its task: {h.task(waiting)}"
+    assert not any("extra polish" in s for n in ("Ada", "Bo") for s in muse.sent.get(n, [])), "paused: no switch or task item for it"
+    try:
+        h.manage("jack", f'task add {prj} "more" engineer "x"')
+        raise AssertionError("paused: no new tasks can be added")
+    except (ValueError, PermissionError):
+        pass
+    h.manage("jack", 'product set "Templates" status active')
+    h.tick(); h.tick()
+    assert h.task(waiting)["status"] == "working", "active again: work flows"
+    print("paused OK")
+
+
+def planner_silent():
+    """Oct 13 live: Boboe 1 was made planner for Kids' storybooks, added nothing, and 10+ agents sat idle for
+    hours because the next round only came 12 h after the PM was asked. A silent planner gets PLAN_WAIT too."""
+    h, muse, clock = new_hub("Pm", "W1", "W2", "W3")
+    h.add_project(h.add_product("Shop", brief="planners", pm="Pm"), "launch")
+    h.tick(); clock.go(PLAN_WAIT + 1); h.tick()
+    asked = lambda: sum("no work lined up" in s for s in muse.sent.get("Pm", []))
+    first = asked()
+    clock.go(PLAN_WAIT + 1); h.tick(); h.tick()
+    assert asked() > first, f"plan: a silent planner's round ends after PLAN_WAIT and the PM is asked again: {muse.sent.get('Pm')}"
+    print("planner_silent OK")
+
+
+def pause_board_only():
+    """Jack, Oct 13: only Jack or Darragh pause, resume or remove a product — Pericles paused 2 of 3 and the fleet idled."""
+    h, muse, clock = new_hub("Pericles", "Ada")
+    h.add_agent("dot", "slack")
+    h.seat("ceo", "dot")
+    h.add_product("Pets", brief="portraits", pm="Pericles")
+    h.add_product("Books", brief="storybooks")
+    status = lambda n: h.db.execute("select status from products where name=?", (n,)).fetchone()["status"]
+    for who in ("Pericles", "dot"):
+        for line in ('product set "Pets" status paused', 'product remove "Books"'):
+            try:
+                h.manage(who, line)
+                raise AssertionError(f"pause: {who} ran {line}")
+            except PermissionError:
+                pass
+    assert status("Pets") == status("Books") == "active", "pause: nothing changed"
+    assert not h.db.execute("select 1 from suggestions where line like '%status%' or line like '%remove%'").fetchone(), \
+        "pause: not queued for review either"
+    assert "review" in h.manage("Pericles", 'product set "Pets" brief "new brief"').lower(), "pause: other edits still go to review"
+    h.manage("jack", 'product set "Pets" status paused')
+    assert status("Pets") == "paused", "pause: Jack can"
+    print("pause_board_only OK")
+
+
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "slack200": slack200, "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals}[sys.argv[1]]()
+     "slack200": slack200, "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only}[sys.argv[1]]()
