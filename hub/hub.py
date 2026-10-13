@@ -124,9 +124,11 @@ MIGRATIONS = [
     "alter table tasks add column verifier text",
     "alter table agents add column free_since real",
     "alter table agents add column team text",            # standing role (or 'generalist'); product comes per task
-    "alter table tasks add column pin text",
+    "alter table tasks add column pin text",              # the one agent this task may go to, whatever its team
     "alter table switches add column from_product text",
-    "alter table nudges add column streak integer default 0",   # reminders since the holder's last progress              # the one agent this task may go to, whatever its team
+    "alter table nudges add column streak integer default 0",   # reminders since the holder's last progress
+    "alter table agents add column last_act real",        # the agent itself last did something: chat, reply or any fleet command
+    "alter table items add column closed real",           # when it was answered or failed
 ]
 WORKERS = ("muse", "poll")            # kinds that take tasks; 'slack' (dot) and 'jack' (the board) don't
 PUSH = ("muse", "slack")              # kinds the hub sends to; 'poll' agents fetch with `fleet inbox`
@@ -198,6 +200,15 @@ class Hub:
         with self.lock:
             self.db.execute("update agents set onboarded=? where name=? and onboarded is null", (self.clock(), name))
 
+    def acted(self, name):
+        with self.lock:
+            self._acted(name)
+
+    def _acted(self, name):
+        # "unresponsive" means the agent isn't acting at all; anything it does itself disproves that
+        self.db.execute("update agents set last_act=?, state=case when state='unresponsive' then 'active' else state end "
+                        "where name=?", (self.clock(), name))
+
     def _agent(self, name):
         return self.db.execute("select * from agents where name=?", (name,)).fetchone()
 
@@ -225,10 +236,15 @@ class Hub:
                 self._needs_jack(f"#{iid}: {frm} → {to} is {depth} requests deep, so it was held, not sent: {text[:200]}")
             return iid
 
-    def _note(self, to, headline, text):
+    def _note(self, to, headline, text, ref=None):
         if self._agent(to) and self._agent(to)["kind"] != "jack":
-            self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('note','hub',?,?,0,'queued',?)",
-                            (to, f"{headline}\n{text}", self.clock()))
+            self.db.execute("insert into items(kind, frm, too, text, depth, status, created, ref) values('note','hub',?,?,0,'queued',?,?)",
+                            (to, f"{headline}\n{text}", self.clock(), ref))
+
+    def _sub_answer(self, agent, it):
+        """The answer to a question the agent asked while working on `it`: it needs that to finish `it`, so it can't wait behind it."""
+        return self.db.execute("select n.* from items n join items c on n.ref=c.id where n.too=? and n.kind='note' "
+                               "and n.status='queued' and c.parent=? order by n.id limit 1", (agent, it["id"])).fetchone()
 
     def _needs_jack(self, text):
         self.db.execute("insert into needs_jack(text, at) values(?,?)", (text, self.clock()))
@@ -252,6 +268,11 @@ class Hub:
             return body
         if kind == "note":
             first, _, rest = body.partition("\n")
+            asked = it["ref"] and self.db.execute("select parent from items where id=?", (it["ref"],)).fetchone()
+            if asked and asked["parent"] and self.item(asked["parent"])["status"] == "sent":
+                # this text lands while that request is still open, so any reply goes to its sender: say so
+                return (f"{head}[fleet #{iid} · {first}]\n{rest}\n— This is for your open #{asked['parent']}. "
+                        f"Don't acknowledge it; reply when #{asked['parent']} is done, with the result.")
             return f"{head}[fleet #{iid} · {first}]\n{rest}\n— No reply needed."
         if kind == "task":
             t = it["ref"]
@@ -276,6 +297,8 @@ class Hub:
         self.db.execute("insert into events(item, agent, dir, text, at) values(?,?,?,?,?)",
                         (item, agent, direction, text, self.clock()))
         self._set("agents", agent, **{"last_in" if direction == "in" else "last_out": self.clock()})
+        if direction == "out":
+            self._acted(agent)
 
     def _send(self, it, resent=False):
         text = self._format(it, resent)
@@ -287,11 +310,11 @@ class Hub:
                 self._set("items", it["id"], status="answered")  # no reply expected; don't hold the slot
 
     def _answered(self, it, reply):
-        self._set("items", it["id"], status="answered", reply=reply)
+        self._set("items", it["id"], status="answered", reply=reply, closed=self.clock())
         self._set("agents", it["too"], state="active")
         kind = it["kind"]
         if kind == "request" and it["frm"] != "hub":
-            self._note(it["frm"], f"reply from {it['too']} to your #{it['id']}", reply)
+            self._note(it["frm"], f"reply from {it['too']} to your #{it['id']}", reply, ref=it["id"])
         elif kind == "question":
             self._add_view(it["council"], it["too"], reply)
         elif kind == "chair":
@@ -414,21 +437,31 @@ class Hub:
         with self.lock:
             it = self._inflight(name)
             nextitem = None
-            # never resend the same text: an unanswered request/question just fails after 20 min
-            if it and not it["last_reply"] and now - it["sent_at"] >= 2 * RESEND:
-                self._fail_item(it, name)
-                it = None
-            if not it and kind in PUSH:
-                nextitem = self._next(name)
+            # never resend the same text: an unanswered request/question fails after 20 min with no sign of
+            # life — counted from the agent's last action or the last answer to a question it asked about it,
+            # and never while such a question is still open (that agent is working, waiting on someone else)
+            if it and not it["last_reply"]:
+                # only a question actually with a serviced agent counts: one queued, or sent to a parked agent or the
+                # board, may never move, and its own 20-min clock is what keeps this one bounded
+                asking = self.db.execute("select 1 from items c join agents a on a.name=c.too where c.parent=? and c.status='sent' "
+                                         "and a.kind in ('muse','poll','slack') and a.state!='parked'", (it["id"],)).fetchone()
+                answered = self.db.execute("select max(closed) from items where parent=?", (it["id"],)).fetchone()[0]
+                alive = max(it["sent_at"], self._agent(name)["last_act"] or 0, answered or 0)
+                if not asking and now - alive >= 2 * RESEND:
+                    self._fail_item(it, name)
+                    it = None
+            if kind in PUSH:
+                nextitem = self._sub_answer(name, it) if it else self._next(name)
         if nextitem is not None:
             self._send(nextitem)
 
     def _fail_item(self, it, name):
-        self._set("items", it["id"], status="failed")
-        self._set("agents", name, state="unresponsive")
+        self._set("items", it["id"], status="failed", closed=self.clock())
+        if (self._agent(name)["last_act"] or 0) < it["sent_at"]:     # did nothing at all since it arrived
+            self._set("agents", name, state="unresponsive")
         kind = it["kind"]
         if kind == "request" and it["frm"] != "hub":
-            self._note(it["frm"], f"{name} didn't reply to your #{it['id']}", it["text"])
+            self._note(it["frm"], f"{name} didn't reply to your #{it['id']}", it["text"], ref=it["id"])
         elif kind == "task" and it["ref"]:
             self._set("tasks", it["ref"], owner=None, status="ready",
                       progress_note=f"{name} went unresponsive; released", touched=self.clock())
@@ -442,6 +475,11 @@ class Hub:
     def inbox(self, agent):
         with self.lock:
             it = self._inflight(agent)
+            sub = self._sub_answer(agent, it) if it else None
+            if sub:
+                self._set("items", sub["id"], status="answered", sent_at=self.clock(), tries=1)
+                self._log(sub["id"], agent, "in", self._format(sub))
+                it = sub
             if not it:
                 it = self._next(agent)
                 if not it:
@@ -1081,14 +1119,15 @@ class Hub:
             chair = chair or self._chair()
             cid = self.db.execute("insert into councils(question, frm, chair, status, created, ckey) values(?,?,?,?,?,?)",
                                   (question, frm, chair, "open", self.clock(), key)).lastrowid
-            items = []
-            for name in self._responders():
-                iid = self.db.execute(
+            names = self._responders()
+            for name in names:
+                self.db.execute(
                     "insert into items(kind, frm, too, text, council, depth, status, created) values('question','hub',?,?,?,0,'queued',?)",
-                    (name, question, cid, self.clock())).lastrowid
-                items.append(iid)
-        for iid in items:                            # deliver just these items (I/O outside the lock), not a full tick
-            self._send(self.item(iid))
+                    (name, question, cid, self.clock()))
+        # through the normal gate (one item in flight, one sender per agent), not straight out: a question sent on
+        # top of an open item, or by two senders at once, was answered once and the leftover marked the agent unresponsive
+        for name in names:
+            self._guarded(name, lambda n=name: self._deliver_agent(n, self._agent(n)["kind"], self.clock()))
         return cid
 
     def _asked(self, cid):
@@ -1110,6 +1149,9 @@ class Hub:
             if waiting and self.clock() - c["created"] < COUNCIL_WINDOW:
                 continue                                       # still waiting, window open
             self._set("councils", c["id"], status="chairing")
+            # a question still waiting behind someone's open item is moot now; don't hand it over late
+            self.db.execute("update items set status='dropped', closed=? where council=? and kind='question' and status='queued'",
+                            (self.clock(), c["id"]))
             views = self.db.execute("select agent, view from council_views where council=?", (c["id"],)).fetchall()
             summary = "\n".join(f"- {v['agent']}: {v['view']}" for v in views)
             missing = sorted(asked - voted)
@@ -1572,6 +1614,9 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                 self._json(401, {"error": "401: bad or missing token"})
             else:
                 hub.note_onboarded(name)       # a token call proves fleet is installed and reaching the hub
+                # a POST is the agent itself doing something; telemetryd's heartbeat is only its VM being up
+                if self.command == "POST" and urlparse(self.path).path != "/api/ingest":
+                    hub.acted(name)
             return name
 
         def _base(self):

@@ -141,5 +141,33 @@ def timing():
     print("timing OK")
 
 
+def council_queue():
+    """2026-10-12 22:09: a fleet question went straight out on top of whatever each agent already had open, so an
+    agent held two at once (sometimes got one twice), answered one, and was called unresponsive for the other."""
+    h, muse, clock = new_hub()
+    first = h.ask("Boboe 7", "Boboe 3", "finish the cover")
+    h.tick()
+    cid = h.ask_all("Boboe 7", "how do we post to X?")
+    h.tick()
+    sent = muse.sent["Boboe 3"]
+    assert len(sent) == 1 and "finish the cover" in sent[0], f"the question waits its turn: {sent}"
+    answer(h, muse, clock, "Boboe 3", "cover done")
+    assert h.item(first)["status"] == "answered", h.item(first)
+    h.tick()
+    asked = [t for t in muse.sent["Boboe 3"] if "how do we post to X?" in t]
+    assert len(asked) == 1, f"delivered exactly once: {muse.sent['Boboe 3']}"
+    answer(h, muse, clock, "Boboe 3", "use the API")
+    q = h.db.execute("select * from items where council=? and too='Boboe 3'", (cid,)).fetchone()
+    assert q["status"] == "answered", dict(q)
+    assert h._agent("Boboe 3")["state"] == "active"
+    # an agent still busy when the council closes isn't handed the stale question afterwards
+    busy = h.ask("Boboe 7", "Boboe 3", "long job"); h.tick()
+    cid2 = h.ask_all("Boboe 7", "lunch?")
+    clock.go(hub.COUNCIL_WINDOW + 1); h.tick()
+    muse.say("Boboe 3", "long job done"); h.tick(); clock.go(61); h.tick(); h.tick()
+    assert not any("lunch?" in t for t in muse.sent["Boboe 3"]), "closed council: question dropped, not delivered late"
+    print("council_queue OK")
+
+
 if __name__ == "__main__":
-    {"timing": timing}.get(sys.argv[1] if len(sys.argv) > 1 else "", routing)()
+    {"timing": timing, "council_queue": council_queue}.get(sys.argv[1] if len(sys.argv) > 1 else "", routing)()

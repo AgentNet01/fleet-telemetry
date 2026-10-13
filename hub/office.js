@@ -740,7 +740,12 @@ function* withDrink(p) {
     || claimNear(p, ["sofa", "sofa2", "dine", "patioA", "patioB", "window", "rail", "counter"]);
   yield* go(p, seat || loiter(p));
   p.interruptible = true;
-  for (const end = T + rnd(40, 110); T < end;) { yield* act(p, "hold", 5, 11); yield* act(p, "sip", 2.2); if (Math.random() < .12) yield* act(p, "laugh", 1.2); }
+  for (const end = T + rnd(30, 75); T < end;) {
+    const b = buddyOf(p);
+    if (b) { if (!p.seated) p.dir = faceTo(p, b); if (Math.random() < .35) bubble(p); yield* act(p, Math.random() < .55 ? "talk" : "listen", 2.5, 4.5); if (Math.random() < .15) yield* act(p, "laugh", 1.2); }
+    else yield* act(p, "hold", 2.5, 5);
+    yield* act(p, "sip", 2.2);
+  }
   p.interruptible = false; release(p, seat);
   if (seat && seat.pose === "sit" && Math.random() < .3) {   // leaves the mug behind; someone's always doing that
     OBJ.leftovers.push({ x: seat.x + (seat.dir === "SE" ? .3 : seat.dir === "NW" ? -.3 : 0), y: seat.y + (seat.dir === "SW" ? .3 : seat.dir === "NE" ? -.3 : 0), col: p.look.mug, until: T + 150 });
@@ -748,6 +753,10 @@ function* withDrink(p) {
   }
   yield* dishes(p);
 }
+// someone idle close by to talk to while you drink
+function buddyOf(p, r = 2.6) { let best = null, bd = r;
+  for (const q of people.values()) { if (q === p || q.path.length || (q.mode !== "idle")) continue; const d = Math.hypot(q.x - p.x, q.y - p.y); if (d < bd) { bd = d; best = q; } } return best; }
+const faceTo = (p, q) => { const dx = q.x - p.x, dy = q.y - p.y; return Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? "SE" : "NW") : (dy > 0 ? "SW" : "NE"); };
 function* dishes(p) {
   const s = claim(p, "sink"); if (!s) { p.hold = {}; return; }
   yield* go(p, s); yield* act(p, "reach", 1.1); p.hold = {}; OBJ.sink.until = T + 2.4; yield* act(p, "idle", 2.4); release(p, s);
@@ -1042,6 +1051,21 @@ function update(b) {
   first = false;
 }
 
+// ── small idle motions layered on top of a still clip: look around, shift weight, check a watch, scratch, roll the neck
+const FIDGET = new Set(["idle", "hold", "wait", "gaze", "lean", "listen", "phone", "read", "smoke", "call"]);
+function fidget(p, tgt) {
+  const handsFree = !p.hold.L && !["phone", "read", "smoke", "call"].includes(p.clip);
+  if (!p.fid || T > p.fid.end + p.fid.gap) p.fid = { kind: pick(handsFree ? ["look", "look", "shift", "watch", "scratch", "neck", "shift"] : ["look", "look", "shift", "neck"]),
+    t0: T, end: T + rnd(1.2, 2.6), gap: rnd(1, 4), v: rnd(-1, 1) };
+  const f = p.fid, k = T < f.end ? Math.sin(Math.PI * clamp((T - f.t0) / (f.end - f.t0), 0, 1)) : 0;
+  if (!p.seated) tgt.bob = (tgt.bob || 0) + .35 * Math.sin(T * 1.9 + p.seed);
+  if (k <= 0) return;
+  if (f.kind === "look") { tgt.hy = lerp(tgt.hy || 0, f.v, k); tgt.ht = (tgt.ht || 0) + 4 * k * f.v; }
+  else if (f.kind === "shift" && !p.seated) { tgt.lL = [tgt.lL[0] + 7 * k, tgt.lL[1]]; tgt.lR = [tgt.lR[0] - 3 * k, tgt.lR[1] - 14 * k]; tgt.lean = (tgt.lean || 0) - 2 * k; }
+  else if (f.kind === "watch") { tgt.aL = [lerp(tgt.aL[0], 56, k), lerp(tgt.aL[1], 112, k)]; tgt.ht = (tgt.ht || 0) + 14 * k; }
+  else if (f.kind === "scratch") { tgt.aL = [lerp(tgt.aL[0], 152, k), lerp(tgt.aL[1], 138, k)]; tgt.ht = (tgt.ht || 0) - 4 * k; }
+  else if (f.kind === "neck") { tgt.ht = (tgt.ht || 0) - 14 * k; tgt.hy = (tgt.hy || 0) + .5 * k * f.v; }
+}
 // ── per-frame sim step
 function simStep(dt) {
   T += dt;
@@ -1074,6 +1098,7 @@ function simStep(dt) {
     const base = p.lying ? { ...STAND, lie: 1 } : p.seated ? SIT : STAND;
     const tgt = (CLIPS[p.clip] || CLIPS.idle)(p.clipT, p, base, p.hold);
     if (p.slot && p.slot.lean && !p.seated && p.clip === "hold") tgt.lean = -3;
+    if (!p.path.length && FIDGET.has(p.clip) && !p.lying) fidget(p, tgt);
     p.pose = lerpPose(p.pose, tgt, 1 - Math.exp(-dt * (p.clip === "walk" ? 18 : 9)));
     if (p.napping && Math.random() < dt * .7) part({ kind: "z", wx: 0, wy: 0, follow: p });
   }
@@ -1085,7 +1110,8 @@ function bubble(p, glyph) { if (!p) return; part({ kind: "bubble", follow: p, gl
 
 // ───────────────────────────── rendering ─────────────────────────────
 let cv, ctx, wrap, hudEl, tipEl, tickEl, DPR = 1, W = 1, H = 1, cam = { s: 1, tx: 0, ty: 0 }, cache = null, hits = [], hover = null, FDT = 0;
-const BB = { x0: wx(0, Y) - 20, x1: wx(X, 0) + 20, y0: wy(0, 0, 2.75) - 46, y1: wy(X, Y, -.55) };
+// frame the whole tower with city on both sides and a few floors below, so it reads as one building in a skyline
+const BB = { x0: wx(0, Y) - 150, x1: wx(X, 0) + 150, y0: wy(0, 0, 2.75) - 70, y1: wy(X, Y, -4.5) };
 function nightness(t = Date.now() / 1000) {
   const p = HOUR != null ? HOUR : (t % 3600) / 3600, f = .05, s = ease;
   return p < .5 - f ? 0 : p < .5 ? s((p - (.5 - f)) / f) : p < 1 - f ? 1 : 1 - s((p - (1 - f)) / f);
@@ -1099,7 +1125,7 @@ function layout() {
   if (!r.width || !r.height) return;
   W = Math.round(r.width * DPR); H = Math.round(r.height * DPR); cv.width = W; cv.height = H;
   const s = Math.min(W / (BB.x1 - BB.x0), H / (BB.y1 - BB.y0));
-  cam = { s, tx: W / 2 - s * (BB.x0 + BB.x1) / 2, ty: H / 2 - s * (BB.y0 + BB.y1) / 2 + (H - s * (BB.y1 - BB.y0)) * .18 };
+  cam = { s, tx: W / 2 - s * (BB.x0 + BB.x1) / 2, ty: H / 2 - s * (BB.y0 + BB.y1) / 2 };
   cache = null;
 }
 const toScreen = ([x, y]) => [cam.tx + x * cam.s, cam.ty + y * cam.s];
@@ -1122,12 +1148,18 @@ function buildCache() {
   const city = [0, 1].map(night => { const c = mk(W, H); drawCity(c.getContext("2d"), night); return c; });
   cache = { sprites, base, city };
 }
+const TOWER_ROWS = []; for (let z = -.5; z > -30; z -= 1.4) TOWER_ROWS.push(z);
+function towerWindows(f) {
+  for (const zt of TOWER_ROWS) {
+    for (let fx = .3; fx < X - .5; fx += .9) f([P(fx, Y, zt - .85), P(fx + .62, Y, zt - .85), P(fx + .62, Y, zt), P(fx, Y, zt)], hash(Math.round(fx * 10) * 31 + Math.round(zt * 10) * 7));
+    for (let fy = .3; fy < Y - .5; fy += .9) f([P(X, fy, zt - .85), P(X, fy + .62, zt - .85), P(X, fy + .62, zt), P(X, fy, zt)], hash(Math.round(fy * 10) * 17 + Math.round(zt * 10) * 13 + 5));
+  }
+}
 function drawBase(g) {
-  // the tower: our floor's slab and one storey of facade below it (a cutaway; the city shows beneath)
-  box(g, 0, 0, -1.35, X, Y, 1.05, C.facade, { hl: false });
-  for (let fx = .3; fx < X - .5; fx += .9) poly(g, [P(fx, Y, -1.22), P(fx + .62, Y, -1.22), P(fx + .62, Y, -.45), P(fx, Y, -.45)], C.facadeWin);
-  for (let fy = .3; fy < Y - .5; fy += .9) poly(g, [P(X, fy, -1.22), P(X, fy + .62, -1.22), P(X, fy + .62, -.45), P(X, fy, -.45)], shade(C.facadeWin, -.12));
-  line(g, [P(0, Y, -1.35), P(X, Y, -1.35), P(X, 0, -1.35)], "rgba(60,70,80,.35)", 1.5);
+  // the tower: our floor sits on a full building that runs down out of frame
+  box(g, 0, 0, -31, X, Y, 30.68, C.facade, { hl: false });
+  towerWindows((pts, h) => poly(g, pts, h % 3 ? C.facadeWin : shade(C.facadeWin, -.08)));
+  for (const zt of TOWER_ROWS) line(g, [P(0, Y, zt + .18), P(X, Y, zt + .18), P(X, 0, zt + .18)], "rgba(255,255,255,.55)", 1);
   box(g, -.05, -.05, -.32, X + .1, Y + .1, .32, C.slab);
   // floors, by room
   const zone = (x, y) => x >= 14 ? "deck" : y < 5.6 ? (x < 9.6 ? "carpet" : y < 4.6 ? "board" : "review") : x < 5.1 ? "tile" : x < 9.6 ? "plank" : "review";
@@ -1189,27 +1221,65 @@ function drawWalls(g) {
   const [cx, cy] = P(0, 10.68, 2.38), d = new Date(), hr = (d.getHours() % 12 + d.getMinutes() / 60) / 12 * Math.PI * 2, mn = d.getMinutes() / 60 * Math.PI * 2;
   line(g, [[cx, cy], [cx + Math.sin(hr) * 2.6, cy - Math.cos(hr) * 3.6]], "#222", 1.2); line(g, [[cx, cy], [cx + Math.sin(mn) * 3.8, cy - Math.cos(mn) * 5.4]], "#222", .8);
 }
-// ── the city, screen space, two moods; generated from a fixed seed so day and night line up
-const SKY = [];
-function drawCity(g, night) {
-  let seed = 7; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  const base = H * .98, hz = cam.ty + wy(X, 0, 0) * cam.s;          // horizon roughly at the right corner of our floor
-  SKY.length = 0;
-  for (const [layer, col, top, minW, maxW, lit] of [[0, night ? "#141a33" : "#c3d5e2", .34, 30, 80, .18], [1, night ? "#1b2342" : "#a9c0d1", .5, 40, 110, .26]]) {
-    for (let x = -20 * DPR; x < W + 20 * DPR;) {
-      const w = (minW + r() * (maxW - minW)) * DPR, h = (H * (top + r() * .28)) * (layer ? .9 : 1), y = Math.min(hz + 40 * DPR, base) - h;
-      g.fillStyle = col; g.fillRect(x, y, w - 3 * DPR, H - y);
-      g.fillStyle = night ? "rgba(255,255,255,.04)" : "rgba(255,255,255,.18)"; g.fillRect(x, y, (w - 3 * DPR) * .18, H - y);
-      for (let wy2 = y + 8 * DPR; wy2 < H; wy2 += 11 * DPR) for (let wx2 = x + 5 * DPR; wx2 < x + w - 10 * DPR; wx2 += 8 * DPR) {
-        if (night) { if (r() < lit) { g.fillStyle = r() < .8 ? "rgba(255,206,120,.75)" : "rgba(180,220,255,.7)"; g.fillRect(wx2, wy2, 3 * DPR, 4 * DPR); } }
-        else if (r() < .5) { g.fillStyle = "rgba(255,255,255,.22)"; g.fillRect(wx2, wy2, 3 * DPR, 4 * DPR); }
-      }
-      if (h > H * .55 && r() < .6) { g.fillStyle = col; g.fillRect(x + w / 2 - DPR, y - 18 * DPR, 2 * DPR, 18 * DPR); SKY.push([x + w / 2, y - 18 * DPR]); }
-      x += w;
-    }
+// ── the city: neighbouring towers built the same way as ours, so the whole view is one place
+const CITY = (() => {
+  let seed = 11; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647; const out = [];
+  for (let bx = -70; bx < 90; bx += 10) for (let by = -70; by < 80; by += 10) {
+    const w = 4.5 + r() * 4, d = 4.5 + r() * 4, x = bx + r() * (9.4 - w), y = by + r() * (9.4 - d), cx = x + w / 2, cy = y + d / 2;
+    const roll = [r(), r(), r()];
+    if (x < X + 5 && x + w > -5 && y < Y + 5 && y + d > -5) continue;                 // our own lot and its streets
+    if (cx + cy > X + Y - 6 && wx(cx, cy) > wx(0, Y) - 200 && wx(cx, cy) < wx(X, 0) + 200) continue;   // nothing in front of us
+    // we're on a top floor: most neighbours sit lower so we look down on their roofs; a few far ones stand tall
+    // in iso a farther tower climbs the screen, so cap each roof by distance: the skyline lands near our floor, sky above
+    const roof = (cx + cy) / 2 - 1 - roll[0] * 12 + (roll[0] > .9 ? 9 : 0);
+    out.push({ x, y, w, d, roof, key: cx + cy, tone: roll[1], kind: roll[2] });
   }
-  const haze = g.createLinearGradient(0, hz - H * .1, 0, H); haze.addColorStop(0, "rgba(0,0,0,0)"); haze.addColorStop(1, night ? "rgba(10,14,30,.55)" : "rgba(235,244,250,.6)");
-  g.fillStyle = haze; g.fillRect(0, 0, W, H);
+  return out.sort((a, b) => a.key - b.key);
+})();
+const ANTENNAS = [];
+function drawCity(g, night) {
+  worldT(g); ANTENNAS.length = 0;
+  const onScreen = b => { const pts = [P(b.x, b.y + b.d, b.roof), P(b.x + b.w, b.y, b.roof), P(b.x, b.y, b.roof + 2), P(b.x + b.w, b.y + b.d, b.roof - 30)].map(toScreen);
+    return Math.max(...pts.map(p => p[0])) > -50 && Math.min(...pts.map(p => p[0])) < W + 50 && Math.min(...pts.map(p => p[1])) < H + 50; };
+  for (const b of CITY) {
+    if (!onScreen(b)) continue;
+    const glass = b.tone > .82, fac = night ? (glass ? "#1f2738" : ["#2b3243", "#2f3545", "#292f3e"][Math.floor(b.tone * 3)]) : (glass ? "#a9c2d6" : ["#e7ebef", "#dfe4ea", "#ebe7e0", "#d9e0e8"][Math.floor(b.tone * 4)]);
+    const z0 = b.roof - 40;
+    box(g, b.x, b.y, z0, b.w, b.d, b.roof - z0, fac, { hl: !night, left: shade(fac, -.02), right: shade(fac, night ? -.1 : -.22), top: night ? "#363d4d" : "#c3c9d1" });
+    // parapet: a raised rim with the roof deck sunk inside it, like ours
+    poly(g, [P(b.x + .25, b.y + .25, b.roof), P(b.x + b.w - .25, b.y + .25, b.roof), P(b.x + b.w - .25, b.y + b.d - .25, b.roof), P(b.x + .25, b.y + b.d - .25, b.roof)], night ? "#2a303d" : "#a9b1ba");
+    line(g, [P(b.x, b.y + b.d, b.roof), P(b.x + b.w, b.y + b.d, b.roof), P(b.x + b.w, b.y, b.roof)], night ? "rgba(255,255,255,.12)" : "rgba(255,255,255,.8)", 1.2);
+    line(g, [P(b.x + b.w, b.y + b.d, b.roof), P(b.x + b.w, b.y + b.d, z0)], night ? "rgba(255,255,255,.08)" : "rgba(255,255,255,.55)", 1);
+    for (let zt = b.roof - .5; zt > b.roof - 26; zt -= 1.4) {
+      for (let u = b.x + .3; u < b.x + b.w - .5; u += .9) { const h = hash(Math.round(u * 10) * 31 + Math.round(zt * 10) * 7 + Math.round(b.y));
+        poly(g, [P(u, b.y + b.d, zt - .85), P(u + .62, b.y + b.d, zt - .85), P(u + .62, b.y + b.d, zt), P(u, b.y + b.d, zt)], night ? (h % 10 < 3 ? (h % 4 ? "#f2c879" : "#bcd9f2") : "#1a2030") : (glass ? "#cfe3f1" : C.facadeWin)); }
+      for (let v = b.y + .3; v < b.y + b.d - .5; v += .9) { const h = hash(Math.round(v * 10) * 17 + Math.round(zt * 10) * 13 + Math.round(b.x));
+        poly(g, [P(b.x + b.w, v, zt - .85), P(b.x + b.w, v + .62, zt - .85), P(b.x + b.w, v + .62, zt), P(b.x + b.w, v, zt)], night ? (h % 10 < 3 ? (h % 4 ? "#d9b06a" : "#a8c4dc") : "#161b29") : shade(glass ? "#cfe3f1" : C.facadeWin, -.12)); }
+    }
+    const cx = b.x + b.w / 2, cy = b.y + b.d / 2, top = b.roof;
+    if (b.kind < .28) {                                         // water tower
+      box(g, cx - .5, cy - .5, top, .1, .1, .6, night ? "#3a4150" : "#8d96a0", { hl: false }); box(g, cx + .4, cy + .4, top, .1, .1, .6, night ? "#3a4150" : "#8d96a0", { hl: false });
+      const [tx, ty] = P(cx, cy, top + 1.2); g.fillStyle = night ? "#4a3a30" : "#a0724a"; g.fillRect(tx - 12, ty, 24, 18); g.beginPath(); g.ellipse(tx, ty, 12, 5, 0, 0, 7); g.fill();
+      g.fillStyle = night ? "#3a2e26" : "#7d5636"; g.beginPath(); g.moveTo(tx - 13, ty); g.lineTo(tx, ty - 9); g.lineTo(tx + 13, ty); g.fill();
+    } else if (b.kind < .55) {                                  // rooftop plant
+      box(g, b.x + .4, b.y + .4, top, Math.min(1.6, b.w - .8), Math.min(1.2, b.d - .8), .5, night ? "#4b525e" : "#b8c0c8");
+      box(g, b.x + 2.3, b.y + .6, top, .7, .7, .35, night ? "#4b525e" : "#c8cfd6");
+    } else if (b.kind < .72) {                                  // antenna with a warning light
+      line(g, [P(cx, cy, top), P(cx, cy, top + 3.2)], night ? "#59606c" : "#7d8790", 1.6); ANTENNAS.push(toScreen(P(cx, cy, top + 3.2)));
+    } else if (b.kind < .84) {                                  // a roof terrace, like ours
+      poly(g, [P(b.x + .3, b.y + .3, top + .01), P(b.x + b.w - .3, b.y + .3, top + .01), P(b.x + b.w - .3, b.y + b.d - .3, top + .01), P(b.x + .3, b.y + b.d - .3, top + .01)], night ? "#3a3029" : "#c79a6c");
+      for (let k = 0; k < 3; k++) { const [ux, uy] = P(b.x + 1 + k * 1.6, b.y + b.d / 2, top + .9); g.fillStyle = night ? "#2a5f5a" : ["#2a9d8f", "#e9c46a", "#e76f51"][k]; g.beginPath(); g.ellipse(ux, uy, 9, 4, 0, 0, 7); g.fill(); }
+    }
+    // every roof gets a stair hatch and AC units so no roof reads as a flat slab
+    const roofc = night ? "#4b525e" : "#b2bac3";
+    box(g, b.x + b.w - 1.6, b.y + b.d - 1.5, top, 1, .9, .7, roofc, { hl: !night });
+    for (let k = 0; k < 2 + Math.floor(b.tone * 3); k++) box(g, b.x + .6 + k * .9, b.y + b.d - 1.1, top, .6, .6, .35, night ? "#565d69" : "#cdd3d9", { hl: false });
+    // distance haze: farther towers lean toward the sky colour
+    const hz = clamp((X + Y - b.key) / 140, 0, .45);
+    if (hz > .02) { const s = [P(b.x, b.y, b.roof), P(b.x + b.w, b.y, b.roof), P(b.x + b.w, b.y, z0), P(b.x + b.w, b.y + b.d, z0), P(b.x, b.y + b.d, z0), P(b.x, b.y + b.d, b.roof)];
+      g.globalAlpha = hz; poly(g, s, night ? "#0c1230" : "#d7ecf8"); g.globalAlpha = 1; }
+  }
+  g.setTransform(1, 0, 0, 1, 0, 0);
 }
 const plane = { t0: -99 }, clouds = [0, 1, 2, 3].map(i => ({ x: Math.random(), y: .06 + i * .07, s: .7 + Math.random() * .8, v: .004 + Math.random() * .004 }));
 function drawSky(g, n, now) {
@@ -1221,7 +1291,7 @@ function drawSky(g, n, now) {
     g.fillStyle = n > .5 ? "rgba(255,255,255,.0)" : "rgba(70,80,95,.7)"; g.fillRect(px - 9 * DPR, py, 18 * DPR, 2 * DPR); g.fillRect(px - 2 * DPR, py - 3 * DPR, 4 * DPR, 8 * DPR);
     if (Math.floor(now * 1.5) % 2) { g.fillStyle = "#ff4d4d"; g.beginPath(); g.arc(px + 9 * DPR * plane.dir, py, 1.6 * DPR, 0, 7); g.fill(); }
     g.fillStyle = "rgba(255,255,255,.9)"; if (Math.floor(now * 2.3) % 3 === 0) { g.beginPath(); g.arc(px - 9 * DPR * plane.dir, py, 1.3 * DPR, 0, 7); g.fill(); } }
-  if (n > .2) for (const [x, y] of SKY) if ((Math.floor(now * .8 + x) % 3) === 0) { g.fillStyle = `rgba(255,60,60,${n})`; g.beginPath(); g.arc(x, y, 2 * DPR, 0, 7); g.fill(); }
+  for (const [x, y] of ANTENNAS) if ((Math.floor(now * .8 + x) % 3) === 0) { g.fillStyle = `rgba(255,60,60,${.35 + .65 * n})`; g.beginPath(); g.arc(x, y, 2 * DPR, 0, 7); g.fill(); }
   if (n > 0) { g.globalAlpha = n; g.drawImage(cache.city[1], 0, 0); g.globalAlpha = 1; }
   g.drawImage(cache.city[0], 0, 0);
   for (const c of clouds) { const x = ((c.x + now * c.v * .1) % 1.3 - .15) * W, y = c.y * H; g.fillStyle = `rgba(255,255,255,${.75 * (1 - n)})`;
@@ -1238,9 +1308,14 @@ function drawSky(g, n, now) {
 // ── night: grade the whole building down, then add light back
 function drawNight(g, n) {
   if (n <= 0) return;
-  g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = "source-atop"; g.fillStyle = `rgba(10,14,34,${.72 * n})`; g.fillRect(0, 0, W, H);
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = "source-atop";
+  const sil = [P(-.22, -.22, 2.75), P(14, -.22, 2.75), P(14, -.22, 0), P(14, Y, 0), P(-.22, Y, 0), P(-.22, Y, 2.75)].map(toScreen);
+  const silPath = () => { g.beginPath(); sil.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.closePath(); };
+  g.save(); g.beginPath(); g.rect(0, 0, W, H); sil.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.closePath(); g.clip("evenodd");
+  g.fillStyle = `rgba(10,14,34,${.62 * n})`; g.fillRect(0, 0, W, H); g.restore();          // outside: night
+  g.save(); silPath(); g.clip(); g.fillStyle = `rgba(30,34,60,${.1 * n})`; g.fillRect(0, 0, W, H); g.restore();   // inside: lights on
   worldT(g); g.globalCompositeOperation = "source-atop";    // window glass goes dark: the night is outside
-  const dark = `rgba(6,10,28,${.5 * n})`, wY = (a, b) => poly(g, [P(a, 0, .6), P(b, 0, .6), P(b, 0, 2.35), P(a, 0, 2.35)], dark);
+  const dark = `rgba(6,10,28,${.62 * n})`, wY = (a, b) => poly(g, [P(a, 0, .6), P(b, 0, .6), P(b, 0, 2.35), P(a, 0, 2.35)], dark);
   wY(.3, 3.0); wY(4.8, 9.4); wY(9.75, 10.45); wY(12.95, 13.9); poly(g, [P(0, .3, .6), P(0, 5.3, .6), P(0, 5.3, 2.35), P(0, .3, 2.35)], dark);
   g.globalCompositeOperation = "lighter";
   const glow = (x, y, r, rgb, a, sy = 1) => { g.save(); g.translate(x, y); g.scale(1, sy); const gr = g.createRadialGradient(0, 0, 0, 0, 0, r);
@@ -1262,8 +1337,7 @@ function drawNight(g, n) {
     const [x, y] = t < .5 ? P(14.1 + t * 2 * (X - 14.2), Y - .05, 1.55 - Math.sin(t * 2 * Math.PI * 3) * .12) : P(X - .05, Y - .1 - (t - .5) * 2 * (Y - .3), 1.55 - Math.sin((t - .5) * 2 * Math.PI * 4) * .12);
     glow(x, y, 5, "255,214,140", .95 * n); glow(x, y + 4, 14, "255,190,110", .18 * n, .6); }
   for (const p of people.values()) if (p.handW && (p.hold.R === "phone" || p.hold.L === "phone")) glow(...p.handW[p.hold.R === "phone" ? "R" : "L"], 12, "120,190,255", .5 * n);
-  for (let i = 0; i < 18; i++) { const fx = .3 + (hash(i * 13) % 22) * .9; if (fx > X - .6) continue; const lit = hash(i * 7) % 2;     // a few lit windows below us
-    if (lit) { g.globalAlpha = .7 * n; poly(g, [P(fx, Y, -1.22), P(fx + .62, Y, -1.22), P(fx + .62, Y, -.45), P(fx, Y, -.45)], "rgb(120,90,40)"); g.globalAlpha = 1; } }
+  g.globalAlpha = .75 * n; towerWindows((pts, h) => { if (h % 10 < 4) poly(g, pts, h % 4 ? "rgb(150,110,50)" : "rgb(90,120,150)"); }); g.globalAlpha = 1;   // the floors below us, working late
   g.globalCompositeOperation = "source-over";
 }
 function drawParticles(g) {
@@ -1301,27 +1375,31 @@ function drawPersonAt(g, p) {
 }
 // ── labels (screen px): who, and for anyone at work, what. Problems get a red badge on the head.
 const LABEL_FONT = (px, w = 600) => `${w} ${px}px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif`;
+// labels above heads: everyone / only people on work (task cards + not-answering badges) / nobody
+const LABEL_MODES = ["all", "working", "off"], LABEL_TEXT = { all: "Labels: all", working: "Labels: working", off: "Labels: off" };
+let labelMode = "all"; try { labelMode = LABEL_MODES.includes(localStorage.officeLabels) ? localStorage.officeLabels : "all"; } catch {}
 function drawLabels(g) {
   g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = "source-over";
   const ls = clamp(cam.s / DPR * .75, 1, 1.25) * DPR, fs = 11.5 * ls, fs2 = 10.5 * ls, pad = 5 * ls, rad = 5 * ls;
   const tone = p => p.flag ? 0 : p.mode === "ceo" ? 1 : p.mode !== "idle" ? 2 : 3;
-  const list = [...people.values()].filter(p => p.handW).sort((a, b) => tone(a) - tone(b));
+  const list = labelMode === "off" ? [] : [...people.values()].filter(p => p.handW && (labelMode === "all" || tone(p) === 1 || tone(p) === 2 || p.flag)).sort((a, b) => tone(a) - tone(b));
   const placed = []; hits = [];
   for (const p of people.values()) if (p.handW) { const [hx, hy] = toScreen(p.handW.head), [fx, fy] = toScreen(P(p.x, p.y, 0));
     hits.push({ p, r: [Math.min(hx, fx) - 12 * ls, hy - 10 * ls, 24 * ls, Math.max(18 * ls, fy - hy + 12 * ls)] }); }
   const collide = r => placed.some(q => r[0] < q[0] + q[2] + 2 && r[0] + r[2] + 2 > q[0] && r[1] < q[1] + q[3] + 2 && r[1] + r[3] + 2 > q[1]);
   for (const p of list) {
     const [hx, hy] = toScreen(p.handW.head), top = hy - BODY.head * p.look.scale * cam.s - 2 * ls;
-    const t = tone(p), line2 = t === 1 || t === 2 ? p.card : null;
+    const t = tone(p), line2 = t === 1 || t === 2 ? p.card : null, badgeOnly = labelMode === "working" && t === 0;
     g.font = LABEL_FONT(fs); const w1 = g.measureText(p.name).width; g.font = LABEL_FONT(fs2, 500); const w2 = line2 ? g.measureText(line2).width : 0;
-    const w = Math.max(w1, w2) + pad * 2, h = line2 ? fs + fs2 + pad * 1.6 : fs + pad * 1.2, badge = p.flag ? 16 * ls : 0;
+    const w = badgeOnly ? 0 : Math.max(w1, w2) + pad * 2, h = badgeOnly ? 0 : line2 ? fs + fs2 + pad * 1.6 : fs + pad * 1.2, badge = p.flag ? 16 * ls : 0;
     const ay = top - badge - 4 * ls;
     const cands = [[0, 0], [w * .55, -2 * ls], [-w * .55, -2 * ls], [0, -h - 3 * ls], [w * .6, -h - 3 * ls], [-w * .6, -h - 3 * ls], [w * .75, h * .6], [-w * .75, h * .6]];
     let rect = null;
     for (const [dx, dy] of cands) { const r = [hx - w / 2 + dx, ay - h + dy, w, h]; if (r[0] < 2 || r[0] + w > W - 2 || r[1] < 2) continue; if (!collide(r)) { rect = r; break; } }
     if (!rect) { if (t === 3) continue; rect = [clamp(hx - w / 2, 2, W - w - 2), Math.max(2, ay - h), w, h]; }
     placed.push(badge ? [rect[0], rect[1], rect[2], rect[3] + badge + 4 * ls] : rect);
-    const [bx, by] = rect, moved = Math.hypot(bx + w / 2 - hx, by + h - ay) > 10 * ls;
+    const [bx, by] = rect, moved = !badgeOnly && Math.hypot(bx + w / 2 - hx, by + h - ay) > 10 * ls;
+    if (!badgeOnly) {
     if (moved) { g.strokeStyle = "rgba(30,36,48,.45)"; g.lineWidth = 1.2 * ls; g.beginPath(); g.moveTo(clamp(hx, bx + 4, bx + w - 4), by + h); g.lineTo(hx, top - badge); g.stroke(); }
     const bg = t === 0 ? "rgba(255,255,255,.96)" : t === 1 ? "#6d3fd6" : t === 2 ? "#1f6feb" : "rgba(255,255,255,.86)";
     g.fillStyle = bg; g.beginPath(); g.roundRect(bx, by, w, h, rad); g.fill();
@@ -1331,6 +1409,7 @@ function drawLabels(g) {
     if (line2) { g.font = LABEL_FONT(fs2, 500); g.globalAlpha = .92; g.fillText(line2, bx + pad, by + pad * .65 + fs + 2 * ls); g.globalAlpha = 1; }
     g.textBaseline = "alphabetic";
     hits.push({ p, r: rect });
+    }
     if (p.flag) {                                                // the badge rides on the head
       const cx = hx, cy = top - badge / 2 + Math.sin(T * 3 + p.seed) * ls, rr = badge / 2;
       g.fillStyle = "#d63031"; g.beginPath(); g.arc(cx, cy, rr, 0, 7); g.fill(); g.strokeStyle = "#fff"; g.lineWidth = 1.5 * ls; g.stroke();
@@ -1415,6 +1494,8 @@ function mount() {
   cv.addEventListener("mousemove", e => { hover = at(e); cv.style.cursor = hover ? "pointer" : "default"; showTip(e); });
   cv.addEventListener("mouseleave", () => { hover = null; tipEl.hidden = true; });
   cv.addEventListener("click", e => { const p = at(e); if (p) { if (document.fullscreenElement) document.exitFullscreen(); showAgent(p.name); } });
+  const lb = $("olab"); lb.textContent = LABEL_TEXT[labelMode];
+  lb.onclick = () => { labelMode = LABEL_MODES[(LABEL_MODES.indexOf(labelMode) + 1) % 3]; lb.textContent = LABEL_TEXT[labelMode]; try { localStorage.officeLabels = labelMode; } catch {} };
   const fs = $("ofs");
   if (document.fullscreenEnabled) fs.onclick = () => document.fullscreenElement ? document.exitFullscreen() : wrap.requestFullscreen();
   else fs.hidden = true;

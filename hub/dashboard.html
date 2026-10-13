@@ -215,7 +215,8 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
 .ohud b{font-size:12px;letter-spacing:.08em;text-transform:uppercase}.o-w{color:#1a7f37}.o-i{color:#57606a}.o-d{color:#cf222e;font-weight:600}
 .o-ph{color:#57606a;border-left:1px solid #d0d7de;padding-left:12px}
 .o-nj{font:inherit;font-weight:600;color:#9a6700;background:#fff8c5;border:1px solid #eac54f;border-radius:8px;padding:2px 9px;cursor:pointer}
-.ofs{position:absolute;right:12px;top:12px;font:inherit;font-size:13px;font-weight:600;color:#1f2933;background:rgba(255,255,255,.92);border:0;border-radius:10px;
+.obtns{position:absolute;right:12px;top:12px;display:flex;gap:8px}
+.ofs{font:inherit;font-size:13px;font-weight:600;color:#1f2933;background:rgba(255,255,255,.92);border:0;border-radius:10px;
   padding:8px 13px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.14)}
 .ofs:hover{background:#fff}
 .oticker{position:absolute;left:12px;bottom:12px;display:grid;gap:2px;max-width:min(560px,calc(100% - 24px));background:rgba(255,255,255,.88);color:#1f2933;
@@ -223,7 +224,7 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
 .oticker time{color:#6e7781;font-variant-numeric:tabular-nums;margin-right:6px}.oticker .faint{color:#6e7781}
 .otip{position:absolute;max-width:280px;background:#fff;color:#1f2933;border-radius:10px;padding:9px 12px;font-size:13px;line-height:1.4;
   box-shadow:0 8px 28px rgba(0,0,0,.28);pointer-events:none;display:grid;gap:2px;z-index:2}.otip[hidden]{display:none}.otip .faint{color:#6e7781}
-@media(max-width:820px){.ohud{font-size:12px;max-width:calc(100% - 24px)}.ofs{top:auto;bottom:12px}.oticker{display:none}}
+@media(max-width:820px){.ohud{font-size:12px;max-width:calc(100% - 24px)}.obtns{top:auto;bottom:12px}.oticker{display:none}}
 .roster{margin-top:14px}.roster summary{cursor:pointer;color:var(--dim);font-size:13px;font-weight:600;padding:6px 2px}
 @media(max-width:820px){.ohud{position:static;border-radius:0;box-shadow:none}}
 textarea[name=soul]{field-sizing:content;min-height:84px}
@@ -251,7 +252,7 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <div class="office" id="office">
       <canvas id="officecv" role="img" aria-label="The office. Each agent is in the room that matches what it is doing: desks for work, the review table for checking, the booths for replies; a red badge means not answering. The same list is under All agents below."></canvas>
       <div class="ohud" id="ohud"></div>
-      <button class="ofs" id="ofs" type="button">⛶ Full screen</button>
+      <div class="obtns"><button class="ofs" id="olab" type="button" title="Choose which labels show above people">Labels: all</button><button class="ofs" id="ofs" type="button">⛶ Full screen</button></div>
       <div class="oticker" id="oticker" aria-live="polite"></div>
       <div class="otip" id="otip" hidden></div>
     </div>

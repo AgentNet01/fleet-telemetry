@@ -320,5 +320,67 @@ def join():
     print("join OK")
 
 
+def delegate():
+    """brutus, 2026-10-12: an agent that acts on a request by asking someone else is working, not unresponsive.
+    The answer reaches it while the request is still open, and only real silence marks an agent unresponsive."""
+    h, srv, port, tok = start()
+    muse, clock, home = h.transport, h.clock, tempfile.mkdtemp()
+    h.add_agent("Pat", "muse")
+    state = lambda n: h._agent(n)["state"]
+    a = h.ask("dot", "Boboe 3", "build the pet-portrait style sheet")
+    h.tick()
+    clock.go(120)
+    r = fleet(port, tok["Boboe 3"], "ask", "Pat", "which style should the samples use?", home=home)
+    assert r.returncode == 0, r.stderr
+    c = h.db.execute("select id from items where frm='Boboe 3'").fetchone()["id"]
+    assert h.item(c)["parent"] == a
+    h.tick()
+    clock.go(1100); h.tick()                                   # 20+ min since #a, but Boboe 3 is waiting on Pat
+    assert h.item(a)["status"] == "sent", f"a request waiting on a sub-question doesn't time out: {h.item(a)}"
+    assert state("Boboe 3") == "active", "an agent that acted on its request is not unresponsive"
+    muse.say("Pat", "use watercolour"); h.tick(); clock.go(61); h.tick(); h.tick()
+    assert h.item(c)["status"] == "answered"
+    assert "use watercolour" in muse.sent["Boboe 3"][-1], f"Pat's answer reaches Boboe 3 while #a is open: {muse.sent['Boboe 3'][-1]}"
+    muse.say("Boboe 3", "style sheet: https://example.com/sheet.png"); h.tick(); clock.go(61); h.tick()
+    assert h.item(a)["status"] == "answered", h.item(a)
+
+    # acted, then went quiet: the request fails 20 min after its last sign of life, the agent is not called unresponsive
+    b = h.ask("dot", "Boboe 3", "one more thing"); h.tick()
+    clock.go(300)
+    assert fleet(port, tok["Boboe 3"], "ask", "Pat", "quick check", home=home).returncode == 0
+    clock.go(1000); h.tick()
+    assert h.item(b)["status"] == "sent", "20 min counts from the agent's last action, not from delivery"
+    muse.say("Pat", "ok"); h.tick(); clock.go(61); h.tick(); h.tick()
+    clock.go(1201); h.tick()
+    assert h.item(b)["status"] == "failed", h.item(b)
+    assert state("Boboe 3") == "active", "it acted after #b arrived, so it isn't unresponsive"
+
+    # real silence still counts, the machine heartbeat isn't the agent answering, and any action revives it
+    h.ask("dot", "Boboe 3", "are you there?"); h.tick(); h.tick()
+    clock.go(1201); h.tick()
+    assert state("Boboe 3") == "unresponsive", state("Boboe 3")
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/ingest", data=b"{}", method="POST",
+                                 headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok["Boboe 3"]})
+    urllib.request.urlopen(req, timeout=10).read()
+    assert state("Boboe 3") == "unresponsive", "telemetryd's heartbeat is the VM, not the agent"
+    assert fleet(port, tok["Boboe 3"], "ask", "Pat", "back now", home=home).returncode == 0
+    assert state("Boboe 3") == "active", "an agent acting on the hub is not unresponsive"
+    # a sub-question nobody will ever pick up (a poll agent that never checks in) doesn't hold the request open forever
+    e = h.ask("dot", "Boboe 3", "and the banner?"); h.tick(); h.tick()
+    assert fleet(port, tok["Boboe 3"], "ask", "dot", "banner size?", home=home).returncode == 0
+    clock.go(1201); h.tick()
+    assert h.item(e)["status"] == "failed" and state("Boboe 3") == "active", (h.item(e), state("Boboe 3"))
+
+    # a poll agent gets the answer to its own sub-question from `fleet inbox` while its request is still open
+    h.reply("dot", h.inbox("dot")["id"], "2000x500")
+    d = h.ask("Boboe 3", "dot", "draft the launch note"); assert h.inbox("dot")["id"] == d
+    h.add_agent("Quin", "muse"); h.ask("dot", "Quin", "what tone?"); h.tick()
+    muse.say("Quin", "warm, short"); h.tick(); clock.go(61); h.tick()
+    got = h.inbox("dot")
+    assert got["kind"] == "note" and "warm, short" in got["text"], got
+    assert h.inbox("dot")["id"] == d, "then the open request again"
+    print("delegate OK")
+
+
 if __name__ == "__main__":
-    {"dashboard": dashboard, "company": company, "cli": cli, "join": join}.get(sys.argv[1] if len(sys.argv) > 1 else "", poll_agent_flow)()
+    {"dashboard": dashboard, "company": company, "cli": cli, "join": join, "delegate": delegate}.get(sys.argv[1] if len(sys.argv) > 1 else "", poll_agent_flow)()
