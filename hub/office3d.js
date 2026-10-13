@@ -33,9 +33,30 @@ export function start(wrap, overlay, sim) {
   addEventListener("keydown", onKey); addEventListener("keyup", onKey); addEventListener("blur", leave);
   wrap.addEventListener("pointerenter", enter); wrap.addEventListener("pointerleave", leave); overlay.addEventListener("contextmenu", noMenu);
 
+  // ── view cube: the room in miniature, turning with the camera. Press a face, edge or corner to stand on that side.
+  const viewFrom = ([x, y, z]) => { const a = Math.atan2(x, z) - goal.yaw; if (x || z) goal.yaw += Math.atan2(Math.sin(a), Math.cos(a));   // the short way round
+    goal.pitch = Math.max(.16, Math.atan2(y, Math.hypot(x, z))); goal.zoom = 1; goal.target.set(...HOME.target); limit(); };
+  const cube = Object.assign(document.createElement("div"), { className: "ocube" }), box = cube.appendChild(document.createElement("div"));
+  for (const [name, deg, top] of [["Front", 0], ["Right", 90], ["Back", 180], ["Left", -90], ["Top", 0, 1]]) {
+    const f = box.appendChild(document.createElement("div")), s = Math.sin(deg * Math.PI / 180), c = Math.cos(deg * Math.PI / 180);
+    f.style.transform = (top ? "rotateX(90deg)" : `rotateY(${deg}deg)`) + " translateZ(36px)";
+    for (const row of [1, 0, -1]) for (const col of [-1, 0, 1]) {
+      const b = f.appendChild(Object.assign(document.createElement("button"), { type: "button", textContent: row || col ? "" : name }));
+      const side = ["front", "right", "back", "left"], i = side.indexOf(name.toLowerCase());      // a side face's left and right columns are the corners it shares with its neighbours
+      b.title = "View from " + (top ? ["top", row ? (row > 0 ? "back" : "front") : "", col ? (col < 0 ? "left" : "right") : ""] : [side[i], col ? side[(i + col + 4) % 4] : "", row > 0 ? "high" : ""]).filter(Boolean).join(" ");
+      b.setAttribute("aria-label", b.title);
+      b.onclick = () => viewFrom(top ? [col, 1, -row] : [s + col * c, Math.max(0, row), c - col * s]);
+    }
+  }
+  wrap.appendChild(cube);
+
   // ── head: x, y in screen half-widths/heights off centre (right, up), z = distance relative to where you sat down
   const head = { x: 0, y: 0, z: 1, tx: 0, ty: 0, tz: 1, state: "off", forced: false, seen: 0 };
-  let stream = null, video = null, detector = null, lookToken = 0, neutral = null, lastFrame = -1, lookBtn = null;
+  let stream = null, video = null, detector = null, lookToken = 0, neutral = null, lastFrame = -1, lookBtn = null, calm = null;
+  // One Euro filter: heavy smoothing while the head is still (no shimmer), light while it moves (no lag). minCut in Hz; beta = how fast it lets go.
+  const euro = (minCut, beta) => { let x = null, dx = 0, t = 0; const a = (cut, dt) => 1 / (1 + 1 / (2 * Math.PI * cut * dt));
+    return (val, now) => { if (x === null) { x = val; t = now; return x; } const dt = Math.max(.001, (now - t) / 1000); t = now;
+      dx += a(1, dt) * ((val - x) / dt - dx); x += a(minCut + beta * Math.abs(dx), dt) * (val - x); return x; }; };
   const paintBtn = () => { if (!lookBtn) return; const s = head.state;
     lookBtn.setAttribute("aria-pressed", String(s !== "off" && !s.startsWith("error")));
     lookBtn.textContent = s === "off" ? "◉ Look around" : s === "starting" ? "◉ Asking for the camera…" : s === "loading" ? "◉ Loading tracker…" : s === "tracking" ? "◉ Looking" : s === "lost" ? "◉ No face in view" : "◉ " + s.slice(6); };
@@ -72,8 +93,8 @@ export function start(wrap, overlay, sim) {
     if (!f) { if (now - head.seen > 1500 && head.state === "tracking") { setState("lost"); head.tx = head.ty = 0; head.tz = 1; } return; }
     head.seen = now; if (head.state === "lost") setState("tracking");
     const vw = video.videoWidth, vh = video.videoHeight, m = { x: (f.originX + f.width / 2) / vw, y: (f.originY + f.height / 2) / vh, w: f.width / vw };
-    if (!neutral) neutral = m;                                                             // wherever you were sitting when it first saw you is "centre"
-    head.tx = clamp((neutral.x - m.x) * 3.2, -1.4, 1.4); head.ty = clamp((neutral.y - m.y) * 3.2, -1.2, 1.2); head.tz = clamp(neutral.w / m.w, .6, 1.7);   // the camera sees you mirrored
+    if (!neutral) { neutral = m; calm = [euro(.8, 2), euro(.8, 2), euro(.4, 1)]; }           // wherever you were sitting when it first saw you is "centre"
+    head.tx = calm[0](clamp((neutral.x - m.x) * 3.2, -1.4, 1.4), now); head.ty = calm[1](clamp((neutral.y - m.y) * 3.2, -1.2, 1.2), now); head.tz = calm[2](clamp(neutral.w / m.w, .6, 1.7), now);   // the camera sees you mirrored
   }
 
   // ── one picture
@@ -83,7 +104,8 @@ export function start(wrap, overlay, sim) {
     W = w; H = h; renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1)); renderer.setSize(w, h, false);
   }
   function aim(dt) {
-    const k = 1 - Math.exp(-dt * 10), hk = 1 - Math.exp(-dt * 7);
+    const k = 1 - Math.exp(-dt * 10), hk = 1 - Math.exp(-dt * 12);
+    box.style.transform = `rotateX(${-cur.pitch}rad) rotateY(${-cur.yaw}rad)`;
     if (keys.size) { const sp = (fitDist() / goal.zoom) * .55 * dt, f = (keys.has("w") || keys.has("ArrowUp") ? 1 : 0) - (keys.has("s") || keys.has("ArrowDown") ? 1 : 0), s = (keys.has("d") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("a") || keys.has("ArrowLeft") ? 1 : 0);
       goal.target.x += (-Math.sin(goal.yaw) * f + Math.cos(goal.yaw) * s) * sp; goal.target.z += (-Math.cos(goal.yaw) * f - Math.sin(goal.yaw) * s) * sp;
       goal.yaw += ((keys.has("e") ? 1 : 0) - (keys.has("q") ? 1 : 0)) * 1.2 * dt; limit(); }
@@ -95,7 +117,7 @@ export function start(wrap, overlay, sim) {
     back.set(Math.sin(cur.yaw) * cp, Math.sin(cur.pitch), Math.cos(cur.yaw) * cp);
     camera.position.copy(cur.target).addScaledVector(back, dist); camera.up.set(0, 1, 0); camera.lookAt(cur.target);
     right.set(1, 0, 0).applyQuaternion(camera.quaternion); up.set(0, 1, 0).applyQuaternion(camera.quaternion);
-    const hh = dist * Math.tan(FOV / 2), hw = hh * W / Math.max(1, H), ex = head.x * hw * .6 * HEAD_GAIN, ey = head.y * hh * .6 * HEAD_GAIN, ez = dist * head.z;
+    const hh = dist * Math.tan(FOV / 2), hw = hh * W / Math.max(1, H), ex = head.x * hw * 1.1 * HEAD_GAIN, ey = head.y * hh * 1.1 * HEAD_GAIN, ez = dist * head.z;
     camera.position.copy(cur.target).addScaledVector(back, ez).addScaledVector(right, ex).addScaledVector(up, ey);
     const n = NEAR / ez;
     camera.projectionMatrix.makePerspective((-hw - ex) * n, (hw - ex) * n, (hh - ey) * n, (-hh - ey) * n, NEAR, FAR);
@@ -134,7 +156,7 @@ export function start(wrap, overlay, sim) {
       lookOff(); removeEventListener("keydown", onKey); removeEventListener("keyup", onKey); removeEventListener("blur", leave);
       wrap.removeEventListener("pointerenter", enter); wrap.removeEventListener("pointerleave", leave); overlay.removeEventListener("contextmenu", noMenu);
       for (const p of sim.people.values()) p.scr = null;
-      renderer.dispose(); cv.remove(); window.Office3D = null;
+      renderer.dispose(); cv.remove(); cube.remove(); window.Office3D = null;
     },
     debug: {
       state: () => ({ ready, head: head.state, video: !!(stream && stream.getTracks().some(t => t.readyState === "live")), rigs: [...people.rigs.keys()],

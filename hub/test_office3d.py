@@ -116,6 +116,53 @@ def camera(pw):
     assert not o.errors(), o.errors()
 
 
+def views(pw):
+    import math
+    o = Office(pw)
+    page = o.page
+    press = lambda title: page.mouse.click(*o.js(f"(() => {{ const r = document.querySelector('.ocube button[title=\"{title}\"]').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }})()"))   # a real click where the face is drawn
+    press("View from top")
+    page.wait_for_timeout(900)
+    c = o.state()["cam"]
+    assert c["pitch"] > 1.4, f"the cube's Top looks straight down: {c}"
+    page.locator("#ozfit").click()            # from straight above the side faces are edge-on: go back to the corner view, where Right can be seen
+    page.wait_for_timeout(900)
+    press("View from right")
+    page.wait_for_timeout(900)
+    c = o.state()["cam"]
+    assert abs(c["yaw"] - math.pi / 2) < .05 and c["pitch"] < .3, f"the cube's Right stands on the right, level: {c}"
+    box = page.locator("#office").bounding_box()
+    page.mouse.move(box["x"] + box["width"] * .5, box["y"] + box["height"] * .6)
+    page.mouse.wheel(300, 0)
+    page.wait_for_timeout(700)
+    d = o.state()["cam"]
+    assert abs(d["target"][2] - c["target"][2]) > .5 and abs(d["yaw"] - c["yaw"]) < .01 and abs(d["dist"] - c["dist"]) < .01, f"a sideways two-finger swipe slides the camera, nothing else: {c} → {d}"
+    o.page.locator("#office").screenshot(path=os.path.join(SHOTS, "3d-cube.png"))
+    o.switch.click()
+    page.wait_for_function("!window.Office3D")
+    assert page.locator(".ocube").count() == 0, "the cube leaves with the 3D view"
+    assert not o.errors(), o.errors()
+
+
+def fills(pw):
+    o = Office(pw)
+    page = o.page
+    assert o.js("document.documentElement.scrollHeight <= innerHeight"), "the office fills the window: the page has nowhere to scroll"
+    z0 = o.state()["cam"]["dist"]
+    box = page.locator("#office").bounding_box()
+    page.mouse.move(box["x"] + box["width"] * .5, box["y"] + box["height"] * .6)
+    page.mouse.wheel(0, -400)
+    page.wait_for_timeout(700)
+    assert o.state()["cam"]["dist"] < z0 * .9, "with no page to scroll, a plain scroll zooms"
+    page.locator("#olist").click()
+    assert page.locator("#office").is_hidden(), "List puts the office away"
+    assert page.locator("[data-agent='Ada']").first.is_visible(), "and shows the agents as a list"
+    page.locator("#ooffice").click()
+    assert page.locator("#office").is_visible() and page.locator("#roster").is_hidden(), "and back again"
+    assert o.js("document.documentElement.scrollHeight <= innerHeight"), "still nothing to scroll"
+    assert not o.errors(), o.errors()
+
+
 def head(pw):
     o = Office(pw)
     a = o.js("Office3D.debug.probe()")
@@ -172,5 +219,5 @@ def shots(pw):
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "toggle"
     with sync_playwright() as pw:
-        {"toggle": toggle, "people": people, "camera": camera, "head": head, "webcam": webcam, "shots": shots}[mode](pw)
+        {"toggle": toggle, "people": people, "camera": camera, "views": views, "fills": fills, "head": head, "webcam": webcam, "shots": shots}[mode](pw)
     print("ok", mode)

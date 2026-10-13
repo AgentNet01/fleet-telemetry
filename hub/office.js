@@ -1527,7 +1527,7 @@ function showTip(e) {
 function fit() {                                                // outside full screen: fill the window below the tabs
   if (document.fullscreenElement === wrap) { wrap.style.height = ""; return; }
   const top = wrap.getBoundingClientRect().top + scrollY;
-  wrap.style.height = Math.max(460, innerHeight - top - 14) + "px";
+  wrap.style.height = Math.max(320, innerHeight - top - 14) + "px";
 }
 function mount() {
   wrap = $("office"); cv = $("officecv"); ctx = cv.getContext("2d"); hudEl = $("ohud"); tipEl = $("otip"); tickEl = $("oticker");
@@ -1536,7 +1536,8 @@ function mount() {
   cv.addEventListener("click", e => { if (dragged) return; const p = at(e); if (p) { if (document.fullscreenElement) document.exitFullscreen(); showAgent(p.name); } });
   // zoom: pinch / ⌘-scroll anywhere, plain scroll in full screen (outside it, scroll still scrolls the page); drag to pan
   cv.addEventListener("wheel", e => {
-    if (!(e.ctrlKey || e.metaKey || document.fullscreenElement === wrap)) return;
+    if (window.Office3D && !e.ctrlKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) { e.preventDefault(); window.Office3D.drag(-e.deltaX, 0, true); return; }   // two fingers sideways slide the 3D camera
+    if (!(e.ctrlKey || e.metaKey || document.fullscreenElement === wrap || document.documentElement.scrollHeight <= innerHeight)) return;   // plain scroll zooms whenever the page has nowhere to scroll
     e.preventDefault();
     const r = cv.getBoundingClientRect();
     const k = Math.exp(-e.deltaY * (e.ctrlKey ? .01 : .0025));
@@ -1564,6 +1565,10 @@ function mount() {
   else fs.hidden = true;
   document.addEventListener("fullscreenchange", () => { fs.textContent = document.fullscreenElement ? "✕ Exit full screen" : "⛶ Full screen"; fit(); });
   addEventListener("resize", fit); new ResizeObserver(fit).observe($("njwrap")); fit();
+  // the plain list instead of the office: one or the other, so the page never needs to scroll
+  const showList = on => { if (on && document.fullscreenElement) document.exitFullscreen(); wrap.hidden = on; $("roster").hidden = !on; try { localStorage.officeList = on ? "1" : ""; } catch {} fit(); };
+  $("olist").onclick = () => showList(true); $("ooffice").onclick = () => showList(false);
+  try { if (localStorage.officeList) showList(true); } catch {}
   // the 3D view (office3d.js): loaded only when asked for, remembered, and it only ever paints what the sim above decides
   const b3 = $("o3d"), bh = $("ohead");
   if (b3) {
