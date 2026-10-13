@@ -3,14 +3,15 @@
 **Product:** Family caricatures · **Role:** optimizer · **Date:** 2026-10-13
 Status: CHECKLIST for pre-publish gate. Nothing publishes without gate approval (same discipline as other products).
 
-**Dependencies:** #90 listing description/order instructions (Boboe 11, working) · #93 sample production proof (Dash, verifying) · #94 delivery file templates (Boboe 6, verifying) · #88 market scan (Neo, working) · #92 pricing (Boboe 5, verifying). The checklist below assumes those land; anything marked DEPENDS cannot pass until its source task does.
+**Dependencies (states as observed 2026-10-13):** #89 title/tags (Boboe 4, DONE — deliverable received) · #90 description (Boboe 11, done per verification pass) · #92 pricing (Boboe 5, IN VERIFICATION — hub confirmed completion, not yet approved; tiers below are the proposal, not approved numbers) · #93 sample production proof (Dash, portfolio showed "verifying") · #94 delivery file templates (Boboe 6, DONE — zip deliverable received) · #88 market scan (Neo, working). Anything marked DEPENDS cannot pass until its source task is verified.
 
 Each item: check it off only when the stated condition is true. One fail = do not publish.
 
 ---
 
 ## 1. Copy
-- [ ] Title ≤ 140 characters, leads with "Custom Family Caricature" + "from Photo", names the tier (individual/couple/family) and "Digital Download" or "Personalized Gift". No ALL-CAPS words, no "best seller" claims.
+- [ ] Title ≤ 140 characters. Use the verified title from #89 (Boboe 4, done): "Custom Family Caricature Portrait From Photo Personalized Cartoon Drawing Funny Gift for Couples Parents Digital Download" (121/140). No ALL-CAPS words, no "best seller" claims.
+- [ ] Turnaround stated in the description matches the verified #93 production-proof timing — DEPENDS on #93 verified. Do not promise 24h–7d from market norms; promise what #93 proves.
 - [ ] First 2 lines of the description state: what the buyer gets (digital caricature from their photo), the tier contents (number of people), and the proof-before-delivery step. (Buyers skim; the proof step is the trust driver — observed on the best shops.)
 - [ ] Description includes: how to order (purchase → send photos via Etsy message), turnaround time, what's included (file types/sizes), revision terms (count included, cost beyond), and the "handmade/digital variation" note. DEPENDS on #90.
 - [ ] FAQ covers: photo quality requirements, pets counting as a person, extra-person pricing, rush option, "can I print this myself" (yes — print release included).
@@ -19,7 +20,7 @@ Each item: check it off only when the stated condition is true. One fail = do no
 ## 2. Images (all 10 slots used)
 - [ ] Slot 1: hero — finished family caricature example, clean background, readable at thumbnail size.
 - [ ] Slot 2: before/after — customer photo → finished caricature side by side (the conversion image; best sellers all show the transformation).
-- [ ] Slot 3: tier comparison — individual vs couple vs family examples with prices.
+- [ ] Slot 3: tier comparison — individual vs couple vs family examples with prices. DEPENDS on #92 verified (prices are the #92 proposal until then).
 - [ ] Slot 4: personalization example — names/dates rendered on the art.
 - [ ] Slot 5: size/format guide — file types, dimensions, DPI, what it prints to (8x10, 11x14, 16x20).
 - [ ] Slot 6: how-it-works — 3 steps: order → send photos → approve proof → receive files.
@@ -29,11 +30,11 @@ Each item: check it off only when the stated condition is true. One fail = do no
 - [ ] Every person depicted is a sample/fictional or consented — no real customer photos without written permission. DEPENDS on #93 for production samples.
 
 ## 3. Tags (13 tags, each ≤ 20 characters)
-- [ ] All 13 tag slots filled. Mix: product ("family caricature", "custom portrait", "cartoon family"), occasion ("anniversary gift", "wedding gift", "birthday gift", "christmas gift"), attribute ("from photo", "digital download", "personalized art", "couple caricature", "funny portrait").
-- [ ] No tag repeats a word already in the title verbatim more than needed; no single-word tags that waste the slot; tags match actual search phrases (check against #88 market scan). DEPENDS on #88.
+- [ ] Use the verified 13 tags from #89 (Boboe 4, done): family caricature / caricature portrait / custom caricature / portrait from photo / cartoon portrait / family portrait gift / pet caricature / couple caricature / caricature drawing / funny family gift / digital portrait / personalized gift / family cartoon art. All machine-verified ≤ 20 chars in #89.
+- [ ] If #88 (Neo, working) surfaces a materially different top seller when verified, swap the broadest tags (11–13) first — per #89's own note.
 
 ## 4. Pricing
-- [ ] Tiers match the approved pricing doc (#92): Individual $34.99 / Couple $54.99 / Family (3–4) $79.99 / +$15 per extra person; add-ons rush +$10, custom background +$15.
+- [ ] DEPENDS on #92 verified. Tiers per the #92 pricing proposal (Boboe 5, currently in verification — NOT yet approved; do not present as approved numbers): Individual $34.99 / Couple $54.99 / Family (3–4) $79.99 / +$15 per extra person; add-ons rush +$10, custom background +$15, pet counts as a person.
 - [ ] Etsy fee math re-verified on the final numbers: $0.45 + 9.5% per tier (no Offsite Ads for pilot). Net per tier: $31.22 / $49.32 / $71.94.
 - [ ] Personalization-box add-ons priced as variations (not separate listings) so reviews accumulate on one listing.
 - [ ] Sale/promo posture set: launch at full price; 20% holiday promo calendar ready (matches shelf norms — do not launch already discounted).
@@ -58,6 +59,8 @@ Each item: check it off only when the stated condition is true. One fail = do no
 - [ ] Gate approval recorded before the listing goes live. No social publish until the listing is live and the first proof workflow has been dry-run end to end.
 
 ## Sources
-- Task #92 pricing recommendation (Boboe 5): tiers, fee math, margins
-- Task #67 market scan (Boboe 5): proof-step trust pattern, personalization-clarity failure mode, UK-shipping cost lesson
-- Concept batch E (Boboe 6, task #17): caricature market price band $4.09–$50.00+, per-person pricing norm
+- Task #92 pricing recommendation (Boboe 5, in verification): tiers, fee math, margins — https://gist.github.com/boboefye/226210822b02c59e291525d7fd32efd8
+- Task #89 title/tags (Boboe 4, done): verified title + 13 tags
+- Task #90 description (Boboe 11, verification passed): personalization flow, photo requirements, revision policy, timeline
+- Task #93 production proof (Dash) and #94 delivery templates (Boboe 6, zip received): turnaround and file formats
+- Birthday-paddles market scan (Boboe 5, evidence: https://gist.github.com/boboefye/5b1b45a02ceae2370fb7a5b4e66886d7): proof-step trust pattern, personalization-clarity failure mode (2.4★ review on an ambiguous personalized listing)
