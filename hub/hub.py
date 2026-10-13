@@ -1108,11 +1108,12 @@ class Hub:
             self._set("agents", a["name"], fleet_told=self.clock())
             self._note(a["name"], "your fleet command is an old copy: update it once",
                        "It was copied in when you joined and never updates, so it's missing newer commands "
-                       "(one agent's had no `fleet task done` and couldn't close a finished task). In your fleet-telemetry "
-                       "checkout run: git pull && python3 agents/setup.py   (no name or code needed; it keeps your token). "
-                       f"No checkout? git clone {FLEET_REPO} ~/fleet-telemetry && python3 ~/fleet-telemetry/agents/setup.py   "
-                       "(the repo is public: no GitHub login needed). After that, fleet updates itself from GitHub. "
-                       "Check with: fleet --help (it lists fleet task wait). If anything fails, ask Jack with the error.")
+                       "(one agent's had no `fleet task done` and couldn't close a finished task). Update with two commands "
+                       "(public repo, no GitHub login; your token and setup are untouched):\n"
+                       f"  git clone --depth 1 {FLEET_REPO} ~/.fleet/repo   (already there? git -C ~/.fleet/repo pull)\n"
+                       "  cp ~/.fleet/repo/agents/fleet ~/.fleet/fleet && chmod +x ~/.fleet/fleet\n"
+                       "If `command -v fleet` isn't ~/.fleet/fleet, point that one at it too: ln -sf ~/.fleet/fleet \"$(command -v fleet)\". "
+                       "Check: fleet --help lists `fleet task wait`. After that it updates itself. If anything fails, reply to Jack with the error.")
 
     APPROVALS_EVERY = 15                 # agents retry an upload the moment a request lapses: look often
 
@@ -2007,9 +2008,9 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         self.send_header("Content-Length", str(len(body)))
                         self.end_headers()
                         self.wfile.write(body)
-                elif u.path == "/office.js":                          # the Overview's office, kept out of dashboard.html
-                    if self._jack():
-                        body = open(os.path.join(HERE, "office.js"), "rb").read()
+                elif u.path in ("/office.js", "/office3d.js", "/office3d-vox.js", "/office3d-world.js", "/office3d-people.js", "/three.module.min.js"):
+                    if self._jack():                                   # the Overview's office (2D, and the 3D view's modules), kept out of dashboard.html
+                        body = open(os.path.join(HERE, u.path.lstrip("/")), "rb").read()
                         self.send_response(200)
                         self.send_header("Content-Type", "text/javascript; charset=utf-8")
                         self.send_header("Content-Length", str(len(body)))

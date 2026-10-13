@@ -1,0 +1,11 @@
+#!/bin/sh
+# fleet: runs the fleet command from ~/.fleet/repo (a clone of github.com/AgentNet01/fleet-telemetry),
+# pulling it at most hourly so it never goes stale. Install or update:
+#   git clone --depth 1 https://github.com/AgentNet01/fleet-telemetry.git ~/.fleet/repo
+#   cp ~/.fleet/repo/agents/fleet ~/.fleet/fleet && chmod +x ~/.fleet/fleet
+REPO="$HOME/.fleet/repo"
+if [ -z "$(find "$HOME/.fleet/pulled" -mmin -60 2>/dev/null)" ]; then
+  touch "$HOME/.fleet/pulled"   # never let a dead route or a password prompt stall the command itself
+  GIT_TERMINAL_PROMPT=0 timeout 20 git -C "$REPO" pull -q --ff-only >/dev/null 2>&1 </dev/null
+fi
+exec python3 "$REPO/hub/fleet.py" "$@"

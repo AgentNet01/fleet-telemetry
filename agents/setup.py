@@ -71,15 +71,7 @@ if subprocess.run(git, env=dict(os.environ, GIT_TERMINAL_PROMPT="0"), timeout=12
     sys.exit(f"fleet: couldn't get the fleet-telemetry repo from GitHub ({' '.join(git)}). Paste this to Jack.")
 if os.path.islink(cli) or os.path.exists(cli):
     os.remove(cli)
-open(cli, "w").write(f"""#!/bin/sh
-# fleet: pull {repo} from GitHub at most hourly, then run its fleet.py (written by agents/setup.py)
-if [ -z "$(find "$HOME/.fleet/pulled" -mmin -60 2>/dev/null)" ]; then
-  touch "$HOME/.fleet/pulled"   # never let a dead route or a password prompt stall the command itself
-  GIT_TERMINAL_PROMPT=0 timeout 20 git -C '{repo}' pull -q --ff-only >/dev/null 2>&1 </dev/null
-fi
-exec python3 '{repo}/hub/fleet.py' "$@"
-""")
-os.chmod(cli, 0o755)
+shutil.copy2(os.path.join(repo, "agents", "fleet"), cli); os.chmod(cli, 0o755)   # the launcher, from the clone
 bindir = os.path.join(home, ".local", "bin")
 if os.path.isdir(bindir) and not os.path.exists(os.path.join(bindir, "fleet")):
     os.symlink(cli, os.path.join(bindir, "fleet"))
