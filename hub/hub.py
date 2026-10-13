@@ -454,7 +454,11 @@ class Hub:
     def status(self, name):
         a = self._agent(name)
         tasks = [self.task(t["id"]) for t in self._open_tasks(name)]
-        return {"agent": name, "product": a["current_product"], "role": a["current_role"], "can": self.powers(name),
+        mine = self.secrets_for(name)
+        # ponytail: listed in status so agents on an older fleet.py find their logins with no update
+        logins = (f"\nYour logins and keys in the vault: {', '.join(mine)}. Read one with: fleet secret get <name> "
+                  "(JSON with the email, password and username).") if mine else ""
+        return {"agent": name, "product": a["current_product"], "role": a["current_role"], "can": self.powers(name) + logins,
                 "tasks": [{k: t[k] for k in ("id", "title", "status", "product", "role")} for t in tasks],
                 "queue": [{k: i[k] for k in ("id", "frm", "text", "status")}
                           for i in self.items_for(name) if i["status"] in ("queued", "sent")]}
@@ -1190,23 +1194,51 @@ class Hub:
             return False
 
     def _switch_to_fill(self):
-        # a ready, unowned task with no matching idle agent, but an idle agent exists → switch one to fill it
+        # a ready, unowned task with no matching idle agent, but an idle agent exists → switch one to fill it.
+        # issue_switch moves the agent at once, so _idle already sees anyone switched on an earlier tick; a
+        # switch's 'issued' status only tracks the agent loading its brain files, which may never be reported.
+        switched = set()                                       # this tick's picks, so one agent isn't sent two ways
         for t in self.db.execute("select * from tasks where status='ready' and owner is null").fetchall():
             product = self._task_product(t["id"])
             if next(self._idle(product, t["role"], t["pin"]), None):
                 continue                                       # someone already fits; _assign_tasks will take it
-            if self.db.execute("select 1 from switches where status='issued' and product=? and role=?",
-                               (product, t["role"])).fetchone():
-                continue                                       # a switch to fill this is already on its way
-            pending = {r["agent"] for r in self.db.execute("select agent from switches where status='issued'")}
-            free = [self._agent(n) for n in self._idle() if n not in pending]
+            free = [self._agent(n) for n in self._idle() if n not in switched]
             free = [a for a in free if (a["name"] == t["pin"] if t["pin"] else self._fits(a, t["role"]))]
             # specialists before generalists; then hold people constant — files and programs on a VM don't move
             # with a switch, so prefer someone whose loaded context is already this product, then none, then another
             loaded = lambda a: 0 if a["current_product"] == product else 1 if not a["current_product"] else 2
             ranked = sorted(free, key=lambda a: (0 if a["team"] == t["role"] else 1, loaded(a)))
             if ranked:
+                switched.add(ranked[0]["name"])
                 self.issue_switch(ranked[0]["name"], product, t["role"])
+            else:
+                self._stuck(t, product)
+
+    def _stuck(self, t, product):
+        """No one can take a ready task: tell the product's PM (else the CEO) why and how to fix it, once per reason."""
+        pin = t["pin"] and self._agent(t["pin"])
+        if pin and pin["state"] == "active":
+            busy = ", ".join(f"#{o['id']}" for o in self._open_tasks(pin["name"]))
+            why = f"it's pinned to {pin['name']}, who is busy on {busy}" if busy else f"it's pinned to {pin['name']}"
+        elif t["pin"]:
+            why = f"it's pinned to {t['pin']}, who isn't active"
+        else:
+            why = f"no {t['role']} or generalist is free"
+        last = self.db.execute("select text from task_events where task=? and what='stuck' order by id desc limit 1",
+                               (t["id"],)).fetchone()
+        if last and last["text"] == why:
+            return
+        self._task_event(t["id"], None, "stuck", why)
+        pm = self.db.execute("select pm from products where name=?", (product,)).fetchone()
+        boss = (pm and pm["pm"]) or self._chair()
+        head = f"Task #{t['id']} “{t['title']}” ({product}, {t['role']}) is ready but can't be filled: {why}."
+        fix = (f"Give it to someone: fleet task set {t['id']} owner <agent> (they're moved onto {product} for it), "
+               f"or let anyone who fits take it: fleet task set {t['id']} owner none. "
+               f"To grow the {t['role']} team: fleet team <agent> {t['role']}.")
+        if boss:
+            self._note(boss, head, fix)
+        else:
+            self._needs_jack_once(head + " " + fix)
 
     # ---- vault --------------------------------------------------------------------------
     def secret_put(self, name, value, scope, by):
@@ -1232,6 +1264,11 @@ class Hub:
                 raise PermissionError(f"{agent} may not read {name}")
             self.db.execute("insert into secret_reads(secret, agent, at) values(?,?,?)", (name, agent, self.clock()))
             return r["value"]
+
+    def secrets_for(self, agent):
+        with self.lock:
+            return [r["name"] for r in self.db.execute("select name, scope from secrets order by name")
+                    if self._may_read(agent, r["scope"])]
 
     def secret_reads(self):
         with self.lock:
@@ -1580,6 +1617,15 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         self.send_response(200)
                         self.send_header("Content-Type", "text/html; charset=utf-8")
                         self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                elif u.path == "/office.js":                          # the Overview's office, kept out of dashboard.html
+                    if self._jack():
+                        body = open(os.path.join(HERE, "office.js"), "rb").read()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/javascript; charset=utf-8")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.send_header("Cache-Control", "no-cache")
                         self.end_headers()
                         self.wfile.write(body)
                 elif u.path.startswith("/.well-known/oauth-protected-resource"):   # the ChatGPT connector (mcp.py)

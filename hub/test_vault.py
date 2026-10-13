@@ -23,6 +23,10 @@ def main():
     assert h.secret_get("nia-login", "Nia") == "NIA-PW", "reads its own secret"
     assert h.secret_get("openai", "Nia") == "OPENAI-KEY", "reads a fleet secret"
 
+    assert h.secrets_for("Nia") == ["etsy-key", "nia-login", "openai"], "lists only what it may read"
+    can = h.status("Nia")["can"]
+    assert "nia-login" in can and "rival-key" not in can and "NIA-PW" not in can, "status names its secrets, never values"
+
     try:
         h.secret_get("rival-key", "Nia")
         assert False, "a secret outside scope must be refused"

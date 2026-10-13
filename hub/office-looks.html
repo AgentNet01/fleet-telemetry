@@ -1,0 +1,258 @@
+<!doctype html>
+<!-- f01-uiux · structure: isometric diorama (room = state) · differs from last on: structure -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Office looks</title>
+<style>
+  :root { --bg:#0f1115; --fg:#e8eaed; --muted:#9aa0a6; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,-apple-system,sans-serif; }
+  main { max-width:1320px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  p.lead { color:var(--muted); margin:0 0 28px; }
+  section { margin:0 0 40px; }
+  h2 { font-size:17px; margin:0 0 2px; }
+  h2 span { color:var(--muted); font-weight:400; }
+  section p { color:var(--muted); margin:0 0 10px; }
+  canvas { width:100%; height:auto; display:block; border-radius:10px; }
+</style>
+<main>
+  <h1>Foundlings HQ: three looks</h1>
+  <p class="lead">Same floor, same agents, same moment (real state from the hub tonight). Pick one; the live version animates it.</p>
+  <section><h2>A · Clean low-poly <span>calm daytime, soft shading</span></h2>
+    <p>Reads like Monument Valley or Two Point. Easiest on the eyes when left open all day.</p><canvas id="a" width="1280" height="700"></canvas></section>
+  <section><h2>B · Cozy pixel art <span>chunky retro pixels</span></h2>
+    <p>Habbo or Stardew feel. Most game-like and charming, but less crisp for reading labels.</p><canvas id="b" width="1280" height="700"></canvas></section>
+  <section><h2>C · Night-city sleek <span>dark office, glowing screens</span></h2>
+    <p>Moody and cool; the working desks literally light up, so who's busy pops out.</p><canvas id="c" width="1280" height="700"></canvas></section>
+</main>
+<script>
+const TW = 64, TH = 32, ZH = 32;
+
+const STYLES = {
+  a: { sky: ["#bfe3f5", "#eaf6fb"], far: "#c9dbe6", near: "#a9c3d3", facade: "#e9edf0", facadeWin: "#9fc4dc",
+       floor: "#f1ece4", floor2: "#ebe4d9", desks: "#e6eef5", board: "#e3e0ee", kitchen: "#f3e6d6", lounge: "#e4efe4",
+       review: "#ece6f2", sick: "#f6e1e1", deck: "#d8b48a", deck2: "#cfa97d", wall: "#fafafa", win: "#cfe9f7",
+       wood: "#c99a6b", white: "#f7f7f7", metal: "#9aa5ae", dark: "#3b4148", screen: "#5fb3e6", plant: "#6fb07a",
+       fabric: "#7d9cc4", rug: "#e9c9a7", glass: "rgba(190,225,245,.35)", label: "rgba(255,255,255,.94)", labelFg: "#1f2933",
+       floorText: "rgba(60,70,80,.28)", shadow: "rgba(40,50,60,.16)", glow: false, pixel: 1, stars: false, text: "#1f2933" },
+  b: { sky: ["#7ec8f0", "#bfe8ff"], far: "#8fb6d8", near: "#6e98bf", facade: "#d9d2c3", facadeWin: "#5d87b3",
+       floor: "#e9cfa0", floor2: "#ddc08e", desks: "#c9ddb0", board: "#d9b9a0", kitchen: "#f0d8a8", lounge: "#b9d7c4",
+       review: "#cdbfe0", sick: "#f0b8b0", deck: "#b9783f", deck2: "#a96b36", wall: "#f4e9d8", win: "#9fd8ff",
+       wood: "#a5653a", white: "#fbf4e8", metal: "#8c96a4", dark: "#2d2a33", screen: "#57e0ff", plant: "#4caf50",
+       fabric: "#d9534f", rug: "#f2b134", glass: "rgba(160,220,255,.4)", label: "#fff8e7", labelFg: "#2d2a33",
+       floorText: "rgba(80,50,20,.32)", shadow: "rgba(40,20,0,.22)", glow: false, pixel: 3, stars: false, text: "#2d2a33" },
+  c: { sky: ["#070b1a", "#1a2240"], far: "#151b33", near: "#1c2442", facade: "#1b2030", facadeWin: "#2a3350",
+       floor: "#232836", floor2: "#20242f", desks: "#1f2a3a", board: "#2a2438", kitchen: "#2d2a2a", lounge: "#1f2e2c",
+       review: "#28243a", sick: "#3a1f26", deck: "#2c2622", deck2: "#26211d", wall: "#2a3040", win: "#2b3a66",
+       wood: "#4a3a30", white: "#3a4050", metal: "#555e70", dark: "#0e1118", screen: "#58c4ff", plant: "#2f6b48",
+       fabric: "#3d4f7a", rug: "#3a2f45", glass: "rgba(120,170,255,.16)", label: "rgba(18,22,34,.92)", labelFg: "#e8eefc",
+       floorText: "rgba(160,180,230,.18)", shadow: "rgba(0,0,0,.35)", glow: true, pixel: 1, stars: true, text: "#e8eefc" },
+};
+
+// ---- tonight's real state (api/board + api/org), placed by what each agent is doing ----
+const AGENTS = [
+  { n: "Boboe 4", at: [1.9, 2.25], pose: "sit", card: "#5 Social launch posts · 12m", state: "work" },
+  { n: "Boboe 2", at: [5.5, 4.45], pose: "sleep", tag: "free 69h" },
+  { n: "Boboe 1", at: [10.6, 7.9], pose: "sit", card: "checking #6 Etsy listing", state: "review" },
+  { n: "pericles", at: [13.2, 8.3], pose: "stand", card: "on a call · #189", state: "call" },
+  { n: "dot", at: [11.2, 3.3], pose: "sit", card: "CEO", state: "ceo" },
+  { n: "Dash", at: [1.55, 7.2], pose: "stand", prop: "cup", tag: "coffee" },
+  { n: "Neo", at: [1.55, 8.75], pose: "stand", tag: "microwave" },
+  { n: "brutus", at: [3.3, 9.85], pose: "sit", prop: "plate", tag: "lunch" },
+  { n: "Boboe 3", at: [6.6, 8.1], pose: "sit", tag: "lounging" },
+  { n: "Prime", at: [8.2, 9.9], pose: "sit", tag: "lounging" },
+  { n: "Boboe 5", at: [8.6, 0.55], pose: "stand", tag: "at the window" },
+  { n: "Boboe 6", at: [16.2, 3.4], pose: "sit", tag: "patio" },
+  { n: "Boboe 7", at: [17.4, 2.0], pose: "sit", tag: "patio" },
+  { n: "Boboe 8", at: [19.3, 10.1], pose: "stand", prop: "smoke", tag: "smoke break" },
+  { n: "Boboe 9", at: [18.6, 5.6], pose: "lie", tag: "sunning" },
+  { n: "Boboe 10", at: [20.25, 7.6], pose: "stand", tag: "city view" },
+  { n: "Boboe 11", at: [16.5, 8.6], pose: "sit", tag: "patio" },
+];
+const SHIRTS = ["#e07a5f", "#3d85c6", "#81b29a", "#f2cc8f", "#9b72cf", "#e56b9f", "#4fb0c6", "#f4a261", "#6a994e", "#c1666b"];
+const shirt = n => SHIRTS[[...n].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % SHIRTS.length];
+
+function shade(hex, f) {
+  if (!hex.startsWith("#")) return hex;
+  const n = parseInt(hex.slice(1), 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  const t = f > 0 ? 255 : 0, k = Math.abs(f);
+  return `rgb(${Math.round(r + (t - r) * k)},${Math.round(g + (t - g) * k)},${Math.round(b + (t - b) * k)})`;
+}
+
+function render(canvas, S) {
+  const out = canvas.getContext("2d"), W = canvas.width, H = canvas.height;
+  const px = S.pixel, cv = px > 1 ? Object.assign(document.createElement("canvas"), { width: W / px, height: H / px }) : canvas;
+  const g = cv.getContext("2d");
+  if (px > 1) g.scale(1 / px, 1 / px);
+  const ox = 520, oy = 190;
+  const iso = (x, y, z = 0) => [ox + (x - y) * TW / 2, oy + (x + y) * TH / 2 - z * ZH];
+  const poly = (pts, fill, stroke) => { g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(x, y) : g.moveTo(x, y)); g.closePath();
+    g.fillStyle = fill; g.fill(); if (stroke) { g.strokeStyle = stroke; g.lineWidth = 1; g.stroke(); } };
+  const edge = px > 1 ? "rgba(0,0,0,.35)" : null;
+  const box = (x, y, z, w, d, h, c, o = {}) => {
+    const P = (a, b, cz) => iso(a, b, cz);
+    poly([P(x, y + d, z), P(x + w, y + d, z), P(x + w, y + d, z + h), P(x, y + d, z + h)], o.left || c, edge);
+    poly([P(x + w, y, z), P(x + w, y + d, z), P(x + w, y + d, z + h), P(x + w, y, z + h)], o.right || shade(c, -.18), edge);
+    poly([P(x, y, z + h), P(x + w, y, z + h), P(x + w, y + d, z + h), P(x, y + d, z + h)], o.top || shade(c, .12), edge);
+  };
+  const glow = (x, y, r, color) => { if (!S.glow) return; const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, color); gr.addColorStop(1, "rgba(0,0,0,0)"); g.save(); g.globalCompositeOperation = "lighter";
+    g.fillStyle = gr; g.fillRect(x - r, y - r, 2 * r, 2 * r); g.restore(); };
+
+  // sky + city far below: we're high up
+  const sky = g.createLinearGradient(0, 0, 0, H); sky.addColorStop(0, S.sky[0]); sky.addColorStop(1, S.sky[1]);
+  g.fillStyle = sky; g.fillRect(0, 0, W, H);
+  if (S.stars) for (let i = 0; i < 90; i++) { g.fillStyle = `rgba(255,255,255,${.2 + (i * 37 % 60) / 100})`; g.fillRect((i * 173) % W, (i * 97) % 300, 1.5, 1.5); }
+  for (const [col, base, step, hmax] of [[S.far, 560, 46, 160], [S.near, 640, 70, 230]]) {
+    for (let i = 0, x = -20; x < W; i++) {
+      const w = step * (.6 + ((i * 53) % 40) / 50), h = 60 + ((i * 89) % hmax);
+      g.fillStyle = col; g.fillRect(x, base - h, w - 4, H);
+      if (S.glow) for (let wy = base - h + 8; wy < H; wy += 12) for (let wx = x + 5; wx < x + w - 10; wx += 9)
+        if (((wx * 7 + wy * 13) | 0) % 5 === 0) { g.fillStyle = "rgba(255,210,120,.55)"; g.fillRect(wx, wy, 3, 4); }
+      x += w;
+    }
+  }
+
+  // the tower under our floor, then the floor slab
+  const X = 21, Y = 11.5;
+  box(0, 0, -9, X, Y, 9, S.facade);
+  for (let fz = -8.6; fz < -0.4; fz += 1.4) {
+    const lit = (a, b) => S.glow && ((a * 7 + b * 3 + fz * 5) | 0) % 4 === 0 ? "#c99a4e" : null;
+    for (let fx = 0.4; fx < X - 0.6; fx += 1.2) poly([iso(fx, Y, fz), iso(fx + .8, Y, fz), iso(fx + .8, Y, fz + .9), iso(fx, Y, fz + .9)], lit(fx, fz) || S.facadeWin);
+    for (let fy = 0.4; fy < Y - 0.6; fy += 1.2) poly([iso(X, fy, fz), iso(X, fy + .8, fz), iso(X, fy + .8, fz + .9), iso(X, fy, fz + .9)], lit(fy + 9, fz) || shade(S.facadeWin, -.15));
+  }
+  // floor tiles, tinted by room
+  const zone = (x, y) => x >= 14 ? ((x + y) % 2 ? S.deck : S.deck2)
+    : y < 5.2 ? (x < 9 ? S.desks : S.board)
+    : x < 5.2 ? S.kitchen : x < 10 ? S.lounge : y < 9.2 ? S.review : S.sick;
+  for (let y = 0; y < Y; y += .5) for (let x = 0; x < X; x += .5) {
+    const c = zone(x, y);
+    poly([iso(x, y), iso(x + .5, y), iso(x + .5, y + .5), iso(x, y + .5)], (x * 2 + y * 2) % 2 && x < 14 ? shade(c, -.025) : c);
+  }
+  if (px === 1) for (let x = 14; x < X; x += .5) { g.strokeStyle = shade(S.deck, -.25); g.beginPath(); g.moveTo(...iso(x, 0)); g.lineTo(...iso(x, Y)); g.stroke(); }
+  // room names painted on the floor
+  const floorText = (t, x, y, size = .42) => { g.save(); g.transform(TW / 2, TH / 2, -TW / 2, TH / 2, ox, oy);
+    g.font = `700 ${size}px system-ui,sans-serif`; g.fillStyle = S.floorText; g.fillText(t, x, y); g.restore(); };
+  floorText("ETSY BUDGETING TEMPLATES", .5, 5.0); floorText("BOARDROOM", 9.4, 5.0); floorText("KITCHEN", 2.2, 11.2);
+  floorText("LOUNGE", 5.8, 11.2); floorText("REVIEW · CALLS", 10.3, 9.0); floorText("OUT SICK", 10.3, 11.2, .36); floorText("PATIO", 15.0, 11.2, .6);
+
+  // back walls with windows onto the sky
+  box(-.2, -.2, 0, 14.2, .2, 2.6, S.wall); box(-.2, 0, 0, .2, Y, 2.6, S.wall);
+  for (let wx = .4; wx < 13.6; wx += 1.6) { poly([iso(wx, 0, .7), iso(wx + 1.3, 0, .7), iso(wx + 1.3, 0, 2.3), iso(wx, 0, 2.3)], S.win);
+    glow(...iso(wx + .65, 0, 1.5), 26, "rgba(90,130,255,.12)"); }
+  for (let wy = .4; wy < Y - .4; wy += 1.6) poly([iso(0, wy, .7), iso(0, wy + 1.3, .7), iso(0, wy + 1.3, 2.3), iso(0, wy, 2.3)], shade(S.win, -.06));
+
+  // ---- furniture + people, back to front ----
+  const items = [];
+  const put = (depth, draw) => items.push({ depth, draw });
+  const B = (x, y, z, w, d, h, c, o) => put(x + w / 2 + y + d / 2 + z * .01, () => box(x, y, z, w, d, h, c, o));
+  const desk = (x, y, lit) => {
+    B(x, y, 0, 1.4, .75, .72, S.white);
+    put(x + y + 1.1, () => { box(x + .35, y + .1, .72, .7, .08, .45, S.dark, { left: lit ? S.screen : shade(S.dark, .15) });
+      if (lit) glow(...iso(x + .7, y + .2, 1), 46, "rgba(80,190,255,.35)"); });
+    B(x + .45, y + 1.05, 0, .5, .5, .42, S.fabric);
+  };
+  for (const yy of [.9, 3.1]) for (const xx of [.9, 2.8, 4.7, 6.6]) desk(xx, yy, xx === .9 && yy === .9);
+  // boardroom
+  B(10, 1.5, 0, 3.2, 1.2, .72, S.wood);
+  for (const cx of [10.3, 11.3, 12.3]) { B(cx, .9, 0, .45, .45, .45, S.dark); B(cx, 2.95, 0, .45, .45, .45, S.dark); }
+  // kitchen: counter, coffee, microwave, fridge, table
+  B(.15, 6.4, 0, .85, 3.4, .92, S.white, { top: shade(S.metal, .35) });
+  B(.25, 6.8, .92, .55, .5, .55, S.dark);                    // coffee machine
+  put(7.9, () => glow(...iso(.55, 7, 1.3), 18, "rgba(255,140,60,.5)"));
+  B(.25, 8.3, .92, .6, .75, .42, S.metal);                   // microwave
+  put(9.4, () => { poly([iso(.85, 8.4, 1), iso(.85, 8.9, 1), iso(.85, 8.9, 1.25), iso(.85, 8.4, 1.25)], S.glow ? "#ffd27a" : shade(S.metal, -.3));
+    glow(...iso(.85, 8.65, 1.1), 22, "rgba(255,200,100,.45)"); });
+  B(.15, 9.95, 0, .85, 1.2, 2.1, S.white);                   // fridge
+  B(2.4, 8.9, 0, 1.3, 1.3, .7, S.wood);
+  B(3.95, 9.2, 0, .4, .4, .42, S.dark); B(2.1, 9.25, 0, .4, .4, .42, S.dark);
+  // lounge
+  put(16, () => poly([iso(5.8, 7.2), iso(9.4, 7.2), iso(9.4, 10.6), iso(5.8, 10.6)], S.rug));
+  B(5.9, 7.5, 0, .7, 2.6, .42, S.fabric); B(5.75, 7.5, .42, .25, 2.6, .5, S.fabric);
+  B(7.7, 10.1, 0, 1.5, .7, .42, S.fabric); B(7.7, 10.6, .42, 1.5, .25, .5, S.fabric);
+  B(7.2, 8.1, 0, .9, .9, .3, S.wood);
+  const plant = (x, y, s = 1) => { B(x, y, 0, .4 * s, .4 * s, .45 * s, S.white);
+    put(x + y + .5 * s, () => { const [px2, py2] = iso(x + .2 * s, y + .2 * s, .45 * s + .35 * s); g.fillStyle = S.plant;
+      g.beginPath(); g.arc(px2, py2, 13 * s, 0, 7); g.fill(); g.fillStyle = shade(S.plant, .15); g.beginPath(); g.arc(px2 - 4, py2 - 5, 7 * s, 0, 7); g.fill(); }); };
+  plant(9.3, 6.4); plant(5.3, .4); plant(13.4, .4, 1.2); plant(9.4, .4);
+  // review table + phone booths + sick cot
+  B(10.5, 6.4, 0, 1.2, 1.1, .7, S.white);
+  for (const by of [6.1, 7.7]) { B(12.6, by, 0, 1.2, 1.2, .06, S.dark);
+    B(13.65, by, 0, .15, 1.2, 2.2, S.dark); B(12.6, by, 0, 1.2, .12, 2.2, S.dark); B(12.6, by, 2.2, 1.2, 1.2, .1, S.dark); }
+  B(10.6, 9.9, 0, 1.8, .85, .38, S.white, { top: "#f3f3f3" });
+  B(12.8, 9.9, 0, 1.0, .85, .38, S.white, { top: "#f3f3f3" });
+  put(30, () => { const [cx, cy] = iso(11.5, 9.6, 1.5); g.fillStyle = "#e5484d"; g.beginPath(); g.arc(cx, cy, 4, 0, 7); g.fill(); glow(cx, cy, 30, "rgba(255,60,60,.35)"); });
+  // patio
+  const umbrella = (x, y, c) => { B(x, y, 0, .9, .9, .7, S.white);
+    put(x + y + 2.2, () => { box(x + .42, y + .42, .7, .06, .06, 1.4, S.metal);
+      poly([iso(x - .4, y + .45, 2.1), iso(x + .45, y - .4, 2.1), iso(x + 1.3, y + .45, 2.1), iso(x + .45, y + 1.3, 2.1)], c);
+      poly([iso(x + .45, y - .4, 2.1), iso(x + 1.3, y + .45, 2.1), iso(x + .45, y + .45, 2.45)], shade(c, .15));
+      poly([iso(x + 1.3, y + .45, 2.1), iso(x + .45, y + 1.3, 2.1), iso(x + .45, y + .45, 2.45)], shade(c, -.1)); }); };
+  umbrella(16.4, 2.4, "#e76f51"); umbrella(16.6, 7.7, "#2a9d8f");
+  B(18.2, 5.0, 0, 1.6, .7, .3, S.white); B(18.2, 6.6, 0, 1.6, .7, .3, S.white);
+  B(19.9, 10.6, 0, .3, .3, .7, S.metal);                       // ash bin
+  plant(14.4, .3, 1.3); plant(20.3, .3, 1.3); plant(14.4, 10.8, 1.1);
+
+  // people
+  const labels = [];
+  for (const a of AGENTS) {
+    const [x, y] = a.at;
+    put(x + y + .3, () => {
+      const zb = a.pose === "sit" || a.pose === "sleep" ? .42 : a.pose === "lie" ? .3 : 0;
+      const [sx, sy] = iso(x, y, zb), [fx, fy] = iso(x, y, 0);
+      g.fillStyle = S.shadow; g.beginPath(); g.ellipse(fx, fy, 11, 5, 0, 0, 7); g.fill();
+      const sh = shirt(a.n), skin = "#f1c7a3", hair = shade(sh, -.55);
+      if (a.pose === "lie") {
+        g.fillStyle = shade(sh, -.1); g.fillRect(sx - 16, sy - 9, 26, 9);
+        g.fillStyle = skin; g.beginPath(); g.arc(sx + 13, sy - 7, 6, 0, 7); g.fill();
+      } else {
+        if (a.pose === "stand") { g.fillStyle = "#3a4250"; g.fillRect(sx - 5, sy - 15, 4, 15); g.fillRect(sx + 1, sy - 15, 4, 15); }
+        const top = a.pose === "stand" ? sy - 15 : sy;
+        g.fillStyle = sh; g.beginPath(); g.roundRect(sx - 8, top - 17, 16, 18, 5); g.fill();
+        const hx = a.pose === "sleep" ? sx - 6 : sx, hy = a.pose === "sleep" ? top - 14 : top - 24;
+        g.fillStyle = skin; g.beginPath(); g.arc(hx, hy, 7, 0, 7); g.fill();
+        g.fillStyle = hair; g.beginPath(); g.arc(hx, hy - 2, 7, Math.PI, 0); g.fill();
+        if (a.prop === "cup") { g.fillStyle = "#fff"; g.fillRect(sx + 7, top - 9, 5, 6); }
+        if (a.prop === "plate") { g.fillStyle = "#fff"; g.beginPath(); g.ellipse(sx + 2, top - 1, 9, 3, 0, 0, 7); g.fill(); g.fillStyle = "#e9a03b"; g.fillRect(sx - 1, top - 4, 6, 3); }
+        if (a.prop === "smoke") { g.fillStyle = "#ddd"; g.fillRect(sx + 7, top - 12, 7, 2); g.fillStyle = "#ff7b39"; g.fillRect(sx + 13, top - 12, 2, 2);
+          for (let i = 0; i < 4; i++) { g.fillStyle = `rgba(220,220,225,${.5 - i * .1})`; g.beginPath(); g.arc(sx + 15 + i * 3, top - 18 - i * 8, 3 + i * 1.6, 0, 7); g.fill(); } }
+        if (a.pose === "sleep") { g.fillStyle = S.text; g.font = "700 12px system-ui"; g.fillText("z", hx + 9, hy - 10); g.font = "700 9px system-ui"; g.fillText("z", hx + 17, hy - 19); }
+        if (a.state === "work" || a.state === "call") glow(sx, top - 12, 40, "rgba(80,190,255,.18)");
+      }
+      labels.push({ a, x: sx, y: (a.pose === "lie" ? sy - 18 : (a.pose === "stand" ? sy - 15 : sy) - 34) });
+    });
+  }
+  // glass wall to the patio (door gap) and the railings in front
+  items.sort((p, q) => p.depth - q.depth);
+  items.filter(i => i.depth < 20.5 + 0).forEach(() => {});
+  const indoor = items.filter(i => true);
+  for (const it of indoor) it.draw();
+  const glassPanel = (x0, y0, x1, y1, h) => poly([iso(x0, y0), iso(x1, y1), iso(x1, y1, h), iso(x0, y0, h)], S.glass, "rgba(255,255,255,.35)");
+  for (let gy = 0; gy < Y; gy += 1.15) if (gy < 4.5 || gy > 6.8) glassPanel(14, gy, 14, Math.min(gy + 1.15, Y), 2.6);
+  for (let gx = 14; gx < X; gx += 1) glassPanel(gx, Y, gx + 1, Y, .9);
+  for (let gy = 0; gy < Y; gy += 1) glassPanel(X, gy, X, gy + 1, .9);
+  g.strokeStyle = S.metal; g.lineWidth = 2; g.beginPath(); g.moveTo(...iso(14, Y, .9)); g.lineTo(...iso(X, Y, .9)); g.lineTo(...iso(X, 0, .9)); g.stroke();
+
+  if (px > 1) { out.imageSmoothingEnabled = false; out.drawImage(cv, 0, 0, W, H); }
+
+  // labels last, crisp: who, and what they're on
+  const font = px > 1 ? "700 12px ui-monospace,Menlo,monospace" : "600 12px system-ui,sans-serif";
+  for (const { a, x, y } of labels) {
+    const line = a.card || a.tag, strong = !!a.card;
+    out.font = font; const w1 = out.measureText(a.n).width; out.font = font.replace("700", "400").replace("600", "400");
+    const w2 = line ? out.measureText(line).width : 0, w = Math.max(w1, w2) + 16, h = line ? 34 : 20;
+    const bx = Math.round(x - w / 2), by = Math.round(y - h);
+    out.fillStyle = strong ? (S.glow ? "rgba(20,60,110,.95)" : "#1f6feb") : S.label;
+    out.beginPath(); out.roundRect(bx, by, w, h, px > 1 ? 2 : 7); out.fill();
+    if (!strong) { out.strokeStyle = "rgba(0,0,0,.08)"; out.stroke(); }
+    out.fillStyle = strong ? "#fff" : S.labelFg; out.font = font; out.fillText(a.n, bx + 8, by + 14);
+    if (line) { out.font = font.replace("700", "400").replace("600", "400"); out.globalAlpha = strong ? .92 : .7; out.fillText(line, bx + 8, by + 28); out.globalAlpha = 1; }
+  }
+  // header strip: the one-second read
+  out.fillStyle = S.glow ? "rgba(10,14,26,.8)" : "rgba(255,255,255,.85)"; out.beginPath(); out.roundRect(20, 18, 470, 44, 10); out.fill();
+  out.font = "700 15px system-ui"; out.fillStyle = S.text; out.fillText("FOUNDLINGS HQ", 36, 46);
+  out.font = "500 14px system-ui"; out.fillStyle = "#1f9d55"; out.fillText("● 3 working", 180, 46);
+  out.fillStyle = S.glow ? "#9aa6c2" : "#6b7280"; out.fillText("● 13 on break", 285, 46); out.fillStyle = "#e5484d"; out.fillText("● 0 out sick", 395, 46);
+}
+for (const id of ["a", "b", "c"]) render(document.getElementById(id), STYLES[id]);
+</script>

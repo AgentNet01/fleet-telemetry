@@ -207,6 +207,25 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
 @media(max-width:560px){.hero .big{font-size:36px}.form .r2{grid-template-columns:1fr}.kan{grid-template-columns:repeat(5,74vw)}
   .orgrow{grid-template-columns:1fr}.pl{grid-template-columns:1fr 1fr}.pl .who,.pl .btn{grid-column:1/-1}
   .tabs{flex-wrap:wrap;overflow-x:visible}}
+.office{position:relative;overflow:hidden;border-radius:14px;border:1px solid var(--line);background:#cfe8f6;margin-top:10px;height:70vh;min-height:460px}
+.office:fullscreen{border:0;border-radius:0;width:100vw;height:100vh;margin:0}
+.office canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.ohud{position:absolute;left:12px;top:12px;display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;background:rgba(255,255,255,.92);color:#1f2933;
+  border-radius:11px;padding:8px 14px;font-size:13px;font-weight:500;box-shadow:0 2px 12px rgba(0,0,0,.14);font-variant-numeric:tabular-nums;max-width:calc(100% - 180px)}
+.ohud b{font-size:12px;letter-spacing:.08em;text-transform:uppercase}.o-w{color:#1a7f37}.o-i{color:#57606a}.o-d{color:#cf222e;font-weight:600}
+.o-ph{color:#57606a;border-left:1px solid #d0d7de;padding-left:12px}
+.o-nj{font:inherit;font-weight:600;color:#9a6700;background:#fff8c5;border:1px solid #eac54f;border-radius:8px;padding:2px 9px;cursor:pointer}
+.ofs{position:absolute;right:12px;top:12px;font:inherit;font-size:13px;font-weight:600;color:#1f2933;background:rgba(255,255,255,.92);border:0;border-radius:10px;
+  padding:8px 13px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.14)}
+.ofs:hover{background:#fff}
+.oticker{position:absolute;left:12px;bottom:12px;display:grid;gap:2px;max-width:min(560px,calc(100% - 24px));background:rgba(255,255,255,.88);color:#1f2933;
+  border-radius:11px;padding:8px 12px;font-size:12.5px;box-shadow:0 2px 12px rgba(0,0,0,.12)}
+.oticker time{color:#6e7781;font-variant-numeric:tabular-nums;margin-right:6px}.oticker .faint{color:#6e7781}
+.otip{position:absolute;max-width:280px;background:#fff;color:#1f2933;border-radius:10px;padding:9px 12px;font-size:13px;line-height:1.4;
+  box-shadow:0 8px 28px rgba(0,0,0,.28);pointer-events:none;display:grid;gap:2px;z-index:2}.otip[hidden]{display:none}.otip .faint{color:#6e7781}
+@media(max-width:820px){.ohud{font-size:12px;max-width:calc(100% - 24px)}.ofs{top:auto;bottom:12px}.oticker{display:none}}
+.roster{margin-top:14px}.roster summary{cursor:pointer;color:var(--dim);font-size:13px;font-weight:600;padding:6px 2px}
+@media(max-width:820px){.ohud{position:static;border-radius:0;box-shadow:none}}
 textarea[name=soul]{field-sizing:content;min-height:84px}
 </style>
 </head>
@@ -224,13 +243,22 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <button class="tab" role="tab" data-tab="vault">Vault</button>
   </div>
   <section id="overview">
-    <h2>Needs Jack <span id="njn"></span></h2>
-    <div class="hint">Only you can do these — approvals, logins, payment keys. Dismiss when handled.</div>
-    <div class="card nj" id="nj"></div>
-    <h2>Agents</h2>
-    <div class="hint">Click an agent for its machine, files, activity, current task, and to message it. Agents with no task are never pinged; when more than three sit free over 12 h the CEO is told.</div>
-    <div class="card" id="agents"></div>
-    <div class="hint" style="margin-top:12px">What the agents changed, said and did lately is under <b>Activity</b>.</div>
+    <div id="njwrap">
+      <h2>Needs Jack <span id="njn"></span></h2>
+      <div class="hint">Only you can do these — approvals, logins, payment keys. Dismiss when handled.</div>
+      <div class="card nj" id="nj"></div>
+    </div>
+    <div class="office" id="office">
+      <canvas id="officecv" role="img" aria-label="The office. Each agent is in the room that matches what it is doing: desks for work, the review table for checking, the booths for replies; a red badge means not answering. The same list is under All agents below."></canvas>
+      <div class="ohud" id="ohud"></div>
+      <button class="ofs" id="ofs" type="button">⛶ Full screen</button>
+      <div class="oticker" id="oticker" aria-live="polite"></div>
+      <div class="otip" id="otip" hidden></div>
+    </div>
+    <details class="roster"><summary>All agents as a list</summary>
+      <div class="hint">Click an agent for its machine, files, activity, current task, and to message it. Agents with no task are never pinged; when more than three sit free over 12 h the CEO is told.</div>
+      <div class="card" id="agents"></div>
+    </details>
   </section>
   <section id="activity" hidden>
     <h2>Working now</h2>
@@ -300,7 +328,7 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <h2>Read log</h2><div class="card" id="reads"></div>
   </section>
   <section id="detail" hidden>
-    <button class="back" data-back="overview">← All agents</button>
+    <button class="back" data-back="overview">← Office</button>
     <div class="ag">
       <div class="card convo">
         <div id="dhead"></div>
@@ -360,6 +388,7 @@ async function load(){
     : `<span class="chip muted">no sales yet</span>`;
 
   const nj=b.needs_jack||[];
+  $("njwrap").hidden = !nj.length;
   $("njn").innerHTML = nj.length?`<span style="color:var(--warn)">(${nj.length})</span>`:"";
   $("nj").innerHTML = nj.length ? nj.map(n=>{
     const [head,...rest]=String(n.text).split("\n"); const more=rest.join("\n").trim();
@@ -383,6 +412,7 @@ async function load(){
       <span style="min-width:0"><div class="nm">${esc(a.name)}${tag}</div><div class="what">${esc(label(a))}</div></span>
       <span class="ages">${freeFor(a)||(a.last_in?"msg "+ago(a.last_in):"—")}<br>${a.kind==="slack"?"via Slack":a.last_out?"said "+ago(a.last_out):"—"}</span></button>`;}).join("");
   document.querySelectorAll(".agent").forEach(el=>el.onclick=()=>showAgent(el.dataset.agent));
+  if(typeof Office!=="undefined") Office.update(b);
 
   renderPortfolio(b.products||[]);
   if(openProduct) renderProduct(openProduct, true);
@@ -801,5 +831,6 @@ $("theme").onclick=()=>{ const t=document.documentElement.dataset.theme==="light
 paintTheme();
 load(); setInterval(load, 10000);
 </script>
+<script src="office.js"></script>
 </body>
 </html>

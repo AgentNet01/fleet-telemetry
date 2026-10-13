@@ -666,6 +666,40 @@ def pin():
     print("pin OK")
 
 
+def stuck():
+    """A ready task nobody can take: a stale switch record never blocks a switch, and when no switch can fill it
+    the product's PM (else the CEO) is told once why and how to fix it."""
+    h, muse, clock = new_hub()
+    for n in ("Mar", "Per", "dot", "Pam"):
+        h.add_agent(n, "muse")
+    h.seat("ceo", "dot")
+    h.manage("dot", "team Mar marketer"); h.manage("dot", "team Per marketer")
+    h.manage("dot", "team Pam designer"); h.manage("dot", "team dot designer")    # no generalists free
+    pid = h.add_product("Etsy", brief="planners"); prj = h.add_project(pid, "launch")
+    h.issue_switch("Mar", "Etsy", "marketer")              # Mar never reports the switch back: it stays 'issued'
+    t1 = h.add_task(prj, "publish listing", role="marketer", done_def="live")
+    h.tick()
+    assert h.task(t1)["owner"] == "Mar"
+    t2 = h.add_task(prj, "social posts", role="marketer", done_def="posted")
+    h.manage("dot", f"task set {t2} owner Per")
+    for _ in range(3): h.tick()
+    assert h.task(t2)["owner"] == "Per", "Mar's stale switch to Etsy/marketer doesn't stop Per being switched in"
+
+    t3 = h.add_task(prj, "reply to buyers", role="marketer", done_def="answered")
+    h.manage("dot", f"task set {t3} owner Mar")             # Mar is busy on t1
+    for _ in range(3): h.tick()
+    told = [m for m in muse.sent.get("dot", []) if f"#{t3}" in m and "can't be filled" in m]
+    assert len(told) == 1, f"the CEO (no PM yet) is told once: {muse.sent.get('dot')}"
+    assert "Mar" in told[0] and f"#{t1}" in told[0] and f"fleet task set {t3} owner" in told[0], told[0]
+
+    h.set_pm("Etsy", "Pam")
+    t4 = h.add_task(prj, "price check", role="optimizer", done_def="a price")   # no optimizer, no generalist free
+    for _ in range(3): h.tick()
+    told = [m for m in muse.sent.get("Pam", []) if f"#{t4}" in m and "can't be filled" in m]
+    assert len(told) == 1 and "optimizer" in told[0], f"the PM is told: {muse.sent.get('Pam')}"
+    print("stuck OK")
+
+
 def handoff():
     """A finished task tells everyone else holding a task in the same project (and the PM) where its result is,
     so agents waiting on it informally don't sit idle."""
@@ -711,4 +745,4 @@ def links():
 
 if __name__ == "__main__":
     {"council": council, "lifecycle": lifecycle, "poll": poll, "placement": placement, "org": org, "suggest": suggest,
-     "seats": seats, "manage": manage, "loose": loose, "grants": grants, "timeline": timeline, "send_now": send_now, "dry": dry, "activity": activity, "observe": observe, "teams": teams, "pin": pin, "handoff": handoff, "links": links, "switch_between": switch_between}.get(sys.argv[1] if len(sys.argv) > 1 else "", tasks)()
+     "seats": seats, "manage": manage, "loose": loose, "grants": grants, "timeline": timeline, "send_now": send_now, "dry": dry, "activity": activity, "observe": observe, "teams": teams, "pin": pin, "handoff": handoff, "links": links, "switch_between": switch_between, "stuck": stuck}.get(sys.argv[1] if len(sys.argv) > 1 else "", tasks)()
