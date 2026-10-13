@@ -1413,7 +1413,8 @@ function drawLabels(g) {
   const tone = p => p.flag ? 0 : p.mode === "ceo" ? 1 : p.mode !== "idle" ? 2 : 3;
   // where a person's head and feet are on screen (canvas px), and the head's radius: the 3D view supplies p.scr
   const anc = p => R3 ? p.scr : p.handW && { head: toScreen(p.handW.head), foot: toScreen(P(p.x, p.y, 0)), r: BODY.head * p.look.scale * cam.s };
-  const list = labelMode === "off" ? [] : [...people.values()].filter(p => anc(p) && (labelMode === "all" || tone(p) === 1 || tone(p) === 2 || p.flag)).sort((a, b) => tone(a) - tone(b));
+  const eyed = R3 && people.get(R3.gazed);                     // 3D eye tracking: whoever is being looked at gets a label whatever the mode, first in line, ringed
+  const list = [...people.values()].filter(p => anc(p) && (p === eyed || (labelMode !== "off" && (labelMode === "all" || tone(p) === 1 || tone(p) === 2 || p.flag)))).sort((a, b) => (b === eyed) - (a === eyed) || tone(a) - tone(b));
   const placed = []; hits = [];
   for (const p of people.values()) { const a = anc(p); if (!a) continue; const [hx, hy] = a.head, [fx, fy] = a.foot, bw = R3 ? Math.max(12 * ls, a.r * 1.1) : 12 * ls;
     hits.push({ p, r: [Math.min(hx, fx) - bw, hy - (R3 ? a.r : 10 * ls), 2 * bw, Math.max(18 * ls, fy - hy + bw)] }); }
@@ -1421,21 +1422,22 @@ function drawLabels(g) {
   for (const p of list) {
     const a = anc(p), [hx, hy] = a.head, top = hy - a.r - 2 * ls;
     if (hx < 0 || hx > W || hy < 0 || hy > H) continue;          // zoomed past them: no label pinned to the edge
-    const t = tone(p), line2 = t === 1 || t === 2 ? p.card : null, badgeOnly = labelMode === "working" && t === 0;
+    const t = tone(p), line2 = t === 1 || t === 2 ? p.card : null, badgeOnly = labelMode === "working" && t === 0 && p !== eyed;
     g.font = LABEL_FONT(fs); const w1 = g.measureText(p.name).width; g.font = LABEL_FONT(fs2, 500); const w2 = line2 ? g.measureText(line2).width : 0;
     const w = badgeOnly ? 0 : Math.max(w1, w2) + pad * 2, h = badgeOnly ? 0 : line2 ? fs + fs2 + pad * 1.6 : fs + pad * 1.2, badge = p.flag ? 16 * ls : 0;
     const ay = top - badge - 4 * ls;
     const cands = [[0, 0], [w * .55, -2 * ls], [-w * .55, -2 * ls], [0, -h - 3 * ls], [w * .6, -h - 3 * ls], [-w * .6, -h - 3 * ls], [w * .75, h * .6], [-w * .75, h * .6]];
     let rect = null;
     for (const [dx, dy] of cands) { const r = [hx - w / 2 + dx, ay - h + dy, w, h]; if (r[0] < 2 || r[0] + w > W - 2 || r[1] < 2) continue; if (!collide(r)) { rect = r; break; } }
-    if (!rect) { if (t === 3) continue; rect = [clamp(hx - w / 2, 2, W - w - 2), Math.max(2, ay - h), w, h]; }
+    if (!rect) { if (t === 3 && p !== eyed) continue; rect = [clamp(hx - w / 2, 2, W - w - 2), Math.max(2, ay - h), w, h]; }
     placed.push(badge ? [rect[0], rect[1], rect[2], rect[3] + badge + 4 * ls] : rect);
     const [bx, by] = rect, moved = !badgeOnly && Math.hypot(bx + w / 2 - hx, by + h - ay) > 10 * ls;
     if (!badgeOnly) {
     if (moved) { g.strokeStyle = "rgba(30,36,48,.45)"; g.lineWidth = 1.2 * ls; g.beginPath(); g.moveTo(clamp(hx, bx + 4, bx + w - 4), by + h); g.lineTo(hx, top - badge); g.stroke(); }
     const bg = t === 0 ? "rgba(255,255,255,.96)" : t === 1 ? "#6d3fd6" : t === 2 ? "#1f6feb" : "rgba(255,255,255,.86)";
     g.fillStyle = bg; g.beginPath(); g.roundRect(bx, by, w, h, rad); g.fill();
-    if (t === 0 && p === hover) { g.strokeStyle = "#d63031"; g.lineWidth = 1.6 * ls; g.stroke(); } else if (t === 0 || t === 3) { g.strokeStyle = "rgba(0,0,0,.1)"; g.lineWidth = 1; g.stroke(); }
+    if (p === eyed) { g.strokeStyle = "#f5a524"; g.lineWidth = 2.5 * ls; g.stroke(); }
+    else if (t === 0 && p === hover) { g.strokeStyle = "#d63031"; g.lineWidth = 1.6 * ls; g.stroke(); } else if (t === 0 || t === 3) { g.strokeStyle = "rgba(0,0,0,.1)"; g.lineWidth = 1; g.stroke(); }
     g.fillStyle = t === 1 || t === 2 ? "#fff" : t === 0 ? "#b42318" : "#1f2933"; g.font = LABEL_FONT(fs); g.textBaseline = "top";
     g.fillText(p.name, bx + pad, by + pad * .65);
     if (line2) { g.font = LABEL_FONT(fs2, 500); g.globalAlpha = .92; g.fillText(line2, bx + pad, by + pad * .65 + fs + 2 * ls); g.globalAlpha = 1; }
@@ -1576,10 +1578,11 @@ function mount() {
       try { localStorage.office3d = on ? "1" : ""; } catch {}
       if (on && !window.Office3D) { try { (await import("./office3d.js")).start(wrap, cv, window.Office.sim); } catch (e) { console.error("office 3D", e); on = false; } }
       else if (!on && window.Office3D) { window.Office3D.stop(); cache = null; }
-      b3.textContent = on ? "2D" : "3D"; bh.hidden = !on;
+      b3.textContent = on ? "2D" : "3D"; bh.hidden = !on; if (!on) $("oeyes").hidden = true;
     };
     b3.onclick = () => set3d(!window.Office3D);
-    bh.onclick = () => window.Office3D && window.Office3D.look(bh);
+    const be = $("oeyes");
+    bh.onclick = () => window.Office3D && window.Office3D.look(bh, be); be.onclick = () => window.Office3D && window.Office3D.eyes();
     let saved = ""; try { saved = localStorage.office3d; } catch {}
     if (Q.get("office") === "3d" || (saved && Q.get("office") !== "2d")) set3d(true);
   }

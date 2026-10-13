@@ -1,9 +1,12 @@
 """The 3D office in a real browser (Playwright, Chromium with software WebGL), used the way Jack uses it.
 
-    python3 test_office3d.py toggle | people | camera | head | webcam | shots
+    python3 test_office3d.py toggle | people | camera | views | fills | head | webcam | lean | steady | eyes | shots
 """
 import os
+import subprocess
 import sys
+import tempfile
+import urllib.request
 
 from playwright.sync_api import sync_playwright
 
@@ -11,6 +14,31 @@ from test_ui import PASSWORD, SHOTS, seeded
 
 GL = []   # headless Chromium already gives WebGL in software; forcing ANGLE/SwiftShader for everything dropped the whole page to ~1 frame a second
 FAKE_CAM = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
+
+
+FACE_URL = "https://storage.googleapis.com/mediapipe-assets/portrait.jpg"   # MediaPipe's public sample face, looking at the lens
+
+
+def face_cam(name, parts, grain=0):
+    """Browser flags for a webcam that shows a real face. parts: [(seconds, how much nearer than the first part)], looped.
+    grain: sensor noise, different on every frame (0 = a perfectly clean camera)."""
+    d = os.path.join(tempfile.gettempdir(), "office3d-face"); os.makedirs(d, exist_ok=True)
+    photo, clip = os.path.join(d, "portrait.jpg"), os.path.join(d, name + ".y4m")      # raw video: the headless browser cannot decode a compressed camera file
+    if not os.path.exists(photo):
+        urllib.request.urlretrieve(FACE_URL, photo)
+    if not os.path.exists(clip):
+        W, H, FPS = 480, 270, 5
+        with open(clip + ".part", "wb") as f:
+            f.write(f"YUV4MPEG2 W{W} H{H} F{FPS}:1 Ip A1:1 C420jpeg\n".encode())
+            for secs, z in parts:              # the face stays centred; nearer = the same photo cropped tighter
+                w, h = round(1066 / z), round(600 / z)
+                raw = subprocess.run(["ffmpeg", "-v", "error", "-loop", "1", "-t", str(secs), "-r", str(FPS), "-i", photo, "-vf",
+                                      f"pad=1400:1400:290:300:gray,crop={w}:{h}:{690 - w // 2}:{470 - h // 2},scale={W}:{H}" + (f",noise=alls={grain}:allf=t" if grain else ""),
+                                      "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"], check=True, capture_output=True).stdout
+                size = W * H * 3 // 2
+                f.write(b"".join(b"FRAME\n" + raw[i:i + size] for i in range(0, len(raw), size)))
+        os.replace(clip + ".part", clip)
+    return [*FAKE_CAM, "--use-file-for-fake-video-capture=" + clip]
 
 
 class Office:
@@ -47,8 +75,9 @@ class Office:
         b = self.page.locator("#office").bounding_box()
         return b["x"] + xy[0], b["y"] + xy[1]
 
-    def errors(self):
-        return [l for l in self.log if l.startswith(("pageerror", "error"))]
+    def errors(self, tracker=True):        # tracker=False: leave out what the face tracker's own wasm prints (it logs its start-up notes as errors)
+        chatter = ("mediapipe", "tflite", "tensorflow", "failed to load resource")
+        return [l for l in self.log if l.startswith(("pageerror", "error")) and (tracker or not any(c in l.lower() for c in chatter))]
 
 
 def toggle(pw):
@@ -163,6 +192,92 @@ def fills(pw):
     assert not o.errors(), o.errors()
 
 
+def lean(pw):
+    o = Office(pw, args=face_cam("lean", [(16, 1), (16, 1.3)]))       # a real face that sits, then comes 1.3× nearer, and back
+    page = o.page
+    d0 = o.state()["cam"]["dist"]
+    page.locator("#ohead").click()
+    page.wait_for_function("Office3D.debug.state().head === 'tracking'", timeout=90000)
+    page.wait_for_function("Math.abs(Office3D.debug.state().lean - 1) > .17", timeout=60000)
+    page.wait_for_timeout(1500)
+    s = o.state()
+    near = s["lean"] < 1                                              # tracking may have started on either part of the clip
+    true = 1 / 1.3 if near else 1.3
+    assert abs(s["lean"] / true - 1) < .08, f"the distance read from the face is within 8% of the truth ({true:.3f}): {s['lean']:.3f}"
+    want = d0 / min(8, max(.5, s["lean"] ** -3))
+    assert abs(s["cam"]["dist"] / want - 1) < .12, f"leaning {'in' if near else 'back'} moves the camera with the cube of the lean: {d0:.1f} → {s['cam']['dist']:.1f}, expected {want:.1f}"
+    assert near and s["cam"]["dist"] < d0 * .55 or not near and s["cam"]["dist"] > d0 * 1.6, "…and that is a big move, not a nudge"
+    page.locator(".ohome").click()                                    # Home: where the face is now becomes the resting distance
+    page.wait_for_function("Math.abs(Office3D.debug.state().lean - 1) < .04 && Math.abs(Office3D.debug.state().cam.dist / %f - 1) < .06" % d0, timeout=9000)
+    assert not o.errors(tracker=False), o.errors(tracker=False)
+    print(f"  lean read {s['lean']:.3f} (truth {true:.3f}); camera {d0:.1f} → {s['cam']['dist']:.1f}")
+
+
+def steady(pw):
+    import statistics
+    o = Office(pw, args=face_cam("grainy", [(12, 1)], grain=14))       # a still face through a noisy camera: every frame differs
+    page = o.page
+    page.locator("#ohead").click()
+    page.wait_for_function("Office3D.debug.state().head === 'tracking' && Office3D.debug.state().eyes", timeout=90000)
+    page.wait_for_timeout(4000)
+    rows = []
+    for _ in range(40):
+        s = o.state(); rows.append((s["cam"]["dist"], s["eyes"][0], s["eyes"][1])); page.wait_for_timeout(200)
+    dist, px, py = zip(*rows)
+    shimmer = statistics.pstdev(dist) / statistics.mean(dist)
+    assert shimmer < .01, f"sitting still, the zoom does not breathe: the camera distance wanders {shimmer:.2%}"
+    assert statistics.pstdev(px) < 1 and statistics.pstdev(py) < 1, f"sitting still, the eye reading holds within 1 cm: {statistics.pstdev(px):.2f}, {statistics.pstdev(py):.2f}"
+    assert not o.errors(tracker=False), o.errors(tracker=False)
+    print(f"  through a noisy camera: zoom wanders {shimmer:.2%}; eye reading wanders {statistics.pstdev(px):.2f} cm across, {statistics.pstdev(py):.2f} cm up-down")
+
+
+def eyes(pw):
+    o = Office(pw, args=face_cam("still", [(20, 1)]))
+    page = o.page
+    page.locator("#ohead").click()
+    page.wait_for_function("Office3D.debug.state().head === 'tracking'", timeout=90000)
+    page.wait_for_function("Office3D.debug.state().eyes", timeout=30000)
+    real = o.state()["eyes"]
+    assert abs(real[0]) < 8 and abs(real[1]) < 8, f"a real face looking at the lens reads as looking near the lens (cm): {real[:2]}"
+    # A photo cannot move its eyes, so from here the eye reading is supplied: eyes whose sight line lands (x-700)/45 cm right, (40-y)/45 cm up of the lens for screen spot (x, y)
+    look_at = lambda x, y, shake=(0, 0): o.js(f"Office3D.debug.setEyes([{(x - 700) / 45 + shake[0]}, {(40 - y) / 45 + shake[1]}, 0, 0])")
+    centre = lambda sel: o.js(f"(() => {{ const r = document.querySelector('{sel}').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }})()")
+    btn = page.locator("#oeyes")
+    assert btn.is_visible() and "Calibrate" in btn.inner_text(), "with a face in view, eye calibration is offered"
+    btn.click()
+    shakes = [(.2, -.1), (-.25, .15), (.1, .25), (-.15, -.2), (.25, .05), (-.05, -.25), (.15, .2), (-.2, .1), (.05, -.15)]     # ±0.25 cm of unsteadiness
+    for k in range(9):
+        assert f"{k + 1} of 9" in page.locator(".ocal").inner_text()
+        x, y = centre(".ocalspot")
+        look_at(x, y, shakes[k])
+        page.mouse.click(x, y)
+    page.locator(".ocal").wait_for(state="detached")
+    cal = o.state()["cal"]
+    assert 3 < cal["err"] < 30, f"the miss it reports matches the ±0.25 cm (±11 px) put in: {cal['err']:.1f} px"
+    assert f"±{round(cal['err'])} px" in btn.inner_text(), f"the button shows that miss: {btn.inner_text()}"
+    while "off" not in page.locator("#olab").inner_text():
+        page.locator("#olab").click()
+    inked = lambda: o.js("(() => { const c = document.getElementById('officecv'), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 200) n++; return n; })()")
+    box = page.locator("#office").bounding_box()
+    look_at(box["x"] + 40, box["y"] + box["height"] - 120)             # an empty corner
+    page.wait_for_timeout(1200)
+    assert o.state()["gazed"] is None and inked() == 0, "looking at nobody, with labels off: no label"
+    for name in ["Ada", "Bea", "Cy", "dot"]:
+        look_at(*o.at(o.js(f"Office3D.debug.head('{name}')")))
+        page.wait_for_function(f"Office3D.debug.state().gazed === '{name}'", timeout=6000)
+        gx, gy = o.state()["gaze"]; hx, hy = o.at(o.js(f"Office3D.debug.head('{name}')"))
+        assert abs(gx - hx) < 12 and abs(gy - hy) < 12, f"the gaze point lands on {name}'s head: {(gx, gy)} vs {(hx, hy)}"
+        page.wait_for_timeout(400)
+        assert inked() > 300, f"looking at {name} brings up their label"
+    page.screenshot(path=os.path.join(SHOTS, "3d-eyes.png"))
+    look_at(box["x"] + 40, box["y"] + box["height"] - 120)
+    page.wait_for_function("Office3D.debug.state().gazed === null", timeout=6000)
+    page.wait_for_timeout(400)
+    assert inked() == 0, "looking away takes the label down again"
+    assert not o.errors(tracker=False), o.errors(tracker=False)
+    print(f"  real face reads {real[0]:.1f}, {real[1]:.1f} cm from the lens; calibration miss {cal['err']:.1f} px")
+
+
 def head(pw):
     o = Office(pw)
     a = o.js("Office3D.debug.probe()")
@@ -190,7 +305,7 @@ def webcam(pw):
     btn.click()
     page.wait_for_function("Office3D.debug.state().head === 'off' && !Office3D.debug.state().video")
     assert btn.get_attribute("aria-pressed") == "false"
-    assert not [e for e in o.errors() if "mediapipe" not in e.lower() and "tflite" not in e.lower() and "Failed to load resource" not in e], o.errors()
+    assert not o.errors(tracker=False), o.errors(tracker=False)
 
 
 def shots(pw):
@@ -219,5 +334,5 @@ def shots(pw):
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "toggle"
     with sync_playwright() as pw:
-        {"toggle": toggle, "people": people, "camera": camera, "views": views, "fills": fills, "head": head, "webcam": webcam, "shots": shots}[mode](pw)
+        {"toggle": toggle, "people": people, "camera": camera, "views": views, "fills": fills, "lean": lean, "steady": steady, "eyes": eyes, "head": head, "webcam": webcam, "shots": shots}[mode](pw)
     print("ok", mode)

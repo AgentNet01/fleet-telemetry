@@ -3,12 +3,12 @@
 import { THREE, lerp, clamp } from "./office3d-vox.js";
 import { buildWorld } from "./office3d-world.js";
 import { People } from "./office3d-people.js";
+import { createLook } from "./office3d-look.js";
 
 const FOV = 30 * Math.PI / 180, NEAR = .5, FAR = 2400;
 const HOME = { yaw: Math.PI / 4, pitch: .42, zoom: 1, target: [10.2, .7, 5.9] };      // the classic corner view (three coords: x, up, y)
 const HEAD_GAIN = +new URLSearchParams(location.search).get("officeHead") || 1;      // calibration: how far the view swings per head move
-const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
-const FACE_MODEL = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
+const LEAN = +new URLSearchParams(location.search).get("officeLean") || 3;           // calibration: lean in to 0.7 of your resting distance → zoom 0.7^-LEAN (2.9× at 3)
 
 export function start(wrap, overlay, sim) {
   const cv = Object.assign(document.createElement("canvas"), { id: "office3dcv" }); cv.setAttribute("aria-hidden", "true");
@@ -50,51 +50,33 @@ export function start(wrap, overlay, sim) {
   }
   wrap.appendChild(cube);
 
-  // ── head: x, y in screen half-widths/heights off centre (right, up), z = distance relative to where you sat down
-  const head = { x: 0, y: 0, z: 1, tx: 0, ty: 0, tz: 1, state: "off", forced: false, seen: 0 };
-  let stream = null, video = null, detector = null, lookToken = 0, neutral = null, lastFrame = -1, lookBtn = null, calm = null;
-  // One Euro filter: heavy smoothing while the head is still (no shimmer), light while it moves (no lag). minCut in Hz; beta = how fast it lets go.
-  const euro = (minCut, beta) => { let x = null, dx = 0, t = 0; const a = (cut, dt) => 1 / (1 + 1 / (2 * Math.PI * cut * dt));
-    return (val, now) => { if (x === null) { x = val; t = now; return x; } const dt = Math.max(.001, (now - t) / 1000); t = now;
-      dx += a(1, dt) * ((val - x) / dt - dx); x += a(minCut + beta * Math.abs(dx), dt) * (val - x); return x; }; };
-  const paintBtn = () => { if (!lookBtn) return; const s = head.state;
+  // ── home: back to the starting view, and "where I sit now" becomes the resting pose the head is measured from
+  const home = wrap.appendChild(Object.assign(document.createElement("button"), { type: "button", className: "ofs ohome", title: "Home: the starting view. With Look around on, where you sit now becomes your resting distance.",
+    innerHTML: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 1.6 1.5 7.4h1.9v6.3h3.5V9.6h2.2v4.1h3.5V7.4h1.9z" fill="currentColor"/></svg>' }));
+  home.setAttribute("aria-label", "Home view"); home.onclick = () => api.reset();
+
+  // ── head and eyes: office3d-look.js measures them; here they move the camera and pick who you are looking at.
+  // head x, y: screen half-widths/heights off centre (right, up); z: distance ÷ resting distance (lean in → below 1 → zoom)
+  const head = { x: 0, y: 0, z: 1, forced: null };
+  let lookBtn = null, eyesBtn = null, gazed = null, cand = null, candAt = 0, heldAt = 0, distNow = 0;
+  const paintBtn = () => { if (!lookBtn) return; const s = look.state, seeing = s === "tracking" || s === "lost";
     lookBtn.setAttribute("aria-pressed", String(s !== "off" && !s.startsWith("error")));
-    lookBtn.textContent = s === "off" ? "◉ Look around" : s === "starting" ? "◉ Asking for the camera…" : s === "loading" ? "◉ Loading tracker…" : s === "tracking" ? "◉ Looking" : s === "lost" ? "◉ No face in view" : "◉ " + s.slice(6); };
-  const setState = s => { head.state = s; paintBtn(); };
-  function lookOff(state = "off") {
-    lookToken++; if (stream) for (const t of stream.getTracks()) t.stop();
-    stream = video = null; neutral = null; if (detector) { try { detector.close(); } catch {} detector = null; }
-    if (!head.forced) head.tx = head.ty = 0, head.tz = 1;
-    setState(state);
-  }
-  async function lookOn() {
-    const token = ++lookToken; setState("starting");
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240, facingMode: "user" }, audio: false });
-      if (token !== lookToken) { for (const t of s.getTracks()) t.stop(); return; }
-      stream = s; video = Object.assign(document.createElement("video"), { srcObject: s, muted: true, playsInline: true });   // never added to the page, never sent anywhere
-      await video.play(); if (token !== lookToken) return;
-    } catch (e) { if (token === lookToken) lookOff("error:Camera unavailable"); return; }
-    setState("loading");
-    try {
-      const vis = await import(/* the tracker is 10 MB of wasm: fetched only when asked for */ VISION + "/vision_bundle.mjs");
-      const files = await vis.FilesetResolver.forVisionTasks(VISION + "/wasm");
-      const make = delegate => vis.FaceDetector.createFromOptions(files, { baseOptions: { modelAssetPath: FACE_MODEL, delegate }, runningMode: "VIDEO" });
-      const det = await make("GPU").catch(() => make("CPU"));
-      if (token !== lookToken) { det.close(); return; }
-      detector = det; setState("tracking");
-    } catch (e) { console.warn("office 3D: face tracker did not load", e); if (token === lookToken) lookOff("error:Tracker did not load"); }
-  }
-  function track(now) {
-    if (!detector || !video || video.readyState < 2 || video.currentTime === lastFrame) return;
-    lastFrame = video.currentTime;
-    let faces = []; try { faces = detector.detectForVideo(video, now).detections; } catch { return; }
-    const f = faces.map(d => d.boundingBox).sort((a, b) => b.width - a.width)[0];          // the nearest face is the viewer
-    if (!f) { if (now - head.seen > 1500 && head.state === "tracking") { setState("lost"); head.tx = head.ty = 0; head.tz = 1; } return; }
-    head.seen = now; if (head.state === "lost") setState("tracking");
-    const vw = video.videoWidth, vh = video.videoHeight, m = { x: (f.originX + f.width / 2) / vw, y: (f.originY + f.height / 2) / vh, w: f.width / vw };
-    if (!neutral) { neutral = m; calm = [euro(.8, 2), euro(.8, 2), euro(.4, 1)]; }           // wherever you were sitting when it first saw you is "centre"
-    head.tx = calm[0](clamp((neutral.x - m.x) * 3.2, -1.4, 1.4), now); head.ty = calm[1](clamp((neutral.y - m.y) * 3.2, -1.2, 1.2), now); head.tz = calm[2](clamp(neutral.w / m.w, .6, 1.7), now);   // the camera sees you mirrored
+    lookBtn.textContent = s === "off" ? "◉ Look around" : s === "starting" ? "◉ Asking for the camera…" : s === "loading" ? "◉ Loading tracker…" : s === "tracking" ? "◉ Looking" : s === "lost" ? "◉ No face in view" : "◉ " + s.slice(6);
+    eyesBtn.hidden = !seeing; eyesBtn.setAttribute("aria-pressed", String(!!look.cal));
+    eyesBtn.textContent = look.cal ? `◎ Eyes ±${Math.round(look.cal.err)} px` : "◎ Calibrate eyes"; };
+  const look = createLook(paintBtn);
+  const ring = wrap.appendChild(Object.assign(document.createElement("div"), { className: "ogaze", hidden: true }));     // where the eyes are read to be, as wide as the reading is unsure
+  // who the eyes are on: the figure nearest the gaze point, if near enough, once it has stayed the nearest for a quarter second
+  function whom(now) {
+    const g = look.gaze(), r = g && wrap.getBoundingClientRect(); let best = null, bd = Infinity;
+    ring.hidden = !g || !!wrap.querySelector(".ocal");
+    if (g) { const k = overlay.width / r.width, x = (g[0] - r.left) * k, y = (g[1] - r.top) * k, unsure = clamp(look.cal.err, 24, 160), reach = clamp(unsure * 1.5, 70, 220) * k;
+      ring.style.width = ring.style.height = 2 * unsure + "px"; ring.style.transform = `translate(${g[0] - r.left - unsure}px,${g[1] - r.top - unsure}px)`;
+      for (const p of sim.people.values()) { if (!p.scr) continue; const [hx, hy] = p.scr.head, [fx, fy] = p.scr.foot, dx = fx - hx, dy = fy - hy;
+        const t = clamp(((x - hx) * dx + (y - hy) * dy) / (dx * dx + dy * dy || 1), 0, 1), d = Math.hypot(x - hx - t * dx, y - hy - t * dy) * (p.name === gazed ? .7 : 1);   // anywhere along the body counts; whoever is already picked holds on a little
+        if (d < reach && d < bd) bd = d, best = p.name; } }
+    if (best !== cand) cand = best, candAt = now;
+    if (cand && now - candAt > 250) gazed = cand, heldAt = now; else if (!cand && now - heldAt > 600) gazed = null;
   }
 
   // ── one picture
@@ -110,14 +92,14 @@ export function start(wrap, overlay, sim) {
       goal.target.x += (-Math.sin(goal.yaw) * f + Math.cos(goal.yaw) * s) * sp; goal.target.z += (-Math.cos(goal.yaw) * f - Math.sin(goal.yaw) * s) * sp;
       goal.yaw += ((keys.has("e") ? 1 : 0) - (keys.has("q") ? 1 : 0)) * 1.2 * dt; limit(); }
     cur.yaw = lerp(cur.yaw, goal.yaw, k); cur.pitch = lerp(cur.pitch, goal.pitch, k); cur.zoom = lerp(cur.zoom, goal.zoom, k); cur.target.lerp(goal.target, k);
-    head.x = lerp(head.x, head.tx, hk); head.y = lerp(head.y, head.ty, hk); head.z = lerp(head.z, head.tz, hk);
+    const h = head.forced || look.head; head.x = lerp(head.x, h[0], hk); head.y = lerp(head.y, h[1], hk); head.z = lerp(head.z, h[2], hk);
     // The screen is a window: a rectangle fixed in the world at the target, facing the orbit direction. The eye is the
     // camera; when the head moves, the eye moves and the frustum skews so the window's edges stay on the screen's edges.
-    const dist = fitDist() / cur.zoom, cp = Math.cos(cur.pitch);
+    const dist = distNow = Math.max(2, fitDist() / (cur.zoom * clamp(Math.pow(1 / head.z, LEAN), .5, 8))), cp = Math.cos(cur.pitch);   // leaning in is zooming in
     back.set(Math.sin(cur.yaw) * cp, Math.sin(cur.pitch), Math.cos(cur.yaw) * cp);
     camera.position.copy(cur.target).addScaledVector(back, dist); camera.up.set(0, 1, 0); camera.lookAt(cur.target);
     right.set(1, 0, 0).applyQuaternion(camera.quaternion); up.set(0, 1, 0).applyQuaternion(camera.quaternion);
-    const hh = dist * Math.tan(FOV / 2), hw = hh * W / Math.max(1, H), ex = head.x * hw * 1.1 * HEAD_GAIN, ey = head.y * hh * 1.1 * HEAD_GAIN, ez = dist * head.z;
+    const hh = dist * Math.tan(FOV / 2), hw = hh * W / Math.max(1, H), ex = head.x * hw * 1.1 * HEAD_GAIN, ey = head.y * hh * 1.1 * HEAD_GAIN, ez = dist;
     camera.position.copy(cur.target).addScaledVector(back, ez).addScaledVector(right, ex).addScaledVector(up, ey);
     const n = NEAR / ez;
     camera.projectionMatrix.makePerspective((-hw - ex) * n, (hw - ex) * n, (hh - ey) * n, (-hh - ey) * n, NEAR, FAR);
@@ -128,7 +110,7 @@ export function start(wrap, overlay, sim) {
   const toScreen = (p, sx, sy) => { v2.copy(p).applyMatrix4(camera.matrixWorldInverse); if (v2.z > -NEAR) return null; v2.applyMatrix4(camera.projectionMatrix); return [(v2.x + 1) / 2 * sx, (1 - v2.y) / 2 * sy]; };
   function frame(dt, T, night, hover) {
     resize(); if (!W) return;
-    track(performance.now()); aim(dt);
+    const now = performance.now(); look.track(now); aim(dt);
     world.update(dt, T, night, camera); people.update(dt, T, night, hover);
     renderer.render(world.scene, camera);
     // where each head and pair of feet landed on screen: office.js hangs the name labels and the click boxes on these
@@ -138,7 +120,7 @@ export function start(wrap, overlay, sim) {
       const top = toScreen(v.addScaledVector(up, .3 * r.k), overlay.width, overlay.height)   /* clears the hair, seen from above */, f = toScreen(v.set(p.x, p.lying ? p.z : 0, p.y), overlay.width, overlay.height);
       if (h && top && f) p.scr = { head: h, foot: f, r: Math.hypot(top[0] - h[0], top[1] - h[1]) };
     }
-    ready = true;
+    whom(now); ready = true;
   }
 
   const api = window.Office3D = {
@@ -150,22 +132,25 @@ export function start(wrap, overlay, sim) {
       else { goal.yaw -= dx * .006; goal.pitch += dy * .005; }
       limit();
     },
-    reset() { goal.yaw = HOME.yaw + Math.round((goal.yaw - HOME.yaw) / (2 * Math.PI)) * 2 * Math.PI; goal.pitch = HOME.pitch; goal.zoom = 1; goal.target.set(...HOME.target); neutral = null; },
-    look(btn) { lookBtn = btn; head.state === "off" || head.state.startsWith("error") ? lookOn() : lookOff(); },
+    reset() { goal.yaw = HOME.yaw + Math.round((goal.yaw - HOME.yaw) / (2 * Math.PI)) * 2 * Math.PI; goal.pitch = HOME.pitch; goal.zoom = 1; goal.target.set(...HOME.target); look.ground(); },
+    look(btn, eyes) { lookBtn = btn; eyesBtn = eyes; look.state === "off" || look.state.startsWith("error") ? look.on() : look.off(); },
+    eyes() { if (look.state === "tracking" && !wrap.querySelector(".ocal")) look.calibrate(wrap).then(paintBtn); },
+    get gazed() { return gazed; },
     stop() {
-      lookOff(); removeEventListener("keydown", onKey); removeEventListener("keyup", onKey); removeEventListener("blur", leave);
+      look.stop(); removeEventListener("keydown", onKey); removeEventListener("keyup", onKey); removeEventListener("blur", leave);
       wrap.removeEventListener("pointerenter", enter); wrap.removeEventListener("pointerleave", leave); overlay.removeEventListener("contextmenu", noMenu);
       for (const p of sim.people.values()) p.scr = null;
-      renderer.dispose(); cv.remove(); cube.remove(); window.Office3D = null;
+      renderer.dispose(); cv.remove(); cube.remove(); home.remove(); ring.remove(); window.Office3D = null;
     },
     debug: {
-      state: () => ({ ready, head: head.state, video: !!(stream && stream.getTracks().some(t => t.readyState === "live")), rigs: [...people.rigs.keys()],
-        cam: { yaw: cur.yaw, pitch: cur.pitch, dist: fitDist() / cur.zoom, target: cur.target.toArray() } }),
+      state: () => ({ ready, head: look.state, video: look.live, rigs: [...people.rigs.keys()], lean: head.z, eyes: look.f, gazed, gaze: look.gaze(), cal: look.cal,
+        cam: { yaw: cur.yaw, pitch: cur.pitch, dist: distNow, target: cur.target.toArray() } }),
       project: (x, y, z) => { const s = toScreen(v.set(x, z, y), W, H); return s; },
       head: name => { const p = sim.people.get(name); return p && p.scr && [p.scr.head[0] * W / overlay.width, p.scr.head[1] * H / overlay.height]; },
       rig: name => { const r = people.rig(name); return r && { x: r.root.position.x, y: r.root.position.z, parts: r.boxes }; },
-      probe: () => { const d = fitDist() / cur.zoom, at = t => toScreen(v.copy(cur.target).addScaledVector(back, t * d), W, H); return { plane: at(0), near: at(.3), far: at(-.3) }; },
-      setHead: (x, y, z) => { head.forced = x != null; head.tx = x || 0; head.ty = y || 0; head.tz = z || 1; },
+      probe: () => { const d = distNow, at = t => toScreen(v.copy(cur.target).addScaledVector(back, t * d), W, H); return { plane: at(0), near: at(.3), far: at(-.3) }; },
+      setHead: (x, y, z) => { head.forced = x == null ? null : [x, y || 0, z || 1]; },
+      setEyes: f => { look.forced = f; },           // the eye reading to use instead of the camera's, [P.x, P.y, yaw, pitch]; null hands back to the camera
       view: o => { if (o.target) goal.target.set(...o.target); for (const k of ["yaw", "pitch", "zoom"]) if (o[k] != null) goal[k] = o[k]; if (o.dist) goal.zoom = fitDist() / o.dist; limit(); },
       sample: () => { renderer.render(world.scene, camera); const gl = renderer.getContext(), px = new Uint8Array(4), seen = new Set();
         for (let j = 1; j < 20; j++) for (let i = 1; i < 20; i++) { gl.readPixels(Math.floor(gl.drawingBufferWidth * i / 20), Math.floor(gl.drawingBufferHeight * j / 20), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); seen.add((px[0] >> 3) << 10 | (px[1] >> 3) << 5 | px[2] >> 3); }

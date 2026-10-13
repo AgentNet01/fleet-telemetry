@@ -2008,7 +2008,7 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         self.send_header("Content-Length", str(len(body)))
                         self.end_headers()
                         self.wfile.write(body)
-                elif u.path in ("/office.js", "/office3d.js", "/office3d-vox.js", "/office3d-world.js", "/office3d-people.js", "/three.module.min.js"):
+                elif u.path in ("/office.js", "/office3d.js", "/office3d-vox.js", "/office3d-world.js", "/office3d-people.js", "/office3d-look.js", "/three.module.min.js"):
                     if self._jack():                                   # the Overview's office (2D, and the 3D view's modules), kept out of dashboard.html
                         body = open(os.path.join(HERE, u.path.lstrip("/")), "rb").read()
                         self.send_response(200)
