@@ -450,6 +450,19 @@ def switch_edit():
     print("switch_edit OK")
 
 
+def chain():
+    """Oct 13 live: each product was one chain (scan → concept → designs → package); with only the current step
+    takeable, most agents sat free and no planning ran because the chain's later steps counted as queued."""
+    h, muse, clock = new_hub("Pm", "Ada", "Bo", "Cy")
+    prj = h.add_project(h.add_product("Cups", brief="cups", pm="Pm"), "launch")
+    scan = h.add_task(prj, "scan", "optimizer", "doc", owner="Ada")
+    h.add_task(prj, "concept", "marketer", "doc", blocked_by=[scan])
+    h.tick(); h.tick()
+    assert any("no work lined up" in m for m in muse.sent.get("Pm", [])), \
+        f"chain: only blocked work left + free agents → the PM is asked for parallel work: {muse.sent.get('Pm')}"
+    print("chain OK")
+
+
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "slack200": slack200, "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "pause_frees": pause_frees, "switch_edit": switch_edit}[sys.argv[1]]()
+     "slack200": slack200, "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain}[sys.argv[1]]()

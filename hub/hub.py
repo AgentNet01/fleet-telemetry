@@ -925,7 +925,8 @@ class Hub:
         idle = list(self._idle())
         for p in self.db.execute("select * from products where status='active'").fetchall():
             in_product = "from tasks t join projects j on t.project=j.id where j.product=?"
-            queued = self.db.execute(f"select 1 {in_product} and t.status in ('open','ready','blocked')", (p["id"],)).fetchone()
+            # only work someone can pick up now counts: a chain waiting on its current step leaves free agents idle
+            queued = self.db.execute(f"select 1 {in_product} and t.status in ('open','ready')", (p["id"],)).fetchone()
             row = self.db.execute("select * from dry_notes where product=?", (p["id"],)).fetchone()
             landed = row and self.db.execute(f"select 1 {in_product} and t.created > ?", (p["id"], row["at"])).fetchone()
             if row and row["planner"] and landed and not queued:      # the planner's round is over: its rights end
@@ -946,7 +947,8 @@ class Hub:
             self.db.execute("insert or replace into dry_notes(product, at, stage, planner) values(?,?,'pm',null)", (p["id"], now))
             self._deliver_to(who, f"{p['name']} has no work lined up and {len(idle)} agents are free",
                              f"Goal: {p['metric'] or '(none set)'}. {p['brief'] or ''}\nProjects: {self._projects_line(p['id'])}\n"
-                             "Plan the next steps and add them: fleet task add <project id> \"<title>\" <role> \"<done when>\" "
+                             "Plan the next steps, especially work that can run alongside what's in progress or waiting, "
+                             "and add them: fleet task add <project id> \"<title>\" <role> \"<done when>\" "
                              "(fleet project add first if it needs a new one). Every agent can take any product's task. "
                              f"If nothing is added within {PLAN_WAIT // 3600} h, a free agent is asked to plan it instead.")
 
