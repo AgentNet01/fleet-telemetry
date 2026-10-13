@@ -135,7 +135,8 @@ MIGRATIONS = [
     "alter table dry_notes add column stage text",        # planning round: 'pm' asked, then 'planner' asked
     "alter table dry_notes add column planner text",
     "alter table suggestions add column line text",
-    "alter table agents add column powers_told text",     # the powers text this agent was last told       # a PM's company command waiting on the CEO's review
+    "alter table agents add column powers_told text",
+    "create table if not exists approvals(id text primary key, agent text, label text, detail text, options text, expires real)",     # the powers text this agent was last told       # a PM's company command waiting on the CEO's review
 ]
 WORKERS = ("muse", "poll")            # kinds that take tasks; 'slack' (dot) and 'jack' (the board) don't
 PUSH = ("muse", "slack")              # kinds the hub sends to; 'poll' agents fetch with `fleet inbox`
@@ -234,6 +235,16 @@ class Hub:
                 d = self.transport.activity(name)                   # muse-cli I/O, never under the lock
             except Exception:
                 continue                                            # ponytail: keep the last reading; delivery errors already page Jack
+            try:
+                pend = getattr(self.transport, "approvals", lambda n: [])(name)
+            except Exception:
+                pend = None                                     # unreadable this round: keep what we had
+            if pend is not None:
+                with self.lock:
+                    self.db.execute("delete from approvals where agent=?", (name,))
+                    for x in pend:
+                        self.db.execute("insert or replace into approvals values(?,?,?,?,?,?)",
+                                        (x["id"], name, x["label"], x["detail"], json.dumps(x["options"]), x["expires"]))
             if not d:
                 continue
             with self.lock:
@@ -1022,6 +1033,25 @@ class Hub:
                 continue
             self._tell_powers(n)
 
+    def approvals(self):
+        """Muse permission pop-ups the agents are waiting on, soonest to expire first."""
+        with self.lock:
+            return [dict(r, options=json.loads(r["options"])) for r in self.db.execute(
+                "select * from approvals where expires > ? order by expires", (self.clock(),))]
+
+    def decide_approval(self, by, agent, approval_id, decision):
+        with self.lock:
+            r = self.db.execute("select * from approvals where id=? and agent=?", (approval_id, agent)).fetchone()
+            if not r or r["expires"] <= self.clock():
+                raise ValueError("that request is gone — already decided or expired")
+            if decision not in json.loads(r["options"]):
+                raise ValueError(f"{decision!r} isn't one of the choices Muse offered: {', '.join(json.loads(r['options']))}")
+        self.transport.decide(agent, approval_id, decision)          # muse-cli I/O, never under the lock
+        with self.lock:
+            self.db.execute("delete from approvals where id=?", (approval_id,))
+            self.db.execute("insert into changes(by, line, result, at) values(?,?,?,?)",
+                            (by, f"approve {agent}: {r['label']}", decision, self.clock()))
+
     def _names(self):
         return [r["name"] for r in self.db.execute("select name from agents where kind in ('muse','poll','slack') and state='active'")]
 
@@ -1728,6 +1758,7 @@ class Hub:
                             "task": next(({"id": t["id"], "title": t["title"], "status": t["status"],
                                            "product": self._task_product(t["id"])} for t in self._open_tasks(a["name"])), None)})
             return {"now": self.clock(), "agents": out, "needs_jack": self.needs_jack(), "changes": self.changes(30),
+                    "approvals": self.approvals(),
                     "revenue": self.revenue(), "products": self.portfolio()}
 
     def org(self):
@@ -1887,6 +1918,9 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                     self.send_header("Allow", "POST")
                     self.send_header("Content-Length", "0")
                     self.end_headers()
+                elif u.path == "/api/jack/approvals":
+                    if self._jack():
+                        self._json(200, {"approvals": hub.approvals()})
                 elif u.path == "/api/board":
                     if self._jack():
                         import etsy
@@ -2098,6 +2132,14 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         b = self._body()
                         etsy.set_app(hub, b["key"], b["secret"])
                         self._json(200, {"ok": True})
+                elif u.path == "/api/jack/approve":         # allow/deny a Muse permission pop-up an agent is stuck on
+                    if self._jack():
+                        b = self._body()
+                        try:
+                            hub.decide_approval(self.who, b["agent"], b["id"], b["decision"])
+                            self._json(200, {"ok": True})
+                        except ValueError as e:
+                            self._json(400, {"error": str(e)})
                 elif u.path == "/api/jack/dismiss":
                     if self._jack():
                         hub.resolve_need(int(self._body()["id"]))

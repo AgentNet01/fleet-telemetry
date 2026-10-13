@@ -119,6 +119,18 @@ class MuseTransport:
         if side and (not at or when(side) > at):
             return {"busy": False, "at": at, "line": say(side), "line_at": when(side)}
         return {"busy": False, "at": at, "line": _describe(newest) if newest else None, "line_at": at}
+    def approvals(self, name):
+        """Muse permission pop-ups this agent is stuck behind (it waits until someone decides, up to an hour)."""
+        pend = (self._run(name, "raw", "egress.approvals").get("result") or {}).get("pending") or []
+        return [{"id": a["approval_id"], "label": _clean(a.get("action_label") or a.get("display_name") or "Approve an action"),
+                 "detail": " · ".join(_clean(x) for x in (a.get("payload_preview") or a.get("reason") or "").splitlines() if x.strip()),
+                 "options": a.get("decision_options") or ["allow_once", "deny"],
+                 "expires": (a.get("request_expires_at_ms") or 0) / 1000} for a in pend]
+
+    def decide(self, name, approval_id, decision):
+        self._run(name, "raw", "egress.approval.decide", "--param", f"approval_id={approval_id}",
+                  "--body", json.dumps({"decision": decision}))
+
 
 def _epoch(iso):
     import calendar
@@ -257,6 +269,12 @@ class KindRouter:
 
     def activity(self, name):
         return getattr(self._for(name), "activity", lambda n: None)(name)
+
+    def approvals(self, name):
+        return getattr(self._for(name), "approvals", lambda n: [])(name)
+
+    def decide(self, name, approval_id, decision):
+        return self._for(name).decide(name, approval_id, decision)
 
     def session(self, name):
         return self._for(name).session(name)

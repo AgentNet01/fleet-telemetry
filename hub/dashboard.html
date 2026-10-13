@@ -245,6 +245,11 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <button class="tab" role="tab" data-tab="vault">Vault</button>
   </div>
   <section id="overview">
+    <div id="apwrap" hidden>
+      <h2>Waiting for your OK <span id="apn"></span></h2>
+      <div class="hint">Agents are paused on these Muse permission pop-ups until someone decides; each expires after an hour.</div>
+      <div class="card nj" id="ap"></div>
+    </div>
     <div id="njwrap">
       <h2>Needs Jack <span id="njn"></span></h2>
       <div class="hint">Only you can do these — approvals, logins, payment keys. Dismiss when handled.</div>
@@ -388,6 +393,15 @@ async function load(){
   $("revchips").innerHTML = Object.keys(by).length
     ? Object.entries(by).map(([k,v])=>`<span class="chip">${esc(k||"unassigned")} <b>${money(v)}</b></span>`).join("")
     : `<span class="chip muted">no sales yet</span>`;
+
+  const ap=b.approvals||[];
+  $("apwrap").hidden=!ap.length;
+  $("apn").innerHTML=ap.length?`<span style="color:var(--warn)">(${ap.length})</span>`:"";
+  $("ap").innerHTML=ap.map(x=>{ const btn=(dec,txt)=>x.options.includes(dec)?`<button class="btn sm" data-ap="${esc(x.agent)}|${esc(x.id)}|${dec}">${txt}</button>`:"";
+    return `<div class="row njrow"><div class="t"><b>${esc(x.agent)}</b> · ${esc(x.label)}${x.detail?`<div class="what">${esc(x.detail)}</div>`:""}</div>
+      <div class="when">${Math.max(0,Math.round((x.expires-b.now)/60))}m left</div>${btn("allow_once","Allow")}${btn("deny","Deny")}</div>`;}).join("");
+  document.querySelectorAll("[data-ap]").forEach(el=>el.onclick=async()=>{ const [agent,id,decision]=el.dataset.ap.split("|");
+    el.disabled=true; try{ await jpost("api/jack/approve",{agent,id,decision}); toast(decision==="deny"?"Denied":"Allowed"); load(); }catch(e){ el.disabled=false; toast(e.message); }});
 
   const nj=b.needs_jack||[];
   $("njwrap").hidden = !nj.length;

@@ -1487,11 +1487,11 @@ function paintHud() {
   if (!lastBoard) return;
   let w = 0, i = 0, d = 0;
   for (const p of people.values()) p.flag ? d++ : p.mode === "idle" ? i++ : p.mode === "ceo" ? 0 : w++;
-  const nj = (lastBoard.needs_jack || []).length;
+  const nj = (lastBoard.needs_jack || []).length + (lastBoard.approvals || []).length;
   hudEl.innerHTML = `<b>Foundlings HQ</b><span class="o-w">● ${w} working</span><span class="o-i">● ${i} on break</span>`
     + (d ? `<span class="o-d">● ${d} not answering</span>` : "") + (nj ? `<button class="o-nj" type="button">⚑ ${nj} need${nj > 1 ? "" : "s"} you</button>` : "")
     + `<span class="o-ph">${phaseText()}</span>`;
-  const njb = hudEl.querySelector(".o-nj"); if (njb) njb.onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); $("njwrap").scrollIntoView({ behavior: "smooth" }); };
+  const njb = hudEl.querySelector(".o-nj"); if (njb) njb.onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); $((lastBoard.approvals || []).length ? "apwrap" : "njwrap").scrollIntoView({ behavior: "smooth" }); };
   tickEl.innerHTML = events.length ? events.slice(0, 4).map((e, k) => `<div style="opacity:${1 - k * .2}"><time>${stamp(e.at)}</time> ${esc(e.line)}</div>`).join("")
     : `<div class="faint">Moves show up here as they happen.</div>`;
 }

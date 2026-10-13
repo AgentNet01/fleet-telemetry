@@ -20,10 +20,17 @@ class ActiveMuse(FakeMuse):
     """FakeMuse plus what Muse reports about an agent outside the fleet chat."""
     def __init__(self):
         super().__init__()
-        self.acts = {}
+        self.acts, self.pending, self.decided = {}, {}, []
 
     def activity(self, agent):
         return self.acts.get(agent)
+
+    def approvals(self, agent):
+        return list(self.pending.get(agent, []))
+
+    def decide(self, agent, aid, decision):
+        self.decided.append((agent, aid, decision))
+        self.pending[agent] = [a for a in self.pending.get(agent, []) if a["id"] != aid]
 
 
 def new_hub(*agents):
@@ -264,6 +271,32 @@ def powers_told():
     print("powers_told OK")
 
 
+def approvals():
+    """Jack, Oct 13: an agent waiting on a Muse permission pop-up froze for 2 h. The hub sees every agent's
+    pending approvals, lists them in one place, and Jack allows or denies each with one click."""
+    h, muse, clock = new_hub("brutus", "Ada")
+    soon = clock() + 3000
+    muse.pending["brutus"] = [{"id": "connector-1", "label": "Upload a file and create a public link",
+                               "detail": "File: pet-portrait-style-sheet-v2.png", "options": ["allow_once", "deny"], "expires": soon}]
+    h.observe()
+    got = h.board()["approvals"]
+    assert [(a["agent"], a["id"], a["label"]) for a in got] == [("brutus", "connector-1", "Upload a file and create a public link")], \
+        f"approvals: the board lists brutus's pending approval: {got}"
+    try:
+        h.decide_approval("jack", "brutus", "connector-1", "allow_always")
+        raise AssertionError("approvals: only the options Muse offered")
+    except ValueError:
+        pass
+    h.decide_approval("jack", "brutus", "connector-1", "allow_once")
+    assert muse.decided == [("brutus", "connector-1", "allow_once")], muse.decided
+    assert h.board()["approvals"] == [], "decided → gone"
+    assert any("allow_once" in c["result"] or "allowed" in c["result"] for c in h.changes(5)), "logged"
+    muse.pending["Ada"] = [{"id": "x", "label": "Open a site", "detail": "", "options": ["allow_once", "deny"], "expires": clock() + 60}]
+    h.observe(); clock.go(61)
+    assert h.board()["approvals"] == [], "an expired request isn't shown"
+    print("approvals OK")
+
+
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "slack200": slack200, "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told}[sys.argv[1]]()
+     "slack200": slack200, "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals}[sys.argv[1]]()
