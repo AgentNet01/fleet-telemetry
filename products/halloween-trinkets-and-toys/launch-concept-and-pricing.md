@@ -8,7 +8,8 @@ Builds on task #71 (market and maker scan). All unit costs from live pages 2026-
 
 **Hero: Personalized Halloween Photo Keychain** — acrylic keychain (custom shape: ghost, pumpkin, bat, candy corn), buyer's photo swapped into the design + optional custom name text. This is the gap found in task #71: photo personalization is proven in adjacent Halloween gifts ($10–$40) but absent from trinkets.
 
-**Variant: Custom Name Halloween Keychain** — same acrylic keychain, name-only personalization (no photo). Mirrors the proven ScriptedBlushStudio ghost-keychain pattern (custom names, $2.34, 7.5k sales) at a premium photo-tier price ladder.
+**Variant: Custom Name Halloween Keychain** — same acrylic keychain, name-only personalization (no photo). Mirrors the proven ScriptedBlushStudio ghost-keychain pattern — verified live 2026-10-13: "Personalized Halloween Ghost Keychain Favors", ScriptedBlushStudio (Star Seller, Oldsmar FL), $2.34+ (35% off sale), **7.5k sales**, 4.9★ (970 shop reviews), arrives Oct 15–22 (screenshot below) — https://www.etsy.com/listing/4584407716/personalized-halloween-ghost-keychain
+![ScriptedBlushStudio listing — personalized ghost keychain](https://muse.ai/files/1441369389060091/1549263700365268/oknn7y5mvh6ti2bsvesxfqgu/scriptedblush-listing.png)
 
 **Not launched now:** classroom bulk favor kits (proven by SophiasThings at $1–$2.50/unit, 66.3k sales) — high operational complexity for a first launch; phase 2.
 
@@ -16,12 +17,17 @@ Builds on task #71 (market and maker scan). All unit costs from live pages 2026-
 
 ## Making / shipping path (picked)
 
-**Printify → SwiftPOD (USA), Custom Shape Acrylic Keychain (UV print).** Rationale: the only option that (a) supports true photo personalization, (b) needs zero inventory and no MOQ, and (c) delivers before Oct 31 (~4–10 business days total). Alibaba (4–8 weeks) and WizardPins (3–4 weeks) are next-year plays. Operational note: follow the proven competitor workflow — seller sends a mock-up preview for buyer approval before production (used by pet-photo blanket and pet-pumpkin sellers).
+**Printify → SwiftPOD (USA), Custom Shape Acrylic Keychain (UV print), Economy shipping.** Rationale: the only option that (a) supports true photo personalization, (b) needs zero inventory and no MOQ, and (c) delivers before Oct 31 at ~6–10 business days total (order by Oct 16; Standard tier extends the window to Oct 22). Alibaba (4–8 weeks) and WizardPins (3–4 weeks) are next-year plays. Operational note: follow the proven competitor workflow — seller sends a mock-up preview for buyer approval before production (used by pet-photo blanket and pet-pumpkin sellers).
 
 ## Pricing with Etsy fees + shipping + unit-cost margin
 
 Etsy US fees used: $0.20 listing · 6.5% transaction (on item + shipping) · 3% + $0.25 payment processing.
-Unit cost (Printify, no Premium): $3.74 production + $4.79 economy shipping to buyer = **$8.53 COGS**.
+Unit cost — verified live on Printify's public catalog page 2026-10-13 (screenshot below): **$3.74/unit standard** ($2.75 with Printify Premium, not assumed here), provider SwiftPOD (USA), avg production 1.5 days. Shipping to US buyer: Economy 4–8 business days ($4.79 first item / $0.49 additional) or Standard 2–5 business days ($5.89 / $0.69).
+Catalog: https://printify.com/app/products/12784/generic-brand/custom-shape-acrylic-keychain
+![Printify catalog pricing — custom shape acrylic keychain](https://muse.ai/files/1441369389060091/1813193446694423/l8sukzma8lbjunsk219ezb89/printify-pricing.png)
+
+COGS used below: $3.74 production + $4.79 Economy shipping = **$8.53**.
+Delivery reality check: 1.5 days production + Economy 4–8 business days ≈ **6–10 business days total**; Standard ≈ **4–7 business days total**. For pre-Halloween (Oct 31) arrival: order by **Oct 16** on Economy, or **Oct 22** on Standard.
 
 ### Hero — Personalized Halloween Photo Keychain: $12.99 + $3.99 shipping
 | Line | Amount |
@@ -49,4 +55,4 @@ Both clear 25%+ margin at competitive price points ($9.99–$12.99 sits between 
 1. 4 keychain shapes designed (ghost, pumpkin, bat, candy corn) with photo-swap zones
 2. Printify product connected to Etsy; test order placed to verify print quality + timing
 3. Listing copy: "Personalized Halloween Photo Keychain" + variant; mock-up preview workflow stated in the listing
-4. Order by ~Oct 20 to guarantee pre-Halloween delivery
+4. Order by **Oct 16** (Economy) or **Oct 22** (Standard) to guarantee pre-Halloween delivery — see delivery ranges above
