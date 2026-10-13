@@ -1556,7 +1556,10 @@ class Hub:
     def record_switch(self, agent, product, role, got_hash):
         with self.lock:
             sw = self.db.execute("select * from switches where agent=?", (agent,)).fetchone()
-            if sw and sw["expect"] == got_hash and sw["product"] == product and sw["role"] == role:
+            # brain_for serves the role/brief as they are now; an edit after the switch was issued isn't a bad load
+            now = self.brain_for(agent) if sw and sw["status"] == "issued" else None
+            served = now and hashlib.sha256((now["soul"] + "\n" + now["memory"]).encode()).hexdigest()
+            if sw and got_hash in (sw["expect"], served) and sw["product"] == product and sw["role"] == role:
                 self._set("agents", agent, current_product=product, current_role=role)
                 self.db.execute("update switches set status='done' where agent=?", (agent,))
                 return True

@@ -433,6 +433,23 @@ def pause_frees():
     print("pause_frees OK")
 
 
+def switch_edit():
+    """Oct 13 live: a role's text was edited between a switch being issued and the agent loading it; the agent loaded
+    exactly what the hub served, yet it was flagged as a bad switch on Jack's list."""
+    import hashlib
+    h, muse, clock = new_hub("Ada")
+    h.add_product("Cups", brief="cups")
+    h.issue_switch("Ada", "Cups", "designer")
+    h.db.execute("update roles set soul = soul || ' Images are the deliverable.' where name='designer'")
+    b = h.brain_for("Ada")
+    got = hashlib.sha256((b["soul"] + "\n" + b["memory"]).encode()).hexdigest()
+    assert h.record_switch("Ada", "Cups", "designer", got), "switch: what the hub served counts as a good load"
+    assert not h.needs_jack(), f"switch: nothing for Jack: {h.needs_jack()}"
+    h.issue_switch("Ada", "Cups", "marketer")
+    assert not h.record_switch("Ada", "Cups", "marketer", "bad"), "switch: a real mismatch is still caught"
+    print("switch_edit OK")
+
+
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "slack200": slack200, "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "pause_frees": pause_frees}[sys.argv[1]]()
+     "slack200": slack200, "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "pause_frees": pause_frees, "switch_edit": switch_edit}[sys.argv[1]]()
