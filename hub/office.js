@@ -68,9 +68,10 @@ const quad = (f, u0, v0, u1, v1) => [f(u0, v0), f(u1, v0), f(u1, v1), f(u0, v1)]
 // ───────────────────────────── the floor plan: sortable items ─────────────────────────────
 // Each item has a footprint and a sort key (footprint centre x+y). Long pieces are split into ≤1-tile chunks so a
 // person standing between them sorts correctly. `draw` is static (cached as a sprite); `live` is drawn every frame.
-const ITEMS = [], BLOCK = [], SHADOWS = [], LIGHTS = [], OBJ = {};
+const ITEMS = [], BLOCK = [], SHADOWS = [], LIGHTS = [], OBJ = {}, SOLIDS = [];   // SOLIDS: every box, for the 3D view (office3d.js)
 function item(o) { o.pad = o.pad || 6; ITEMS.push(o); return o; }
 function solid(x, y, z, w, d, h, c, o = {}) {
+  SOLIDS.push([x, y, z, w, d, h, c, o]);
   const n = Math.max(1, Math.ceil(Math.max(w, d) - 1e-6)), alongX = w >= d;
   for (let i = 0; i < n; i++) {
     const cx = alongX ? x + w * i / n : x, cy = alongX ? y : y + d * i / n, cw = alongX ? w / n : w, cd = alongX ? d : d / n;
@@ -1408,15 +1409,17 @@ const LABEL_MODES = ["all", "working", "off"], LABEL_TEXT = { all: "Labels: all"
 let labelMode = "all"; try { labelMode = LABEL_MODES.includes(localStorage.officeLabels) ? localStorage.officeLabels : "all"; } catch {}
 function drawLabels(g) {
   g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = "source-over";
-  const ls = clamp(cam.s / DPR * .75, 1, 1.25) * DPR, fs = 11.5 * ls, fs2 = 10.5 * ls, pad = 5 * ls, rad = 5 * ls;
+  const R3 = window.Office3D, ls = (R3 ? 1.1 : clamp(cam.s / DPR * .75, 1, 1.25)) * DPR, fs = 11.5 * ls, fs2 = 10.5 * ls, pad = 5 * ls, rad = 5 * ls;
   const tone = p => p.flag ? 0 : p.mode === "ceo" ? 1 : p.mode !== "idle" ? 2 : 3;
-  const list = labelMode === "off" ? [] : [...people.values()].filter(p => p.handW && (labelMode === "all" || tone(p) === 1 || tone(p) === 2 || p.flag)).sort((a, b) => tone(a) - tone(b));
+  // where a person's head and feet are on screen (canvas px), and the head's radius: the 3D view supplies p.scr
+  const anc = p => R3 ? p.scr : p.handW && { head: toScreen(p.handW.head), foot: toScreen(P(p.x, p.y, 0)), r: BODY.head * p.look.scale * cam.s };
+  const list = labelMode === "off" ? [] : [...people.values()].filter(p => anc(p) && (labelMode === "all" || tone(p) === 1 || tone(p) === 2 || p.flag)).sort((a, b) => tone(a) - tone(b));
   const placed = []; hits = [];
-  for (const p of people.values()) if (p.handW) { const [hx, hy] = toScreen(p.handW.head), [fx, fy] = toScreen(P(p.x, p.y, 0));
-    hits.push({ p, r: [Math.min(hx, fx) - 12 * ls, hy - 10 * ls, 24 * ls, Math.max(18 * ls, fy - hy + 12 * ls)] }); }
+  for (const p of people.values()) { const a = anc(p); if (!a) continue; const [hx, hy] = a.head, [fx, fy] = a.foot, bw = R3 ? Math.max(12 * ls, a.r * 1.1) : 12 * ls;
+    hits.push({ p, r: [Math.min(hx, fx) - bw, hy - (R3 ? a.r : 10 * ls), 2 * bw, Math.max(18 * ls, fy - hy + bw)] }); }
   const collide = r => placed.some(q => r[0] < q[0] + q[2] + 2 && r[0] + r[2] + 2 > q[0] && r[1] < q[1] + q[3] + 2 && r[1] + r[3] + 2 > q[1]);
   for (const p of list) {
-    const [hx, hy] = toScreen(p.handW.head), top = hy - BODY.head * p.look.scale * cam.s - 2 * ls;
+    const a = anc(p), [hx, hy] = a.head, top = hy - a.r - 2 * ls;
     if (hx < 0 || hx > W || hy < 0 || hy > H) continue;          // zoomed past them: no label pinned to the edge
     const t = tone(p), line2 = t === 1 || t === 2 ? p.card : null, badgeOnly = labelMode === "working" && t === 0;
     g.font = LABEL_FONT(fs); const w1 = g.measureText(p.name).width; g.font = LABEL_FONT(fs2, 500); const w2 = line2 ? g.measureText(line2).width : 0;
@@ -1457,10 +1460,17 @@ function frame(t) {
   if (!people.size || !visible) return;
   const r = wrap.getBoundingClientRect(); if (!r.width || !r.height) return;
   if (Math.abs(r.width * DPR - W) > 2 || Math.abs(r.height * DPR - H) > 2) layout();
+  const g = ctx, n = nightness(); NIGHT_N = n;
+  if (window.Office3D) {                                        // 3D on: same sim, three.js paints; this canvas keeps only the labels
+    simStep(FDT);
+    g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = "source-over"; g.globalAlpha = 1; g.clearRect(0, 0, W, H);
+    window.Office3D.frame(FDT, T, n, hover); drawLabels(g);
+    if (t - hudAt > 1000) { hudAt = t; paintHud(); }
+    return;
+  }
   if (cache && rebuildAt && t > rebuildAt) { cache = null; rebuildAt = 0; }
   if (!cache) buildCache();
   simStep(FDT);
-  const g = ctx, n = nightness(); NIGHT_N = n;
   g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = "source-over"; g.globalAlpha = 1; g.clearRect(0, 0, W, H);
   cacheT(g); g.drawImage(cache.base, 0, 0);
   worldT(g); drawWalls(g);
@@ -1529,20 +1539,23 @@ function mount() {
     if (!(e.ctrlKey || e.metaKey || document.fullscreenElement === wrap)) return;
     e.preventDefault();
     const r = cv.getBoundingClientRect();
-    zoomAt((e.clientX - r.left) * DPR, (e.clientY - r.top) * DPR, Math.exp(-e.deltaY * (e.ctrlKey ? .01 : .0025)));
+    const k = Math.exp(-e.deltaY * (e.ctrlKey ? .01 : .0025));
+    window.Office3D ? window.Office3D.zoom(k) : zoomAt((e.clientX - r.left) * DPR, (e.clientY - r.top) * DPR, k);
   }, { passive: false });
   let drag = null, dragged = false;
-  cv.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY }; dragged = false; });
+  cv.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button === 2 }; dragged = false; });
   addEventListener("pointermove", e => {
     if (!drag) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (!dragged && Math.hypot(dx, dy) < 4) return;
     dragged = true; cv.style.cursor = "grabbing";
-    view.ox += dx * DPR; view.oy += dy * DPR; drag = { x: e.clientX, y: e.clientY }; applyView();
+    if (window.Office3D) window.Office3D.drag(dx, dy, drag.pan); else { view.ox += dx * DPR; view.oy += dy * DPR; applyView(); }
+    drag = { x: e.clientX, y: e.clientY, pan: drag.pan };
   });
   addEventListener("pointerup", () => { drag = null; cv.style.cursor = "default"; });
-  cv.addEventListener("dblclick", () => { view.f = 1; view.ox = view.oy = 0; applyView(); });
-  const zb = (id, k) => { const b = $(id); if (b) b.onclick = () => k ? zoomAt(W / 2, H / 2, k) : (view.f = 1, view.ox = view.oy = 0, applyView()); };
+  const refit = () => window.Office3D ? window.Office3D.reset() : (view.f = 1, view.ox = view.oy = 0, applyView());
+  cv.addEventListener("dblclick", refit);
+  const zb = (id, k) => { const b = $(id); if (b) b.onclick = () => !k ? refit() : window.Office3D ? window.Office3D.zoom(k) : zoomAt(W / 2, H / 2, k); };
   zb("ozin", 1.35); zb("ozout", 1 / 1.35); zb("ozfit", 0);
   const lb = $("olab"); lb.textContent = LABEL_TEXT[labelMode];
   lb.onclick = () => { labelMode = LABEL_MODES[(LABEL_MODES.indexOf(labelMode) + 1) % 3]; lb.textContent = LABEL_TEXT[labelMode]; try { localStorage.officeLabels = labelMode; } catch {} };
@@ -1551,9 +1564,25 @@ function mount() {
   else fs.hidden = true;
   document.addEventListener("fullscreenchange", () => { fs.textContent = document.fullscreenElement ? "✕ Exit full screen" : "⛶ Full screen"; fit(); });
   addEventListener("resize", fit); new ResizeObserver(fit).observe($("njwrap")); fit();
+  // the 3D view (office3d.js): loaded only when asked for, remembered, and it only ever paints what the sim above decides
+  const b3 = $("o3d"), bh = $("ohead");
+  if (b3) {
+    const set3d = async on => {
+      try { localStorage.office3d = on ? "1" : ""; } catch {}
+      if (on && !window.Office3D) { try { (await import("./office3d.js")).start(wrap, cv, window.Office.sim); } catch (e) { console.error("office 3D", e); on = false; } }
+      else if (!on && window.Office3D) { window.Office3D.stop(); cache = null; }
+      b3.textContent = on ? "2D" : "3D"; bh.hidden = !on;
+    };
+    b3.onclick = () => set3d(!window.Office3D);
+    bh.onclick = () => window.Office3D && window.Office3D.look(bh);
+    let saved = ""; try { saved = localStorage.office3d; } catch {}
+    if (Q.get("office") === "3d" || (saved && Q.get("office") !== "2d")) set3d(true);
+  }
   requestAnimationFrame(frame);
 }
-window.Office = { update, mount, debug: { people, SLOTS, OBJ, get T() { return T; }, get cache() { return cache; },
+window.Office = { update, mount,
+  sim: { X, Y, C, SOLIDS, DESKS, BOARD, BOOTHS, LIGHTS, OBJ, SLOTS, PARTS, people, shade, hash, get T() { return T; } },   // read-only, for office3d.js
+  debug: { people, SLOTS, OBJ, get T() { return T; }, get cache() { return cache; },
   force(name, k) { const p = people.get(name); if (!p || p.mode !== "idle") return; stop(p); p.activity = k; start(p, IDLE[k][2](p)); } } };
 mount();
 if (typeof board !== "undefined" && board) update(board);

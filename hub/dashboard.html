@@ -219,7 +219,7 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
 .ozoom{display:flex;gap:2px}.ozoom .ofs{padding:8px 11px;min-width:36px}
 .ofs{font:inherit;font-size:13px;font-weight:600;color:#1f2933;background:rgba(255,255,255,.92);border:0;border-radius:10px;
   padding:8px 13px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.14)}
-.ofs:hover{background:#fff}
+.ofs:hover{background:#fff}.ofs[aria-pressed=true]{background:#1f6feb;color:#fff}.obtns{flex-wrap:wrap;justify-content:flex-end;max-width:calc(100% - 24px)}
 .oticker{position:absolute;left:12px;bottom:12px;display:grid;gap:2px;max-width:min(560px,calc(100% - 24px));background:rgba(255,255,255,.88);color:#1f2933;
   border-radius:11px;padding:8px 12px;font-size:12.5px;box-shadow:0 2px 12px rgba(0,0,0,.12)}
 .oticker time{color:#6e7781;font-variant-numeric:tabular-nums;margin-right:6px}.oticker .faint{color:#6e7781}
@@ -258,7 +258,7 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <div class="office" id="office">
       <canvas id="officecv" role="img" aria-label="The office. Each agent is in the room that matches what it is doing: desks for work, the review table for checking, the booths for replies; a red badge means not answering. The same list is under All agents below."></canvas>
       <div class="ohud" id="ohud"></div>
-      <div class="obtns"><span class="ozoom"><button class="ofs" id="ozout" type="button" title="Zoom out" aria-label="Zoom out">−</button><button class="ofs" id="ozfit" type="button" title="Fit the building (or double-click it)" aria-label="Fit">Fit</button><button class="ofs" id="ozin" type="button" title="Zoom in — or pinch, ⌘-scroll; drag to move" aria-label="Zoom in">+</button></span><button class="ofs" id="olab" type="button" title="Choose which labels show above people">Labels: all</button><button class="ofs" id="ofs" type="button">⛶ Full screen</button></div>
+      <div class="obtns"><span class="ozoom"><button class="ofs" id="ozout" type="button" title="Zoom out" aria-label="Zoom out">−</button><button class="ofs" id="ozfit" type="button" title="Fit the building (or double-click it)" aria-label="Fit">Fit</button><button class="ofs" id="ozin" type="button" title="Zoom in — or pinch, ⌘-scroll; drag to move" aria-label="Zoom in">+</button></span><button class="ofs" id="olab" type="button" title="Choose which labels show above people">Labels: all</button><button class="ofs" id="ohead" type="button" hidden aria-pressed="false" title="Use the webcam: move your head and the view shifts, like looking through a window. The video never leaves this browser.">◉ Look around</button><button class="ofs" id="o3d" type="button" title="Switch between the flat office and the 3D one. In 3D: drag to turn, shift-drag to slide, scroll to zoom, WASD to walk.">3D</button><button class="ofs" id="ofs" type="button">⛶ Full screen</button></div>
       <div class="oticker" id="oticker" aria-live="polite"></div>
       <div class="otip" id="otip" hidden></div>
     </div>
