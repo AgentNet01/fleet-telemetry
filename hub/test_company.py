@@ -205,7 +205,7 @@ def suggest():
     assert h.suggestions()[0]["status"] == "accepted", h.suggestions()
     h.tick()
     assert any("accepted" in m.lower() and "bigger thumbnails" in m for m in muse.sent.get("Opt", [])), "the optimizer hears back"
-    assert any("carry it out" in m and "bigger thumbnails" in m for m in muse.sent.get("Cee", [])), \
+    assert any("carry it out" in i["text"] and "bigger thumbnails" in i["text"] for i in h.items_for("Cee")), \
         "accepting isn't the end: the CEO is told to carry it out"
     before = len(muse.sent.get("Cee", []))
     sid2 = h.suggest("Opt", "drop the price"); h.tick(); before = len(muse.sent.get("Cee", []))
@@ -342,7 +342,11 @@ def loose():
     # the PM manages its product's tasks, and nothing else
     t3 = int(m(f'task add {prj} "price it" optimizer "a price"', by="Pam").split("#")[1].split()[0])
     m(f'task set {t3} title "price the sheet"', by="Pam"); m(f"task remove {t3}", by="Pam")
-    for line, who in (('product add "X" "y"', "Pam"), ('project add "Shop" "x"', "Pam"), ("seat ceo Pam", "Pam"),
+    # Jack, Oct 13: a PM's company-level change goes to the CEO for review instead of being refused
+    for line in ('product add "X" "y"', 'project add "Shop" "x"'):
+        assert "review" in m(line, by="Pam"), line
+    assert not h.db.execute("select 1 from products where name='X'").fetchone(), "not done before the review"
+    for line, who in (("seat ceo Pam", "Pam"),
                       (f'task add {prj} "x" engineer "y"', "Cy"), ('product add "X" "y"', "Cy"),
                       ("park Ada", "Bea"), ("wake Ada", "Bea"), ("park Ada", "Pam")):
         try:
@@ -493,8 +497,11 @@ def dry():
     clock.go(3600); h.tick(); clock.go(61); h.tick()
     assert len(told("dot")) == 1, "not again within 12 hours"
     h.add_task(prj, "draw a planner", role="designer", done_def="a PNG")
+    h.tick()
+    assert len(told("dot")) == 1, "a product with work waiting to be picked up isn't nagged"
     clock.go(13 * 3600); h.tick(); clock.go(61); h.tick()
-    assert len(told("dot")) == 1, "a product with open work isn't nagged"
+    # Jack, Oct 13: work in progress isn't enough while agents sit free — once the queue is empty, plan more
+    assert len(told("dot")) == 2, "its work all taken and agents still free: Shop is planned again"
     assert len(told("Pam")) == 2, "Stickers is still dry after 12 h, so Pam hears again"
     h.manage("dot", 'product set "Stickers" status paused')
     clock.go(13 * 3600); h.tick(); clock.go(61); h.tick()

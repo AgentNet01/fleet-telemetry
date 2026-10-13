@@ -216,6 +216,7 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
 .o-ph{color:#57606a;border-left:1px solid #d0d7de;padding-left:12px}
 .o-nj{font:inherit;font-weight:600;color:#9a6700;background:#fff8c5;border:1px solid #eac54f;border-radius:8px;padding:2px 9px;cursor:pointer}
 .obtns{position:absolute;right:12px;top:12px;display:flex;gap:8px}
+.ozoom{display:flex;gap:2px}.ozoom .ofs{padding:8px 11px;min-width:36px}
 .ofs{font:inherit;font-size:13px;font-weight:600;color:#1f2933;background:rgba(255,255,255,.92);border:0;border-radius:10px;
   padding:8px 13px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.14)}
 .ofs:hover{background:#fff}
@@ -252,7 +253,7 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <div class="office" id="office">
       <canvas id="officecv" role="img" aria-label="The office. Each agent is in the room that matches what it is doing: desks for work, the review table for checking, the booths for replies; a red badge means not answering. The same list is under All agents below."></canvas>
       <div class="ohud" id="ohud"></div>
-      <div class="obtns"><button class="ofs" id="olab" type="button" title="Choose which labels show above people">Labels: all</button><button class="ofs" id="ofs" type="button">⛶ Full screen</button></div>
+      <div class="obtns"><span class="ozoom"><button class="ofs" id="ozout" type="button" title="Zoom out" aria-label="Zoom out">−</button><button class="ofs" id="ozfit" type="button" title="Fit the building (or double-click it)" aria-label="Fit">Fit</button><button class="ofs" id="ozin" type="button" title="Zoom in — or pinch, ⌘-scroll; drag to move" aria-label="Zoom in">+</button></span><button class="ofs" id="olab" type="button" title="Choose which labels show above people">Labels: all</button><button class="ofs" id="ofs" type="button">⛶ Full screen</button></div>
       <div class="oticker" id="oticker" aria-live="polite"></div>
       <div class="otip" id="otip" hidden></div>
     </div>
@@ -405,12 +406,14 @@ async function load(){
       <div class="what">${esc(c.result)}</div></div><div class="when">${ago(c.at)}</div></div>`).join("")
     : `<div class="row empty">No changes yet.</div>`;
 
+  // what Muse shows the agent doing right now (or last did), beyond the hub's own task state
+  const doingLine=a=>a.doing&&a.doing.line?`<div class="what" style="color:var(--faint)">${a.doing.busy?"↻ now: ":"last: "}${esc(a.doing.line)}${!a.doing.busy&&a.doing.at?" · "+ago(a.doing.at):""}</div>`:"";
   const ags=(b.agents||[]).slice().sort((x,y)=>x.name.localeCompare(y.name,undefined,{numeric:true}));
   $("agents").innerHTML = ags.map(a=>{
     const seats=seatsOf(a.name).map(x=>`<span class="tag">${esc(x)}</span>`).join("");
     const tag=(a.kind!=="slack"?`<span class="tag">${esc(a.team||"generalist")}</span>`:"")+(a.product?`<span class="tag" style="color:var(--faint)">in ${esc(a.product)}</span>`:"")+seats;
     return `<button class="row agent" data-agent="${esc(a.name)}"><span class="dot s-${stateOf(a)}"></span>
-      <span style="min-width:0"><div class="nm">${esc(a.name)}${tag}</div><div class="what">${esc(label(a))}</div></span>
+      <span style="min-width:0"><div class="nm">${esc(a.name)}${tag}</div><div class="what">${esc(label(a))}</div>${doingLine(a)}</span>
       <span class="ages">${freeFor(a)||(a.last_in?"msg "+ago(a.last_in):"—")}<br>${a.kind==="slack"?"via Slack":a.last_out?"said "+ago(a.last_out):"—"}</span></button>`;}).join("");
   document.querySelectorAll(".agent").forEach(el=>el.onclick=()=>showAgent(el.dataset.agent));
   if(typeof Office!=="undefined") Office.update(b);

@@ -151,10 +151,23 @@ def ceo_once():
     print("ceo_once OK")
 
 
+def ceo_shrink():
+    """Oct 13: work landing shrank the idle set every few minutes and each change re-notified the chair."""
+    h, muse, clock, names = ceo_world(6)
+    hours(h, clock, 13)
+    h._set("agents", "W1", state="parked")              # one fewer idle: good news, no new note
+    hours(h, clock, 1)
+    told = [i for i in h.items_for("Cee") if "no task for over" in i["text"]]
+    assert len(told) == 1, f"CEO: a shrinking idle set isn't re-sent: {[i['text'][:40] for i in told]}"
+    print("ceo_shrink OK")
+
+
 def ceo_only():
     h, muse, clock, names = ceo_world(5)
     hours(h, clock, 30)
-    assert not any(muse.sent.get(n) for n in names), "CEO: idle agents themselves are never messaged"
+    # Jack, Oct 13: no check-ins — the one thing an idle agent may get is work: the acting-planner item
+    chatter = [m for n in names for m in muse.sent.get(n, []) if "acting planner" not in m and "switch to" not in m]
+    assert not chatter, f"CEO: idle agents themselves are never messaged except with work: {chatter}"
     print("ceo_only OK")
 
 
@@ -165,7 +178,7 @@ def ceo_parked():
     print("ceo_parked OK")
 
 
-CASES = [cadence, rotate, content, idle_silent, reset, escalate, ceo_threshold, ceo_once, ceo_only, ceo_parked]
+CASES = [cadence, rotate, content, idle_silent, reset, escalate, ceo_threshold, ceo_once, ceo_shrink, ceo_only, ceo_parked]
 
 if __name__ == "__main__":
     pick = sys.argv[1] if len(sys.argv) > 1 else None

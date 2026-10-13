@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 
 import hub
 import muse
@@ -165,6 +166,29 @@ def slack():
     print("slack OK")
 
 
+def activity_privacy():
+    """Status lines come from the fleet chat or the agent's own actions, never its owner's main chat;
+    a turn 'running' with no output for 30+ min is reported as stuck, not busy."""
+    import tempfile
+    d = tempfile.mkdtemp(); open(os.path.join(d, "fleet_session.txt"), "w").write("F")
+    now = time.time() * 1000
+    t = muse.MuseTransport("x", {"Neo": d})
+    def seen(sessions):
+        t._run = lambda name, *a: ({"result": {"sessions": sessions}} if a[1] == "sessions.list"
+                                   else {"result": {"days": [{"activities": []}]}})
+        return t.activity("Neo")
+    busy_main = seen([{"session_id": "M", "is_primary": True, "status": "running", "updated_at_ms": now, "snippet": "game's friday 7pm"}])
+    assert busy_main["busy"] and "game" not in busy_main["line"], busy_main
+    newer_main = seen([{"session_id": "M", "is_primary": True, "status": "completed", "updated_at_ms": now, "snippet": "private"},
+                       {"session_id": "F", "status": "completed", "updated_at_ms": now - 1000, "snippet": "fleet line"}])
+    assert newer_main["line"] == "fleet line", newer_main
+    task_thread = seen([{"session_id": "T", "status": "running", "updated_at_ms": now, "snippet": "Uploading concept sheet"}])
+    assert task_thread["line"] == "Uploading concept sheet", f"its own side chats/threads are work, shown: {task_thread}"
+    hung = seen([{"session_id": "F", "status": "running", "updated_at_ms": now - 3 * 3600e3, "snippet": "x"}])
+    assert not hung["busy"] and hung["line"].startswith("stuck"), hung
+    print("activity_privacy OK")
+
+
 if __name__ == "__main__":
-    {"side_chat_only": side_chat_only, "intro": intro, "slack": slack}.get(
+    {"activity_privacy": activity_privacy, "side_chat_only": side_chat_only, "intro": intro, "slack": slack}.get(
         sys.argv[1] if len(sys.argv) > 1 else "", lambda: (transport(), renewal()))()

@@ -1013,8 +1013,15 @@ function want(a) {
   if (flag) return { mode: "idle", flag, key: "idle!" + flag, card: null };
   if (a.kind === "slack") return { mode: "ceo", key: "ceo", card: (seatsOf(a.name).join(" · ") || "via Slack") + (a.queue ? ` · ${a.queue} waiting` : "") };
   if (a.task && a.task.status === "verifying") return { mode: "review", key: "review#" + a.task.id, card: short(`checking #${a.task.id} ${a.task.title}`) };
-  if (a.task || f.task) { const t = a.task || f.task; return { mode: "work", key: "work#" + t.id, card: short(`#${t.id} ${t.title}`) }; }
+  const dg = a.doing || {};
+  if (a.task || f.task) {                    // holding a task; ⏸ when Muse shows it hasn't acted in 20 min
+    const t = a.task || f.task;
+    const waiting = dg.busy === false && (!dg.at || Date.now() / 1000 - dg.at > 1200);
+    return waiting ? { mode: "work", key: "work#" + t.id, card: short(`⏸ #${t.id} ${t.title}`) }
+                             : { mode: "work", key: "work#" + t.id, card: short(`#${t.id} ${t.title}`) };
+  }
   if (f.doing) return { mode: "work", key: "work:" + f.doing, card: short(f.doing) };
+  if (dg.busy) return { mode: "work", key: "work:muse", card: "↻ " + short(dg.line || "working", 36) };
   if (a.current) return { mode: "call", key: "call#" + a.current.id, card: "↩ " + short(a.current.text, 34) };
   return { mode: "idle", key: "idle", card: null };
 }
@@ -1125,8 +1132,27 @@ function layout() {
   if (!r.width || !r.height) return;
   W = Math.round(r.width * DPR); H = Math.round(r.height * DPR); cv.width = W; cv.height = H;
   const s = Math.min(W / (BB.x1 - BB.x0), H / (BB.y1 - BB.y0));
-  cam = { s, tx: W / 2 - s * (BB.x0 + BB.x1) / 2, ty: H / 2 - s * (BB.y0 + BB.y1) / 2 };
-  cache = null;
+  cam0 = { s, tx: W / 2 - s * (BB.x0 + BB.x1) / 2, ty: H / 2 - s * (BB.y0 + BB.y1) / 2 };
+  applyView(); cache = null;                    // new canvas size: rebuild now
+}
+// zoom/pan on top of the fitted camera: f = zoom factor, ox/oy = pan in canvas px
+let cam0 = { s: 1, tx: 0, ty: 0 };
+const view = { f: 1, ox: 0, oy: 0 };
+function applyView() {
+  view.f = clamp(view.f, .8, 5);
+  view.ox = clamp(view.ox, -W * view.f * .6, W * view.f * .6); view.oy = clamp(view.oy, -H * view.f * .6, H * view.f * .6);
+  cam = { s: cam0.s * view.f, tx: W / 2 + (cam0.tx - W / 2) * view.f + view.ox, ty: H / 2 + (cam0.ty - H / 2) * view.f + view.oy };
+  rebuildAt = performance.now() + 160;          // while zooming/panning the old images are stretched; sharp again once it settles
+}
+let rebuildAt = 0;
+function cacheT(g) {                            // map images cached at an older camera onto the current one
+  const k = cam.s / cache.cam.s;
+  g.setTransform(k, 0, 0, k, cam.tx - cache.cam.tx * k, cam.ty - cache.cam.ty * k);
+}
+function zoomAt(mx, my, k) {                    // keep the world point under (mx, my) where it is
+  const wx0 = (mx - cam.tx) / cam.s, wy0 = (my - cam.ty) / cam.s;
+  view.f *= k; applyView();
+  view.ox += mx - (cam.tx + wx0 * cam.s); view.oy += my - (cam.ty + wy0 * cam.s); applyView();
 }
 const toScreen = ([x, y]) => [cam.tx + x * cam.s, cam.ty + y * cam.s];
 const worldT = g => g.setTransform(cam.s, 0, 0, cam.s, cam.tx, cam.ty);
@@ -1146,7 +1172,7 @@ function buildCache() {
   }
   const base = mk(W, H), bg = base.getContext("2d"); worldT(bg); drawBase(bg);
   const city = [0, 1].map(night => { const c = mk(W, H); drawCity(c.getContext("2d"), night); return c; });
-  cache = { sprites, base, city };
+  cache = { sprites, base, city, cam: { ...cam } };
 }
 const TOWER_ROWS = []; for (let z = -.5; z > -30; z -= 1.4) TOWER_ROWS.push(z);
 function towerWindows(f) {
@@ -1292,8 +1318,10 @@ function drawSky(g, n, now) {
     if (Math.floor(now * 1.5) % 2) { g.fillStyle = "#ff4d4d"; g.beginPath(); g.arc(px + 9 * DPR * plane.dir, py, 1.6 * DPR, 0, 7); g.fill(); }
     g.fillStyle = "rgba(255,255,255,.9)"; if (Math.floor(now * 2.3) % 3 === 0) { g.beginPath(); g.arc(px - 9 * DPR * plane.dir, py, 1.3 * DPR, 0, 7); g.fill(); } }
   for (const [x, y] of ANTENNAS) if ((Math.floor(now * .8 + x) % 3) === 0) { g.fillStyle = `rgba(255,60,60,${.35 + .65 * n})`; g.beginPath(); g.arc(x, y, 2 * DPR, 0, 7); g.fill(); }
+  cacheT(g);
   if (n > 0) { g.globalAlpha = n; g.drawImage(cache.city[1], 0, 0); g.globalAlpha = 1; }
   g.drawImage(cache.city[0], 0, 0);
+  g.setTransform(1, 0, 0, 1, 0, 0);
   for (const c of clouds) { const x = ((c.x + now * c.v * .1) % 1.3 - .15) * W, y = c.y * H; g.fillStyle = `rgba(255,255,255,${.75 * (1 - n)})`;
     for (const [dx, dy, rr] of [[0, 0, 22], [20, 4, 16], [-18, 5, 15], [8, -8, 14]]) { g.beginPath(); g.ellipse(x + dx * c.s * DPR, y + dy * c.s * DPR, rr * c.s * DPR * 1.4, rr * c.s * DPR * .7, 0, 0, 7); g.fill(); } }
   const sunx = W * .9, suny = H * .13;
@@ -1389,6 +1417,7 @@ function drawLabels(g) {
   const collide = r => placed.some(q => r[0] < q[0] + q[2] + 2 && r[0] + r[2] + 2 > q[0] && r[1] < q[1] + q[3] + 2 && r[1] + r[3] + 2 > q[1]);
   for (const p of list) {
     const [hx, hy] = toScreen(p.handW.head), top = hy - BODY.head * p.look.scale * cam.s - 2 * ls;
+    if (hx < 0 || hx > W || hy < 0 || hy > H) continue;          // zoomed past them: no label pinned to the edge
     const t = tone(p), line2 = t === 1 || t === 2 ? p.card : null, badgeOnly = labelMode === "working" && t === 0;
     g.font = LABEL_FONT(fs); const w1 = g.measureText(p.name).width; g.font = LABEL_FONT(fs2, 500); const w2 = line2 ? g.measureText(line2).width : 0;
     const w = badgeOnly ? 0 : Math.max(w1, w2) + pad * 2, h = badgeOnly ? 0 : line2 ? fs + fs2 + pad * 1.6 : fs + pad * 1.2, badge = p.flag ? 16 * ls : 0;
@@ -1428,11 +1457,12 @@ function frame(t) {
   if (!people.size || !visible) return;
   const r = wrap.getBoundingClientRect(); if (!r.width || !r.height) return;
   if (Math.abs(r.width * DPR - W) > 2 || Math.abs(r.height * DPR - H) > 2) layout();
+  if (cache && rebuildAt && t > rebuildAt) { cache = null; rebuildAt = 0; }
   if (!cache) buildCache();
   simStep(FDT);
   const g = ctx, n = nightness(); NIGHT_N = n;
   g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = "source-over"; g.globalAlpha = 1; g.clearRect(0, 0, W, H);
-  g.drawImage(cache.base, 0, 0);
+  cacheT(g); g.drawImage(cache.base, 0, 0);
   worldT(g); drawWalls(g);
   const list = [];
   for (const it of ITEMS) list.push([it.dynKey ? it.dynKey() : it.key, it]);
@@ -1441,7 +1471,7 @@ function frame(t) {
   list.sort((a, b) => a[0] - b[0]);
   for (const [, o] of list) {
     if (o.look) { worldT(g); drawPersonAt(g, o); continue; }
-    if (o.draw) { const sp = cache.sprites.get(o); if (sp) { g.setTransform(1, 0, 0, 1, 0, 0); g.drawImage(sp.c, sp.dx, sp.dy); } }
+    if (o.draw) { const sp = cache.sprites.get(o); if (sp) { cacheT(g); g.drawImage(sp.c, sp.dx, sp.dy); } }
     if (o.live) { worldT(g); o.live(g, T); }
   }
   drawParticles(g);
@@ -1493,7 +1523,27 @@ function mount() {
   wrap = $("office"); cv = $("officecv"); ctx = cv.getContext("2d"); hudEl = $("ohud"); tipEl = $("otip"); tickEl = $("oticker");
   cv.addEventListener("mousemove", e => { hover = at(e); cv.style.cursor = hover ? "pointer" : "default"; showTip(e); });
   cv.addEventListener("mouseleave", () => { hover = null; tipEl.hidden = true; });
-  cv.addEventListener("click", e => { const p = at(e); if (p) { if (document.fullscreenElement) document.exitFullscreen(); showAgent(p.name); } });
+  cv.addEventListener("click", e => { if (dragged) return; const p = at(e); if (p) { if (document.fullscreenElement) document.exitFullscreen(); showAgent(p.name); } });
+  // zoom: pinch / ⌘-scroll anywhere, plain scroll in full screen (outside it, scroll still scrolls the page); drag to pan
+  cv.addEventListener("wheel", e => {
+    if (!(e.ctrlKey || e.metaKey || document.fullscreenElement === wrap)) return;
+    e.preventDefault();
+    const r = cv.getBoundingClientRect();
+    zoomAt((e.clientX - r.left) * DPR, (e.clientY - r.top) * DPR, Math.exp(-e.deltaY * (e.ctrlKey ? .01 : .0025)));
+  }, { passive: false });
+  let drag = null, dragged = false;
+  cv.addEventListener("pointerdown", e => { drag = { x: e.clientX, y: e.clientY }; dragged = false; });
+  addEventListener("pointermove", e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!dragged && Math.hypot(dx, dy) < 4) return;
+    dragged = true; cv.style.cursor = "grabbing";
+    view.ox += dx * DPR; view.oy += dy * DPR; drag = { x: e.clientX, y: e.clientY }; applyView();
+  });
+  addEventListener("pointerup", () => { drag = null; cv.style.cursor = "default"; });
+  cv.addEventListener("dblclick", () => { view.f = 1; view.ox = view.oy = 0; applyView(); });
+  const zb = (id, k) => { const b = $(id); if (b) b.onclick = () => k ? zoomAt(W / 2, H / 2, k) : (view.f = 1, view.ox = view.oy = 0, applyView()); };
+  zb("ozin", 1.35); zb("ozout", 1 / 1.35); zb("ozfit", 0);
   const lb = $("olab"); lb.textContent = LABEL_TEXT[labelMode];
   lb.onclick = () => { labelMode = LABEL_MODES[(LABEL_MODES.indexOf(labelMode) + 1) % 3]; lb.textContent = LABEL_TEXT[labelMode]; try { localStorage.officeLabels = labelMode; } catch {} };
   const fs = $("ofs");

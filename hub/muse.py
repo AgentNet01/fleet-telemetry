@@ -93,6 +93,52 @@ class MuseTransport:
                 out.append((int(e["seq"]), text))
         return out
 
+    STUCK_AFTER = 1800                   # a turn "running" this long with no new output is hung, not working
+
+    def activity(self, name):
+        """What Muse shows this agent doing anywhere, not only in the fleet chat: whether a turn is running
+        right now, when it last acted itself (`at`: a file, a search, a task run), and one line saying what with
+        the time that line is from (`line_at`). Words never come from its main chat — that's its owner's."""
+        sessions = [s for s in self._run(name, "raw", "sessions.list")["result"]["sessions"] if not s.get("archived")]
+        acts = [a for day in self._run(name, "raw", "activity.list")["result"]["days"] for a in day.get("activities", [])]
+        newest = max(acts, key=lambda a: a.get("timestamp") or "", default=None)
+        at = _epoch(newest["timestamp"]) if newest else None
+        now, when = time.time(), lambda s: (s.get("updated_at_ms") or 0) / 1000
+        say = lambda s: _clean(s.get("snippet") or "") if not s.get("is_primary") else ""
+        running = [s for s in sessions if s.get("status") == "running"]
+        live = [s for s in running if now - when(s) < self.STUCK_AFTER]
+        if live:
+            s = max(live, key=when)
+            return {"busy": True, "at": at, "line": say(s) or "working in its main chat", "line_at": when(s)}
+        if running:
+            s = max(running, key=when)
+            return {"busy": False, "at": at, "line": f"stuck: a turn has been running since {time.strftime('%H:%M', time.localtime(when(s)))} "
+                                                      "with no new output", "line_at": when(s)}
+        # idle: the newer of its last own action and its last line in a fleet/side chat
+        side = max((s for s in sessions if say(s)), key=when, default=None)
+        if side and (not at or when(side) > at):
+            return {"busy": False, "at": at, "line": say(side), "line_at": when(side)}
+        return {"busy": False, "at": at, "line": _describe(newest) if newest else None, "line_at": at}
+
+def _epoch(iso):
+    import calendar
+    return float(calendar.timegm(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S")))
+
+
+def _clean(s):
+    return " ".join(re.sub(r"[\u2066-\u2069]", "", s).split())[:160]
+
+
+def _describe(a):
+    det, kind = a.get("details") or {}, a.get("type") or ""
+    files = det.get("files") or []
+    if kind.startswith("file_") and files:
+        more = f" (+{len(files) - 1} more)" if len(files) > 1 else ""
+        return ("Created " if kind == "file_created" else "Edited ") + os.path.basename(files[0].get("path", "")) + more
+    if kind == "web_search" and det.get("query"):
+        return "Searched: " + _clean(det["query"])
+    return _clean(a.get("task_label") or a.get("title") or kind)
+
 
 def _curl_post(account_dir, cookie_header):
     from muse_cli import gateway as g                      # only on the hub, inside the muse-cli venv
@@ -180,7 +226,12 @@ class SlackTransport:
         cache = self.__dict__.setdefault("_read", {})
         at, msgs = cache.get(name, (0, None))
         if msgs is None or time.time() - at >= self.READ_EVERY:
-            msgs = self.api("conversations.replies", channel=ch, ts=thread, limit=200)["messages"]
+            # Slack pages a thread oldest-first, 200 at a time: read on from the newest message we hold, so a
+            # thread past 200 messages keeps being read (one page per read; after a restart it catches up)
+            newest = max((m["ts"] for m in msgs or []), key=float, default=None)
+            page = self.api("conversations.replies", channel=ch, ts=thread, limit=200,
+                            **({"oldest": newest} if newest else {}))["messages"]
+            msgs = list({m["ts"]: m for m in (msgs or []) + page}.values())
             cache[name] = (time.time(), msgs)
         return sorted((float(m["ts"]), m.get("text", "")) for m in msgs
                       if m.get("user") == uid and float(m["ts"]) > float(after or 0))
@@ -203,6 +254,9 @@ class KindRouter:
 
     def replies(self, name, after):
         return self._for(name).replies(name, after)
+
+    def activity(self, name):
+        return getattr(self._for(name), "activity", lambda n: None)(name)
 
     def session(self, name):
         return self._for(name).session(name)

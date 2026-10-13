@@ -129,12 +129,22 @@ MIGRATIONS = [
     "alter table nudges add column streak integer default 0",   # reminders since the holder's last progress
     "alter table agents add column last_act real",        # the agent itself last did something: chat, reply or any fleet command
     "alter table items add column closed real",           # when it was answered or failed
+    "alter table agents add column busy integer",         # Muse: a turn is running right now
+    "alter table agents add column doing text",           # Muse: one line on what it's doing or last did
+    "alter table agents add column doing_at real",        # Muse: when it last acted itself
+    "alter table dry_notes add column stage text",        # planning round: 'pm' asked, then 'planner' asked
+    "alter table dry_notes add column planner text",
+    "alter table suggestions add column line text",
+    "alter table agents add column powers_told text",     # the powers text this agent was last told       # a PM's company command waiting on the CEO's review
 ]
 WORKERS = ("muse", "poll")            # kinds that take tasks; 'slack' (dot) and 'jack' (the board) don't
 PUSH = ("muse", "slack")              # kinds the hub sends to; 'poll' agents fetch with `fleet inbox`
-ONE_SHOT = ("note", "task", "verify", "nudge")
+ONE_SHOT = ("note", "task", "verify", "nudge", "plan")
 NUDGE_AFTER = 3600                     # a task holder silent this long is reminded, then its PM an hour later
 IDLE_AFTER = 12 * 3600
+STANDIN_AFTER = 3 * 3600              # a CEO silent this long is stood in for by seat ceo_backup
+REVIEW_WAIT = 2 * 3600                # a PM's company change the CEO hasn't answered goes ahead after this
+PLAN_WAIT = 2 * 3600                  # a PM silent this long on an unplanned product: a free agent plans it
 CEO_IDLE_COUNT = 3                    # more than this many idle workers → the CEO hears about it
 NUDGES = (                            # same meaning, different words: agents tune out a repeated message
     "Checking in on your open fleet task — how's it going?",
@@ -158,6 +168,10 @@ DEFAULT_ROLES = {
 
 def _hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+class NeedsReview(PermissionError):
+    """A PM's company-level command: allowed, once the CEO has had a chance to say no."""
 
 
 class Hub:
@@ -204,10 +218,32 @@ class Hub:
         with self.lock:
             self._acted(name)
 
-    def _acted(self, name):
+    def _acted(self, name, at=None):
         # "unresponsive" means the agent isn't acting at all; anything it does itself disproves that
         self.db.execute("update agents set last_act=?, state=case when state='unresponsive' then 'active' else state end "
-                        "where name=?", (self.clock(), name))
+                        "where name=?", (self.clock() if at is None else at, name))
+
+    OBSERVE_EVERY = 120                  # Muse activity is read on its own thread, so delivery never waits on it
+
+    def observe(self):
+        """Read what Muse shows each agent doing — mid-turn, its own last action — beyond its fleet chat."""
+        with self.lock:
+            names = [r["name"] for r in self.db.execute("select name from agents where kind='muse' and state!='parked'")]
+        for name in names:
+            try:
+                d = self.transport.activity(name)                   # muse-cli I/O, never under the lock
+            except Exception:
+                continue                                            # ponytail: keep the last reading; delivery errors already page Jack
+            if not d:
+                continue
+            with self.lock:
+                self._set("agents", name, busy=int(bool(d["busy"])), doing=d.get("line"), doing_at=d.get("line_at", d.get("at")))
+                seen = self.clock() if d["busy"] else d.get("at")
+                if seen and seen > (self._agent(name)["last_act"] or 0):
+                    if self.clock() - seen <= 2 * RESEND:
+                        self._acted(name, seen)             # recent: it's acting, so not unresponsive
+                    else:
+                        self._set("agents", name, last_act=seen)   # old news: on record, revives nobody
 
     def _agent(self, name):
         return self.db.execute("select * from agents where name=?", (name,)).fetchone()
@@ -284,6 +320,8 @@ class Hub:
             return (f"{head}[fleet · verify task #{t}]\n{body}\n"
                     f"— Check it yourself against the definition of done, then run `fleet task verify {t} pass` "
                     f"or `fleet task verify {t} fail \"<reason>\"`.")
+        if kind == "plan":
+            return f"{head}[fleet #{iid} · planner]\n{body}"
         if kind == "question":
             return (f"{head}[fleet #{iid} · the fleet is being asked]\n{body}\n"
                     f"— Reply with your own view in a sentence or two. One answer will be chosen from everyone's.")
@@ -331,6 +369,9 @@ class Hub:
             self._track_free()
             self._nudge()
             self._ceo_idle()
+            self._watch_chair()
+            self._watch_powers()
+            self._reviews()
             self._dry()
             agents = [dict(a) for a in self.db.execute(
                 "select * from agents where kind in ('muse','poll','slack') and state != 'parked' order by name")]
@@ -595,17 +636,28 @@ class Hub:
         return a["team"] in (None, "", "generalist", role)
 
     def _assign_tasks(self):
-        # a task becomes ready once its blockers are done; ready+unowned tasks go to a matching idle agent
-        for t in self.db.execute("select * from tasks where status in ('open','blocked','ready')").fetchall():
+        # status follows the blockers both ways: work whose blocker reopened goes back to 'blocked' and frees its
+        # holder; a task created for someone starts with them once it can; ready+unowned goes to an idle agent
+        for t in self.db.execute("select * from tasks where status in ('open','blocked','ready','working')").fetchall():
             ready = self._blockers_done(t)
-            if ready and not t["owner"]:
-                self._set("tasks", t["id"], status="ready")
-            elif not ready:
-                self._set("tasks", t["id"], status="blocked")
-            if not ready or t["owner"]:
+            if not ready:
+                if t["status"] != "blocked":
+                    # on hold: back to the same holder once it can move (pin), and the holder is told, not left guessing
+                    self._set("tasks", t["id"], status="blocked", owner=None, pin=t["pin"] or t["owner"], touched=self.clock())
+                    if t["owner"]:
+                        self._task_event(t["id"], t["owner"], "blocked", "a task it depends on isn't done; holder freed")
+                        self.db.execute("update items set status='dropped', closed=? where kind='task' and ref=? and status='queued'",
+                                        (self.clock(), t["id"]))
+                        self._note(t["owner"], f"task #{t['id']} “{t['title']}” is on hold",
+                                   "A task it depends on isn't done any more, so it's paused and you're free for other work. "
+                                   "It comes back to you once it can move.")
+                continue
+            if t["status"] == "working":
                 continue
             product = self._task_product(t["id"])
-            owner = next(self._idle(product, t["role"], t["pin"]), None)
+            pin = t["pin"] or t["owner"]             # named for someone but not started: theirs, through the normal switch
+            self._set("tasks", t["id"], status="ready", owner=None, pin=pin)
+            owner = next(self._idle(product, t["role"], pin), None)
             if owner:
                 self._set("tasks", t["id"], owner=owner, status="working", touched=self.clock())
                 self._task_event(t["id"], owner, "assigned")
@@ -637,7 +689,8 @@ class Hub:
         if self.is_board(who) or self._ceo_level(who):
             return True
         p = self.db.execute("select pm from products where name=?", (product,)).fetchone() if product else None
-        return bool(who and p and p["pm"] == who)
+        return bool(who and p and (p["pm"] == who or self.db.execute(
+            "select 1 from grants where agent=? and level=?", (who, "plan:" + product)).fetchone()))
 
     def _task_event(self, tid, agent, what, text=""):
         self.db.execute("insert into task_events(task, agent, what, text, at) values(?,?,?,?,?)",
@@ -774,7 +827,8 @@ class Hub:
             return
         key = ",".join(a["name"] for a in idle)
         last = self.db.execute("select * from ceo_notes order by id desc limit 1").fetchone()
-        if last and last["agents"] == key and now - last["at"] < IDLE_AFTER:
+        # again only when someone new is idle (the set shrinking as work lands is good news, not a reason) or 12 h pass
+        if last and set(key.split(",")) <= set(last["agents"].split(",")) and now - last["at"] < IDLE_AFTER:
             return
         self.db.execute("insert into ceo_notes(agents, at) values(?,?)", (key, now))
         who = "\n".join(f"- {a['name']} ({a['current_product'] or 'no product'} · {a['current_role'] or 'no role'}), "
@@ -786,26 +840,65 @@ class Hub:
                          "Ask the PMs for work these agents can take, or add tasks yourself.")
 
     def _dry(self):
-        """An active product with nothing open, ready, blocked or in progress asks its PM (or the CEO) for the
-        next tasks — at most once every 12 h — so the business keeps moving after its first batch is done."""
+        """A product with nothing waiting to be picked up while agents sit idle gets planned, by rounds: its PM
+        (or the chair) is asked first; if no task lands within PLAN_WAIT, one idle agent is made acting planner
+        — it may `task add` in that product — and the PM is told and can remove what it adds. A round ends when
+        new work has landed and been taken; the next starts then, or after IDLE_AFTER with nothing at all."""
         now = self.clock()
+        idle = list(self._idle())
         for p in self.db.execute("select * from products where status='active'").fetchall():
-            busy = self.db.execute("select 1 from tasks t join projects j on t.project=j.id where j.product=? "
-                                   "and t.status not in ('done','cancelled')", (p["id"],)).fetchone()
-            last = self.db.execute("select at from dry_notes where product=?", (p["id"],)).fetchone()
-            if busy or (last and now - last["at"] < IDLE_AFTER):
+            in_product = "from tasks t join projects j on t.project=j.id where j.product=?"
+            queued = self.db.execute(f"select 1 {in_product} and t.status in ('open','ready','blocked')", (p["id"],)).fetchone()
+            row = self.db.execute("select * from dry_notes where product=?", (p["id"],)).fetchone()
+            landed = row and self.db.execute(f"select 1 {in_product} and t.created > ?", (p["id"], row["at"])).fetchone()
+            if row and row["planner"] and landed and not queued:      # the planner's round is over: its rights end
+                self.db.execute("delete from grants where agent=? and level=?", (row["planner"], "plan:" + p["name"]))
+            if queued or not idle:
                 continue
+            if row and not landed:
+                if row["stage"] == "pm" and now - row["at"] >= PLAN_WAIT:
+                    asked = p["pm"] or self._chair()
+                    self._plan_by_agent(p, [n for n in idle if n != asked], row)
+                if now - row["at"] < IDLE_AFTER:
+                    continue
             who = p["pm"] or self._chair()
             if not who:
                 continue
-            self.db.execute("insert or replace into dry_notes(product, at) values(?,?)", (p["id"], now))
-            projects = ", ".join(f"#{j['id']} {j['name']}" for j in self.db.execute(
-                "select * from projects where product=? and status != 'removed'", (p["id"],))) or "none yet"
-            self._deliver_to(who, f"{p['name']} has no work lined up",
-                             f"Goal: {p['metric'] or '(none set)'}. {p['brief'] or ''}\nProjects: {projects}\n"
+            if row and row["planner"]:
+                self.db.execute("delete from grants where agent=? and level=?", (row["planner"], "plan:" + p["name"]))
+            self.db.execute("insert or replace into dry_notes(product, at, stage, planner) values(?,?,'pm',null)", (p["id"], now))
+            self._deliver_to(who, f"{p['name']} has no work lined up and {len(idle)} agents are free",
+                             f"Goal: {p['metric'] or '(none set)'}. {p['brief'] or ''}\nProjects: {self._projects_line(p['id'])}\n"
                              "Plan the next steps and add them: fleet task add <project id> \"<title>\" <role> \"<done when>\" "
-                             "(fleet project add first if it needs a new one). Or pause it: fleet product set "
-                             f"\"{p['name']}\" status paused.")
+                             "(fleet project add first if it needs a new one). Every agent can take any product's task. "
+                             f"If nothing is added within {PLAN_WAIT // 3600} h, a free agent is asked to plan it instead. "
+                             f"Or pause it: fleet product set \"{p['name']}\" status paused.")
+
+    def _projects_line(self, pid):
+        return ", ".join(f"#{j['id']} {j['name']}" for j in self.db.execute(
+            "select * from projects where product=? and status != 'removed'", (pid,))) or "none yet"
+
+    def _plan_by_agent(self, p, idle, row):
+        taken = {r["agent"] for r in self.db.execute("select agent from grants")}
+        planner = next((n for n in idle if n not in taken), None)
+        if not planner:
+            return
+        self.db.execute("insert into grants(agent, level, by, at) values(?,?,'hub',?)", (planner, "plan:" + p["name"], self.clock()))
+        self.db.execute("update dry_notes set stage='planner', planner=? where product=?", (planner, p["id"]))
+        done = "\n".join(f"- {t['title']}" for t in self.db.execute(
+            "select t.title from tasks t join projects j on t.project=j.id where j.product=? and t.status='done' "
+            "order by t.id desc limit 8", (p["id"],))) or "- (nothing yet)"
+        self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('plan','hub',?,?,0,'queued',?)",
+                        (planner, f"You're the acting planner for {p['name']}: nothing is queued, agents are free, and its "
+                                  f"PM didn't add work in {PLAN_WAIT // 3600} h.\nGoal: {p['metric'] or '(none set)'}. {p['brief'] or ''}\n"
+                                  f"Projects: {self._projects_line(p['id'])}\nDone so far:\n{done}\n"
+                                  "Add 3-8 concrete next tasks that move the goal, each one agent can finish and prove: "
+                                  "fleet task add <project id> \"<title>\" <designer|engineer|marketer|optimizer> \"<done when>\". "
+                                  "Free agents pick them up straight away.", self.clock()))
+        if p["pm"]:
+            self._note(p["pm"], f"{planner} is planning {p['name']}",
+                       f"No tasks were added in {PLAN_WAIT // 3600} h while agents were free, so {planner} is planning the "
+                       "next steps. Remove any you disagree with: fleet task remove <id>.")
 
     # ---- seats, PMs, roles, suggestions -------------------------------------------------
     def set_pm(self, product, who):
@@ -841,15 +934,93 @@ class Hub:
                 result = f"suggestion #{a[2]} {a[1]}ed"
                 self.db.execute("insert into changes(by, line, result, at) values(?,?,?,?)", (by, line, result, self.clock()))
                 return result
-            self._may_run(by, a)
+            try:
+                self._may_run(by, a)
+            except NeedsReview:
+                return self._propose(by, line)
             before = {n: self.powers(n) for n in self._names()}
             result = self._manage(a, by)
             if not result.startswith("unknown command"):
                 self.db.execute("insert into changes(by, line, result, at) values(?,?,?,?)", (by, line, result, self.clock()))
                 for n in self._names():                  # anyone whose powers changed is told what they can do now
                     if before.get(n) != self.powers(n) and n != by:
-                        self._note(n, "what you can do on the hub changed", self.powers(n))
+                        self._tell_powers(n)
             return result
+
+    def _propose(self, by, line):
+        ceo = self._chair()
+        sid = self.db.execute("insert into suggestions(frm, product, text, at, line) values(?,?,?,?,?)",
+                              (by, None, f"run: fleet {line}", self.clock(), line)).lastrowid
+        self._deliver_to(ceo, f"review #{sid}: {by} wants to run `fleet {line}`",
+                         f"Accept: fleet suggestion accept {sid}\nReject: fleet suggestion reject {sid} \"why\"\n"
+                         f"With no answer in {REVIEW_WAIT // 3600} h it goes ahead.")
+        self.db.execute("insert into changes(by, line, result, at) values(?,?,?,?)",
+                        (by, line, f"sent to {ceo} for review (#{sid})", self.clock()))
+        return f"sent to {ceo} for review as #{sid}; it goes ahead in {REVIEW_WAIT // 3600} h unless rejected"
+
+    def _apply_line(self, frm, line, why):
+        import shlex
+        try:
+            result = self._manage(shlex.split(line), frm)
+        except Exception as e:
+            result = f"failed: {e}"
+        self.db.execute("insert into changes(by, line, result, at) values(?,?,?,?)", (frm, line, f"{result} ({why})", self.clock()))
+        self._note(frm, f"your change `fleet {line}` {why}", result)
+        return result
+
+    def _reviews(self):
+        """A PM's change the CEO hasn't answered in REVIEW_WAIT goes ahead; the CEO is told."""
+        for sg in self.db.execute("select * from suggestions where status='open' and line is not null and at <= ?",
+                                  (self.clock() - REVIEW_WAIT,)).fetchall():
+            self.db.execute("update suggestions set status='accepted', decided_by='hub', note=?, decided_at=? where id=?",
+                            (f"no answer in {REVIEW_WAIT // 3600} h", self.clock(), sg["id"]))
+            result = self._apply_line(sg["frm"], sg["line"], f"went ahead: no answer in {REVIEW_WAIT // 3600} h")
+            ceo = self.db.execute("select agent from seats where role='ceo'").fetchone()
+            if ceo and ceo["agent"] != sg["frm"]:
+                self._deliver_to(ceo["agent"], f"review #{sg['id']} went ahead without an answer",
+                                 f"{sg['frm']} ran `fleet {sg['line']}` → {result}")
+
+    def _watch_chair(self):
+        """Tell a stand-in it's in charge when it takes over; when the CEO is back, tell it what changed."""
+        chair = self._chair()
+        ceo = (self.db.execute("select agent from seats where role='ceo'").fetchone() or {"agent": None})["agent"]
+        row = self.db.execute("select agent from seats where role='acting'").fetchone()
+        was = row["agent"] if row else None
+        if chair == was:
+            return
+        self.db.execute("insert or replace into seats(role, agent) values('acting', ?)", (chair,))
+        if not chair:
+            return
+        if chair != ceo:
+            self.db.execute("insert into changes(by, line, result, at) values('hub', ?, ?, ?)",
+                            (f"stand-in {chair}", f"{chair} stands in for {ceo}", self.clock()))
+            self._deliver_to(chair, f"you're standing in as CEO — {ceo} has done nothing for {STANDIN_AFTER // 3600} h",
+                             "Run the company directly now: products, projects, tasks, PMs, teams, placement (fleet powers). "
+                             f"Use your judgement; {ceo} gets a summary of what you changed when it's back.")
+        elif was and was != ceo:
+            since = self.db.execute("select max(at) from changes where by='hub' and line=?", (f"stand-in {was}",)).fetchone()[0] or 0
+            done = [f"- {c['line']} → {c['result']}" for c in self.db.execute(
+                "select * from changes where by=? and at>=? order by id", (was, since))]
+            self._deliver_to(ceo, f"while you were away, {was} stood in as CEO",
+                             ("What changed:\n" + "\n".join(done)) if done else "Nothing was changed.")
+
+    def _tell_powers(self, n):
+        p = self.powers(n)
+        self._set("agents", n, powers_told=p)
+        self._note(n, "what you can do on the hub changed", p)
+
+    def _watch_powers(self):
+        """Powers change for more reasons than a command — a stand-in taking over or handing back, a hub update.
+        Whoever's changed is told once; a plain worker the first time round has nothing new to hear."""
+        worker = "You do tasks you're given"
+        for n in self._names():
+            a, p = self._agent(n), self.powers(n)
+            if a["powers_told"] == p:
+                continue
+            if a["powers_told"] is None and p.startswith(worker):
+                self._set("agents", n, powers_told=p)
+                continue
+            self._tell_powers(n)
 
     def _names(self):
         return [r["name"] for r in self.db.execute("select name from agents where kind in ('muse','poll','slack') and state='active'")]
@@ -865,16 +1036,23 @@ class Hub:
                 "Everyone: fleet status, fleet inbox, fleet portfolio, fleet changes, fleet ask, fleet reply, "
                 "fleet task note|done on tasks you hold, fleet task verify when asked, fleet suggest \"<idea>\".")
         if self._ceo_level(who):
-            seat = "You hold the CEO seat" if who == self._chair() else "You have CEO-level powers (granted)"
+            ceo = (self.db.execute("select agent from seats where role='ceo'").fetchone() or {"agent": None})["agent"]
+            seat = ("You hold the CEO seat" if who == ceo else f"You're standing in as CEO while {ceo} is silent"
+                    if who == self._chair() else "You have CEO-level powers (granted)")
+            review = (f"PMs' company changes come to the CEO for review (fleet suggestion accept|reject <id>); one with "
+                      f"no answer in {REVIEW_WAIT // 3600} h goes ahead. ")
             return (f"{seat}: you can do everything the CEO can — add, change, rename and remove products and projects; "
                     "add, edit, remove and release tasks; name PMs; put agents on teams (fleet team <agent> <role>|generalist); hand over the CEO "
                     "seat; rewrite what each role is told; decide suggestions; and grant or revoke CEO-level powers for "
                     "other agents (fleet grant <agent> ceo|none). Only Jack and Darragh park or wake agents. "
-                    "Every change is logged on the dashboard. Commands: fleet help.\n" + base)
+                    + review + "Every change is logged on the dashboard. Commands: fleet help.\n" + base)
         if pm_of:
             return (f"You are PM of {', '.join(pm_of)}: you manage the tasks in {', '.join(pm_of)} — fleet task add, "
-                    "task set, task remove, task release — and decide suggestions for it. Ask the CEO for anything "
-                    "beyond that (new products, people, powers).\n" + base)
+                    "task set, task remove, task release — and decide suggestions for it. You can also change the "
+                    "rest of the company (new products and projects, PMs, teams, placement): run the command and it "
+                    f"goes to the CEO for review, and goes ahead if there's no answer in {REVIEW_WAIT // 3600} h. When "
+                    "the CEO has been silent for hours you may be its stand-in and act directly. Parking agents and "
+                    "granting CEO level stay with the board and the CEO.\n" + base)
         return "You do tasks you're given; you can't change the company yourself. Ask the CEO or your PM.\n" + base
 
     def _may_run(self, by, a):
@@ -897,6 +1075,9 @@ class Hub:
             if prod and self.may_manage(by, prod["name"]):
                 return
             raise PermissionError("only Jack, Darragh, the CEO or this product's PM can manage its tasks")
+        if a[:1] not in (["grant"], ["seat"]) and self.db.execute(
+                "select 1 from products where pm=? and status='active'", (by,)).fetchone():
+            raise NeedsReview(a)
         raise PermissionError("only Jack, Darragh, the CEO or an agent granted CEO level can change the company")
 
     def changes(self, n=100):
@@ -1090,10 +1271,15 @@ class Hub:
                 raise ValueError(f"no suggestion #{sid}")
             if not self.may_manage(by, sg["product"]):
                 raise PermissionError("only Jack, Darragh, the CEO or this product's PM decide suggestions")
+            if sg["line"] and by == sg["frm"]:
+                raise PermissionError("someone else reviews your own change")
             status = "accepted" if accept else "rejected"
             self.db.execute("update suggestions set status=?, decided_by=?, note=?, decided_at=? where id=?",
                             (status, by, note, self.clock(), sid))
             self._note(sg["frm"], f"your suggestion #{sid} was {status} by {by}", f"{sg['text']}" + (f"\n{note}" if note else ""))
+            if accept and sg["line"]:
+                self._apply_line(sg["frm"], sg["line"], f"approved by {by}")
+                return
             chair = self._chair()
             if accept and chair and chair not in (by, sg["frm"]):
                 # accepting only records the decision; someone with the power to change things has to do it
@@ -1134,8 +1320,16 @@ class Hub:
         return {r["too"] for r in self.db.execute("select too from items where council=? and kind='question'", (cid,))}
 
     def _chair(self):
-        r = self.db.execute("select agent from seats where role='ceo'").fetchone()
-        return r["agent"] if r else None
+        """The CEO — or its stand-in (seat 'ceo_backup') while the CEO is parked or has done nothing for
+        STANDIN_AFTER; the CEO takes the seat back by acting at all."""
+        seat = {r["role"]: r["agent"] for r in self.db.execute("select * from seats where role in ('ceo','ceo_backup')")}
+        ceo, backup = seat.get("ceo"), seat.get("ceo_backup")
+        b = self._agent(backup) if backup else None
+        if not (b and b["state"] != "parked" and backup != ceo):
+            return ceo
+        a = self._agent(ceo) if ceo else None
+        silent = not a or a["state"] == "parked" or self.clock() - max(a["last_act"] or 0, a["last_out"] or 0) >= STANDIN_AFTER
+        return backup if silent else ceo
 
     def _add_view(self, cid, agent, view):
         self.db.execute("insert into council_views(council, agent, view, at) values(?,?,?,?)", (cid, agent, view, self.clock()))
@@ -1527,6 +1721,8 @@ class Hub:
                             "last_in": a["last_in"], "last_out": a["last_out"], "login_expires": a["login_expires"],
                             "product": a["current_product"], "role": a["current_role"], "onboarded": a["onboarded"], "team": a["team"] or "generalist",
                             "focus": self._focus(a["name"]), "free_since": a["free_since"],
+                            "doing": {"busy": bool(a["busy"]), "line": a["doing"], "at": a["doing_at"]}
+                                     if a["doing"] is not None or a["busy"] else None,
                             "last_work": (lambda w: {"title": w["title"], "at": w["at"]} if w else None)(self.db.execute(
                                 "select title, at from work where agent=? order by at desc limit 1", (a["name"],)).fetchone()),
                             "task": next(({"id": t["id"], "title": t["title"], "status": t["status"],
@@ -2049,8 +2245,17 @@ def main(cfg_path, *args):
             time.sleep(15)
 
     sys.stdout = sys.stderr = log           # never block on a dead console (hidden window / service with no stdout)
+    def watch():
+        while True:
+            try:
+                h.observe()
+            except Exception:
+                log.write(time.strftime("%F %T ") + traceback.format_exc())
+            time.sleep(h.OBSERVE_EVERY)
+
     if cfg.get("loop", True):               # assigns, nudges and delivers to fleet side chats; off = pure server
         threading.Thread(target=loop, daemon=True).start()
+        threading.Thread(target=watch, daemon=True).start()
     log.write(time.strftime("%F %T ") + f"hub up on {cfg.get('host', '127.0.0.1')}:{cfg['port']}\n")
     serve(h, cfg.get("host", "127.0.0.1"), cfg["port"], cfg["password"], cfg.get("join_code"), cfg.get("logins")).serve_forever()
 
