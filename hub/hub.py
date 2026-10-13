@@ -32,6 +32,13 @@ from urllib.parse import parse_qs, urlparse
 QUIET, RESEND, MAX_DEPTH = 60, 600, 5
 COUNCIL_WINDOW = 15 * 60
 HERE = os.path.dirname(os.path.abspath(__file__))
+FLEET_REPO = "https://github.com/AgentNet01/fleet-telemetry.git"   # public: every agent can clone it, no GitHub login
+
+
+def fleet_rev():
+    """The version fleet.py reports (sha256 of the file): agents on another one are behind the hub."""
+    with open(os.path.join(HERE, "fleet.py"), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()[:12]
 
 
 def _evidence_ok(link):
@@ -136,6 +143,11 @@ MIGRATIONS = [
     "alter table dry_notes add column planner text",
     "alter table suggestions add column line text",
     "alter table agents add column powers_told text",
+    "alter table tasks add column waiting_on text",       # who a parked task waits on: jack|darragh|<agent>|outside
+    "alter table tasks add column waiting_for text",
+    "alter table needs_jack add column task integer",     # a wait on Jack/Darragh: done on his list clears it
+    "alter table agents add column fleet_rev text",       # version of the fleet command it last called with
+    "alter table agents add column fleet_told real",
     "create table if not exists approvals(id text primary key, agent text, label text, detail text, options text, expires real)",     # the powers text this agent was last told       # a PM's company command waiting on the CEO's review
 ]
 WORKERS = ("muse", "poll")            # kinds that take tasks; 'slack' (dot) and 'jack' (the board) don't
@@ -213,9 +225,11 @@ class Hub:
             row = self.db.execute("select name from agents where token_hash=?", (_hash(token or ""),)).fetchone()
             return row["name"] if row else None
 
-    def note_onboarded(self, name):
+    def note_onboarded(self, name, rev=None):
         with self.lock:
             self.db.execute("update agents set onboarded=? where name=? and onboarded is null", (self.clock(), name))
+            if rev:
+                self.db.execute("update agents set fleet_rev=? where name=? and fleet_rev is not ?", (rev, name, rev))
 
     def acted(self, name):
         with self.lock:
@@ -374,6 +388,7 @@ class Hub:
             self._ceo_idle()
             self._watch_chair()
             self._watch_powers()
+            self._watch_fleet()
             self._reviews()
             self._dry()
             agents = [dict(a) for a in self.db.execute(
@@ -645,19 +660,24 @@ class Hub:
     def _assign_tasks(self):
         # status follows the blockers both ways: work whose blocker reopened goes back to 'blocked' and frees its
         # holder; a task created for someone starts with them once it can; ready+unowned goes to an idle agent
-        for t in self.db.execute(f"select t.* {LIVE_TASKS} and t.status in ('open','blocked','ready','working')").fetchall():
-            ready = self._blockers_done(t)
-            if not ready:
+        for t in self.db.execute("select t.*, p.status as product_status from tasks t join projects j on t.project=j.id "
+                                 "join products p on j.product=p.id where p.status != 'removed' "
+                                 "and t.status in ('open','blocked','ready','working')").fetchall():
+            why = ("its product is paused" if t["product_status"] != "active" else
+                   None if t["waiting_on"] else
+                   "a task it depends on isn't done any more" if not self._blockers_done(t) else "")
+            if why is None or why:
                 if t["status"] != "blocked":
                     # on hold: back to the same holder once it can move (pin), and the holder is told, not left guessing
                     self._set("tasks", t["id"], status="blocked", owner=None, pin=t["pin"] or t["owner"], touched=self.clock())
                     if t["owner"]:
-                        self._task_event(t["id"], t["owner"], "blocked", "a task it depends on isn't done; holder freed")
+                        self._task_event(t["id"], t["owner"], "blocked", f"{why or 'waiting on ' + t['waiting_on']}; holder freed")
                         self.db.execute("update items set status='dropped', closed=? where kind='task' and ref=? and status='queued'",
                                         (self.clock(), t["id"]))
-                        self._note(t["owner"], f"task #{t['id']} “{t['title']}” is on hold",
-                                   "A task it depends on isn't done any more, so it's paused and you're free for other work. "
-                                   "It comes back to you once it can move.")
+                        if why:                          # a wait was the holder's own call: nothing to tell it
+                            self._note(t["owner"], f"task #{t['id']} “{t['title']}” is on hold",
+                                       f"{why[0].upper() + why[1:]}, so it's on hold and you're free for other work. "
+                                       "It comes back to you once it can move.")
                 continue
             if t["status"] == "working":
                 continue
@@ -749,11 +769,59 @@ class Hub:
                 self._note(t["owner"], f"task #{tid} didn't pass verification",
                            f"{t['title']}\n{agent}: {reason}\nFix it, then `fleet task done {tid} <link>` again.")
 
+    def task_wait(self, agent, tid, who, what):
+        """The holder can't move until someone else acts: the task is parked for it (pin) and it takes other work.
+        Jack/Darragh see it on their list; another agent is asked; anything else ('outside') the holder resumes."""
+        with self.lock:
+            t = self._task_row(tid)
+            if t["owner"] != agent or t["status"] != "working":
+                raise PermissionError(f"#{tid} isn't a task you're working on")
+            who = (who or "outside").strip()
+            board = who.lower() in ("jack", "darragh", "board")
+            if not board and who != "outside" and not self.db.execute("select 1 from agents where name=?", (who,)).fetchone():
+                raise ValueError(f"no agent {who}: wait on jack, darragh, an agent's name, or outside")
+            note = f"waiting on {who}: {what}"
+            self._set("tasks", tid, waiting_on=who, waiting_for=what, progress_note=note, touched=self.clock(),
+                      status="blocked", owner=None, pin=agent)          # freed now, not at the next tick
+            self.db.execute("update items set status='dropped', closed=? where kind='task' and ref=? and status='queued'",
+                            (self.clock(), tid))
+            self._task_event(tid, agent, "waiting", note)
+            self._log(None, agent, "out", f"task #{tid} {note}")
+            if board:
+                self.db.execute("insert into needs_jack(text, at, task) values(?,?,?)",
+                                (f"Task #{tid} “{t['title']}” ({agent}) is waiting on you: {what}. "
+                                 "Mark this done when it's sorted and the task goes back to them.", self.clock(), tid))
+            elif who != "outside":
+                self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('note',?,?,?,0,'queued',?)",
+                                (agent, who, f"Task #{tid} “{t['title']}” is waiting on you: {what}\n"
+                                 f"When you've done it, run: fleet task resume {tid}", self.clock()))
+
+    def task_resume(self, by, tid):
+        """A wait is over: the holder it was parked for, whoever it waited on, the PM/CEO or the board clears it."""
+        with self.lock:
+            t = self._task_row(tid)
+            if not t["waiting_on"]:
+                raise ValueError(f"#{tid} isn't waiting on anyone")
+            if by not in (t["pin"], t["owner"], t["waiting_on"]) and not self.may_manage(by, self._task_product(tid)):
+                raise PermissionError(f"only {t['pin']}, {t['waiting_on']}, the PM, the CEO or the board can resume #{tid}")
+            self._resume(t, by)
+
+    def _end_waits(self, where, args):
+        """A task released, reassigned or removed stops waiting, and Jack's row for it closes."""
+        self.db.execute(f"update needs_jack set done=1 where done=0 and task in (select id from tasks where {where})", args)
+        self.db.execute(f"update tasks set waiting_on=null, waiting_for=null where waiting_on is not null and {where}", args)
+
+    def _resume(self, t, by):
+        self._set("tasks", t["id"], waiting_on=None, waiting_for=None, progress_note=f"resumed by {by}", touched=self.clock())
+        self._task_event(t["id"], by, "resumed")
+        self.db.execute("update needs_jack set done=1 where task=? and done=0", (t["id"],))
+
     def task_release(self, by, tid):
         with self.lock:
             t = self._task_row(tid)
             if not self.may_manage(by, self._task_product(tid)):
                 raise PermissionError("only Jack, Darragh, the CEO or this product's PM can release a task")
+            self._end_waits("id=?", (tid,))
             self._set("tasks", tid, owner=None, verifier=None, status="ready", touched=self.clock(),
                       progress_note=f"released by {by}")
             self._task_event(tid, by, "released")
@@ -805,7 +873,9 @@ class Hub:
                                  f"or `fleet task verify {t['id']} fail \"<reason>\"`")
                 else:
                     lines.append(f"#{t['id']} “{t['title']}” — {prod}, as {t['role']}: progress with "
-                                 f"`fleet task note {t['id']} \"...\"`, finished with `fleet task done {t['id']} <link>`")
+                                 f"`fleet task note {t['id']} \"...\"`, finished with `fleet task done {t['id']} <link>`, "
+                                 f"or if you're waiting on someone, park it and take other work: "
+                                 f"`fleet task wait {t['id']} <jack|darragh|agent|outside> \"<what you need>\"`")
             self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('nudge','hub',?,?,0,'queued',?)",
                             (a["name"], NUDGES[idx] + f"\nNo progress posted for {int((now - last_progress) // 3600)}h.\n"
                              + "\n".join(lines), now))
@@ -1028,6 +1098,20 @@ class Hub:
                 continue
             self._tell_powers(n)
 
+    def _watch_fleet(self):
+        """An agent whose fleet command never reports a version is on an old copy from before it updated itself
+        from GitHub (Oct 13: one lacked `task done`, so a finished task could never close). Told daily until fixed."""
+        for a in self.db.execute("select * from agents where kind='muse' and state='active' and onboarded is not null "
+                                 "and fleet_rev is null and coalesce(fleet_told, 0) < ?", (self.clock() - 86400,)).fetchall():
+            self._set("agents", a["name"], fleet_told=self.clock())
+            self._note(a["name"], "your fleet command is an old copy: update it once",
+                       "It was copied in when you joined and never updates, so it's missing newer commands "
+                       "(one agent's had no `fleet task done` and couldn't close a finished task). In your fleet-telemetry "
+                       "checkout run: git pull && python3 agents/setup.py   (no name or code needed; it keeps your token). "
+                       f"No checkout? git clone {FLEET_REPO} ~/fleet-telemetry && python3 ~/fleet-telemetry/agents/setup.py   "
+                       "(the repo is public: no GitHub login needed). After that, fleet updates itself from GitHub. "
+                       "Check with: fleet --help (it lists fleet task wait). If anything fails, ask Jack with the error.")
+
     APPROVALS_EVERY = 15                 # agents retry an upload the moment a request lapses: look often
 
     def scan_approvals(self):
@@ -1076,7 +1160,9 @@ class Hub:
                 "product context per task. Pick your own team with fleet team me <role|generalist> (roles: "
                 f"{', '.join(self.roles())}).\n"
                 "Everyone: fleet status, fleet inbox, fleet portfolio, fleet changes, fleet ask, fleet reply, "
-                "fleet task note|done on tasks you hold, fleet task verify when asked, fleet suggest \"<idea>\".")
+                "fleet task note|done on tasks you hold, fleet task wait <id> <jack|darragh|agent|outside> \"<what>\" "
+                "when you're waiting on someone (you're freed for other work; fleet task resume <id> when it's sorted), "
+                "fleet task verify when asked, fleet suggest \"<idea>\".")
         if self._ceo_level(who):
             ceo = (self.db.execute("select agent from seats where role='ceo'").fetchone() or {"agent": None})["agent"]
             seat = ("You hold the CEO seat" if who == ceo else f"You're standing in as CEO while {ceo} is silent"
@@ -1155,6 +1241,7 @@ class Hub:
             return r
 
         def cancel(where, args):
+            self._end_waits(where, args)
             self.db.execute(f"update tasks set status='cancelled', owner=null, verifier=null, touched=? "
                             f"where status != 'done' and {where}", (self.clock(), *args))
 
@@ -1204,6 +1291,7 @@ class Hub:
             who = None if a[4] == "none" else agent(a[4])["name"]
             if t["status"] in ("done", "cancelled"):
                 raise ValueError(f"task #{t['id']} is {t['status']}")
+            self._end_waits("id=?", (t["id"],))           # handed on: a wait was the old holder's
             if who and t["owner"] != who and t["status"] in ("working", "verifying"):
                 self._set("tasks", t["id"], owner=None, verifier=None, status="ready", touched=self.clock())
                 self._task_event(t["id"], t["owner"], "released", f"handed to {who}")
@@ -1214,6 +1302,7 @@ class Hub:
             cancel("id=?", (t["id"],))
             return f"task #{t['id']} removed"
         if verb == ["task", "release"] and len(a) == 3:
+            self._end_waits("id=?", (int(a[2]),))
             self._set("tasks", int(a[2]), owner=None, verifier=None, status="ready", touched=self.clock())
             return f"task #{a[2]} released"
         if a[0] == "pm" and len(a) == 3:
@@ -1718,6 +1807,10 @@ class Hub:
     def resolve_need(self, nid):
         with self.lock:
             self.db.execute("update needs_jack set done=1 where id=?", (nid,))
+            n = self.db.execute("select task from needs_jack where id=?", (nid,)).fetchone()
+            t = n and n["task"] and self.db.execute("select * from tasks where id=?", (n["task"],)).fetchone()
+            if t and t["waiting_on"]:
+                self._resume(t, "jack")
 
     # ---- telemetry (machine heartbeat from each agent's telemetryd) ---------------------
     def ingest(self, name, blob):
@@ -1757,6 +1850,7 @@ class Hub:
         return {"task": ({"id": t["id"], "title": t["title"]} if t else None), "doing": doing, "reporting": fresh}
 
     def board(self):
+        current_rev = fleet_rev()
         with self.lock:
             out = []
             for a in self.db.execute("select * from agents where kind!='jack' order by name"):
@@ -1766,7 +1860,8 @@ class Hub:
                             "current": {"id": cur["id"], "text": cur["text"][:200], "sent_at": cur["sent_at"]} if cur else None,
                             "last_in": a["last_in"], "last_out": a["last_out"], "login_expires": a["login_expires"],
                             "product": a["current_product"], "role": a["current_role"], "onboarded": a["onboarded"], "team": a["team"] or "generalist",
-                            "focus": self._focus(a["name"]), "free_since": a["free_since"],
+                            "focus": self._focus(a["name"]), "free_since": a["free_since"], "fleet_rev": a["fleet_rev"],
+                            "fleet_old": a["kind"] == "muse" and a["fleet_rev"] != current_rev,
                             "doing": {"busy": bool(a["busy"]), "line": a["doing"], "at": a["doing_at"]}
                                      if a["doing"] is not None or a["busy"] else None,
                             "last_work": (lambda w: {"title": w["title"], "at": w["at"]} if w else None)(self.db.execute(
@@ -1856,7 +1951,7 @@ def serve(hub, host, port, password, join_code=None, logins=None):
             if not name:
                 self._json(401, {"error": "401: bad or missing token"})
             else:
-                hub.note_onboarded(name)       # a token call proves fleet is installed and reaching the hub
+                hub.note_onboarded(name, self.headers.get("X-Fleet-Rev"))   # a token call proves fleet is installed
                 # a POST is the agent itself doing something; telemetryd's heartbeat is only its VM being up
                 if self.command == "POST" and urlparse(self.path).path != "/api/ingest":
                     hub.acted(name)
@@ -2089,6 +2184,10 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                             hub.task_verify(name, tid, bool(b["ok"]), b.get("reason", ""))
                         elif verb == "release":
                             hub.task_release(name, tid)
+                        elif verb == "wait":
+                            hub.task_wait(name, tid, b.get("who"), b.get("what", ""))
+                        elif verb == "resume":
+                            hub.task_resume(name, tid)
                         else:
                             raise ValueError(f"unknown task action {verb}")
                         self._json(200, {"ok": True, "task": hub.task(tid)["status"]})

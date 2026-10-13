@@ -410,7 +410,7 @@ async function load(){
     const [head,...rest]=String(n.text).split("\n"); const more=rest.join("\n").trim();
     return `<div class="row njrow"><div class="t">${esc(head)}
       ${more?`<details><summary>details</summary><pre>${esc(more)}</pre></details>`:""}</div>
-      <div class="when">${ago(n.at)}</div><button class="btn sm" data-dismiss="${n.id}">Dismiss</button></div>`;}).join("")
+      <div class="when">${ago(n.at)}</div><button class="btn sm" data-dismiss="${n.id}" title="${n.task?"Done: the task goes back to its agent":"Dismiss"}">${n.task?"Done":"Dismiss"}</button></div>`;}).join("")
     : `<div class="row empty">Nothing needs you right now.</div>`;
   document.querySelectorAll("[data-dismiss]").forEach(el=>el.onclick=async()=>{
     el.disabled=true; try{ await jpost("api/jack/dismiss",{id:+el.dataset.dismiss}); toast("Dismissed"); load(); }catch(e){ el.disabled=false; toast(e.message); }});
@@ -425,7 +425,8 @@ async function load(){
   const ags=(b.agents||[]).slice().sort((x,y)=>x.name.localeCompare(y.name,undefined,{numeric:true}));
   $("agents").innerHTML = ags.map(a=>{
     const seats=seatsOf(a.name).map(x=>`<span class="tag">${esc(x)}</span>`).join("");
-    const tag=(a.kind!=="slack"?`<span class="tag">${esc(a.team||"generalist")}</span>`:"")+(a.product?`<span class="tag" style="color:var(--faint)">in ${esc(a.product)}</span>`:"")+seats;
+    const tag=(a.kind!=="slack"?`<span class="tag">${esc(a.team||"generalist")}</span>`:"")+(a.product?`<span class="tag" style="color:var(--faint)">in ${esc(a.product)}</span>`:"")+seats
+      +(a.fleet_old&&a.state!=="parked"?`<span class="tag" style="color:var(--warn)" title="its fleet command is older than the hub's; it's been told how to update">old fleet</span>`:"");
     return `<button class="row agent" data-agent="${esc(a.name)}"><span class="dot s-${stateOf(a)}"></span>
       <span style="min-width:0"><div class="nm">${esc(a.name)}${tag}</div><div class="what">${esc(label(a))}</div>${doingLine(a)}</span>
       <span class="ages">${freeFor(a)||(a.last_in?"msg "+ago(a.last_in):"—")}<br>${a.kind==="slack"?"via Slack":a.last_out?"said "+ago(a.last_out):"—"}</span></button>`;}).join("");

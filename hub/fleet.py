@@ -14,6 +14,9 @@
     fleet task done <id> <link>      finish a task; the link is the evidence (commit, file, URL)
     fleet task verify <id> pass      approve a task you were asked to verify
     fleet task verify <id> fail "<reason>"   send it back to its holder with the reason
+    fleet task wait <id> <who> "<what you need>"   waiting on jack, darragh, an agent, or outside: the task
+                                     is parked for you and you take other work meanwhile
+    fleet task resume <id>           the wait is over: the task comes back to you
     fleet task release <id>          put a task back up for grabs (CEO / the product's PM only)
     fleet suggest "<text>"           suggest a change to your PM and the CEO
 
@@ -57,6 +60,7 @@ import uuid
 
 HOME = os.environ.get("FLEET_HOME") or os.path.expanduser("~/.fleet")
 OUTBOX = os.path.join(HOME, "outbox")
+REV = hashlib.sha256(open(__file__, "rb").read()).hexdigest()[:12]   # the hub spots agents on an old copy
 
 
 def conf(name, env):
@@ -84,7 +88,7 @@ def call(method, path, body=None):
     req = urllib.request.Request(base + path, method=method,
                                  data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Authorization": "Bearer " + conf("token", "FLEET_TOKEN"),
-                                          "Content-Type": "application/json"})
+                                          "Content-Type": "application/json", "X-Fleet-Rev": REV})
     with op.open(req, timeout=15) as r:
         return json.loads(r.read())
 
@@ -217,20 +221,24 @@ def main(args):
                           for t in s.get("tasks", [])) or "No open tasks."
         q = "\n".join(f"#{i['id']} {i['status']:6} from {i['frm']}: {i['text'][:80]}" for i in s["queue"]) or "Nothing waiting."
         print(where + "\n" + tasks + "\n" + q + ("\n\nWhat you can do: " + s["can"] if s.get("can") else ""))
-    elif cmd == "task" and len(args) >= 3 and args[1] in ("note", "done", "verify", "release"):
+    elif cmd == "task" and len(args) >= 3 and args[1] in ("note", "done", "verify", "release", "wait", "resume"):
         verb, tid = args[1], int(args[2])
         body = {"task": tid}
         if verb == "note" and len(args) == 4:
             body["text"] = args[3]
         elif verb == "done" and len(args) == 4:
             body["link"] = args[3]
+        elif verb == "wait" and len(args) == 5:
+            body.update(who=args[3], what=args[4])
         elif verb == "verify" and len(args) >= 4 and args[3] in ("pass", "fail"):
             body.update(ok=args[3] == "pass", reason=" ".join(args[4:]))
-        elif verb != "release":
+        elif verb not in ("release", "resume"):
             print(__doc__); return 2
         call("POST", "/api/task/" + verb, body)
         print({"note": f"Noted on #{tid}.", "done": f"#{tid} is done and goes to verification.",
-               "verify": f"Verification of #{tid} recorded.", "release": f"#{tid} released."}[verb])
+               "verify": f"Verification of #{tid} recorded.", "release": f"#{tid} released.",
+               "wait": f"#{tid} is parked for you; take other work. `fleet task resume {tid}` when it's sorted.",
+               "resume": f"#{tid} resumed; it comes back to its holder."}[verb])
     elif cmd in ("portfolio", "changes", "product", "project", "pm", "place", "seat", "role", "park", "wake", "grant", "powers", "team") \
             or args[:2] in (["task", "add"], ["task", "set"], ["task", "remove"]):
         import shlex

@@ -355,6 +355,84 @@ def pause_board_only():
     print("pause_board_only OK")
 
 
+def wait():
+    """Jack, Oct 13: Boboe 4 sat on #5 for hours "awaiting Gate 1 / Darragh's release", nudged hourly, taking nothing
+    else. An agent waiting on someone parks the task and takes any product's work; the task comes back to it later."""
+    h, muse, clock = new_hub("Ada", "Bo")
+    pa = h.add_project(h.add_product("Pets", brief="portraits"), "launch")
+    pb = h.add_project(h.add_product("Books", brief="storybooks"), "launch")
+    posts = h.add_task(pa, "launch posts", "marketer", "posted", owner="Ada")
+    h.tick(); h.tick()
+    assert h.task(posts)["owner"] == "Ada" and h.task(posts)["status"] == "working", h.task(posts)
+
+    h.task_wait("Ada", posts, "jack", "publish OK for the listing")
+    h.tick(); h.tick()
+    t = h.task(posts)
+    assert t["status"] == "blocked" and t["owner"] is None and t["pin"] == "Ada", f"wait: on hold, kept for Ada: {t}"
+    need = [n for n in h.needs_jack() if f"#{posts}" in n["text"]]
+    assert need and "publish OK" in need[0]["text"], f"wait: Jack sees what it's waiting on: {h.needs_jack()}"
+    other = h.add_task(pb, "story drafts", "marketer", "drafted")
+    h.tick(); h.tick(); h.tick()
+    assert h.task(other)["owner"] == "Ada" or h.task(other)["owner"] == "Bo", h.task(other)
+    clock.go(6 * 3600); h.tick()
+    assert not any("No progress posted" in s and "launch posts" in s for s in muse.sent.get("Ada", [])), \
+        "wait: no nudges about a task on hold"
+
+    h.resolve_need(need[0]["id"])                      # Jack clicks done on his list
+    for _ in range(3):
+        h.tick()
+    t = h.task(posts)
+    assert t["waiting_on"] is None and (t["owner"] == "Ada" or t["pin"] == "Ada"), f"wait: cleared, back to Ada: {t}"
+    assert t["owner"] in (None, "Ada"), "wait: never handed to someone else"
+
+    # waiting on another agent: that agent is asked; the waiter (or the asked agent) resumes it
+    h.db.execute("update tasks set status='done' where id=?", (other,))
+    for _ in range(3):
+        h.tick()
+    assert h.task(posts)["owner"] == "Ada", h.task(posts)
+    h.task_wait("Ada", posts, "Bo", "the final caption")
+    h.tick(); h.tick()
+    assert any("final caption" in s for s in muse.sent.get("Bo", [])), f"wait: Bo is asked: {muse.sent.get('Bo')}"
+    h.task_resume("Bo", posts)
+    for _ in range(3):
+        h.tick()
+    assert h.task(posts)["owner"] == "Ada" and h.task(posts)["status"] == "working", h.task(posts)
+    try:
+        h.task_wait("Bo", posts, "jack", "x")
+        raise AssertionError("wait: only the holder parks its task")
+    except PermissionError:
+        pass
+    h.task_wait("Ada", posts, "jack", "sign-off")
+    t = h.task(posts)
+    assert t["status"] == "blocked" and t["owner"] is None, f"wait: freed at once, not next tick: {t}"
+    try:
+        h.task_done("Ada", posts, "https://x")
+        raise AssertionError("wait: a parked task can't be marked done by its old holder")
+    except PermissionError:
+        pass
+    h.manage("jack", f"task release {posts}")
+    assert h.task(posts)["waiting_on"] is None and not [n for n in h.needs_jack() if "sign-off" in n["text"]], \
+        "wait: released → the wait and Jack's row end"
+    print("wait OK")
+
+
+def pause_frees():
+    """A paused product's held task goes on hold and frees its holder; resumed, it comes back to the same agent."""
+    h, muse, clock = new_hub("Ada")
+    prj = h.add_project(h.add_product("Templates", brief="budget"), "launch")
+    t = h.add_task(prj, "posts", "marketer", "posted", owner="Ada")
+    h.tick(); h.tick()
+    assert h.task(t)["owner"] == "Ada"
+    h.manage("jack", 'product set "Templates" status paused')
+    h.tick()
+    assert h.task(t)["owner"] is None and h.task(t)["pin"] == "Ada", f"pause: holder freed, task kept for it: {h.task(t)}"
+    assert any("paused" in s.lower() and "posts" in s for s in muse.sent.get("Ada", [])), "pause: the holder is told why"
+    h.manage("jack", 'product set "Templates" status active')
+    h.tick(); h.tick()
+    assert h.task(t)["owner"] == "Ada" and h.task(t)["status"] == "working", h.task(t)
+    print("pause_frees OK")
+
+
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "slack200": slack200, "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only}[sys.argv[1]]()
+     "slack200": slack200, "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "pause_frees": pause_frees}[sys.argv[1]]()

@@ -179,6 +179,13 @@ def cli():
     other = "dot" if owner == "Boboe 3" else "Boboe 3"
     r = fleet(port, tok[owner], "status", home=home)
     assert r.returncode == 0 and f"#{t}" in r.stdout and "write the listing" in r.stdout, f"status shows my task: {r}"
+    r = fleet(port, tok[owner], "task", "wait", str(t), "jack", "the publish OK", home=home)
+    assert r.returncode == 0 and "parked" in r.stdout, f"task wait: {r}"
+    assert h.task(t)["waiting_on"] == "jack" and any("publish OK" in n["text"] for n in h.needs_jack()), h.task(t)
+    r = fleet(port, tok[owner], "task", "resume", str(t), home=home)
+    assert r.returncode == 0 and h.task(t)["waiting_on"] is None, f"task resume: {r}"
+    h.tick(); h.tick()
+    assert h.task(t)["owner"] == owner, f"back to its holder: {h.task(t)}"
     r = fleet(port, tok[owner], "task", "note", str(t), "draft done", home=home)
     assert r.returncode == 0 and h.task(t)["progress_note"] == "draft done", (r, h.task(t))
     r = fleet(port, tok[other], "task", "done", str(t), "https://example.com/e", home=home)
@@ -382,5 +389,29 @@ def delegate():
     print("delegate OK")
 
 
+def stale():
+    """Oct 13: Boboe 9's copied fleet.py had no `task done`, so its finished task never closed. The hub learns each
+    agent's fleet version from its calls and tells one still on an old (version-less) copy how to upgrade, once a day."""
+    h, srv, port, tok = start()
+    h.db.execute("update agents set onboarded=1 where name='Boboe 3'")
+    old = lambda: [i for i in h.db.execute("select text from items where too='Boboe 3' and text like '%old copy%'")]
+    h.tick(); h.tick()
+    assert len(old()) == 1, f"stale: an agent with no reported version is told to upgrade: {old()}"
+    h.tick(); h.clock.go(3600); h.tick()
+    assert len(old()) == 1, "stale: told once a day, not every tick"
+    r = fleet(port, tok["Boboe 3"], "status", home=tempfile.mkdtemp())
+    assert r.returncode == 0, r
+    rev = h._agent("Boboe 3")["fleet_rev"]
+    assert rev and len(rev) == 12, f"stale: the client reports its version: {rev}"
+    h.clock.go(86400); h.tick()
+    assert len(old()) == 1, "stale: an upgraded agent isn't told again"
+    row = {x["name"]: x for x in h.board()["agents"]}["Boboe 3"]
+    assert row["fleet_rev"] == hub.fleet_rev() and not row["fleet_old"], f"stale: same version as the hub → not old: {row}"
+    h.db.execute("update agents set fleet_rev='0ld' where name='Boboe 3'")
+    assert {x["name"]: x for x in h.board()["agents"]}["Boboe 3"]["fleet_old"], "stale: another version shows as old"
+    assert h.board()["agents"][0].get("fleet_rev") is not None or any(a.get("fleet_rev") for a in h.board()["agents"])
+    print("stale OK")
+
+
 if __name__ == "__main__":
-    {"dashboard": dashboard, "company": company, "cli": cli, "join": join, "delegate": delegate}.get(sys.argv[1] if len(sys.argv) > 1 else "", poll_agent_flow)()
+    {"dashboard": dashboard, "company": company, "cli": cli, "join": join, "delegate": delegate, "stale": stale}.get(sys.argv[1] if len(sys.argv) > 1 else "", poll_agent_flow)()

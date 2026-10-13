@@ -2,6 +2,7 @@
 """Fleet setup, run by the agent itself from its fleet-telemetry checkout.
 
     python3 agents/setup.py "<your agent name>" <claim-code> [hub-url]
+    python3 agents/setup.py          (already joined: upgrade in place, keeps your token)
 
 Registers with the hub, installs the telemetry daemon in ~/.fleet, points it at the VM's tunnel
 proxy (background processes can't use the chat turn's proxy), installs the restart hook script,
@@ -9,11 +10,15 @@ and removes every older telemetry/Slack install. Safe to re-run: re-running is h
 """
 import json, os, shutil, subprocess, sys, urllib.parse, urllib.request
 
-HUB = sys.argv[3].rstrip("/") if len(sys.argv) > 3 else "https://ai-alienware.tail3cffa4.ts.net"
-name, code = sys.argv[1], sys.argv[2]
-here = os.path.dirname(os.path.abspath(__file__))
 home = os.path.expanduser("~")
 fleet = os.path.join(home, ".fleet"); os.makedirs(fleet, exist_ok=True)
+saved = lambda f: open(os.path.join(fleet, f)).read().strip() if os.path.exists(os.path.join(fleet, f)) else None
+HUB = (sys.argv[3] if len(sys.argv) > 3 else saved("hub") or "https://ai-alienware.tail3cffa4.ts.net").rstrip("/")
+name = sys.argv[1] if len(sys.argv) > 1 else saved("agent")
+code = sys.argv[2] if len(sys.argv) > 2 else None
+if not name or not (code or saved("token")):
+    sys.exit(__doc__)
+here = os.path.dirname(os.path.abspath(__file__))
 
 # How the daemon reaches the hub once it runs outside a chat turn. The turn's proxy refuses the hub
 # (its name resolves to a private tailnet address), so prefer the VM's tunnel proxy (same host,
@@ -45,15 +50,36 @@ elif os.path.exists(proxy_conf):
     os.remove(proxy_conf)
 route = f"{base} via {proxy or 'default route'} ({len(working)} of {len(routes)} routes work)"
 
-req = urllib.request.Request(base + "/api/claim", data=json.dumps({"name": name, "code": code}).encode(),
-                             headers={"Content-Type": "application/json"}, method="POST")
-token = json.load(op.open(req, timeout=60))["token"]
-open(os.path.join(fleet, "token"), "w").write(token); os.chmod(os.path.join(fleet, "token"), 0o600)
+if code:
+    req = urllib.request.Request(base + "/api/claim", data=json.dumps({"name": name, "code": code}).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    token = json.load(op.open(req, timeout=60))["token"]
+    open(os.path.join(fleet, "token"), "w").write(token); os.chmod(os.path.join(fleet, "token"), 0o600)
 open(os.path.join(fleet, "hub"), "w").write(HUB)
 open(os.path.join(fleet, "agent"), "w").write(name)
 shutil.copy2(os.path.join(here, "telemetryd.py"), os.path.join(fleet, "telemetryd.py"))
-cli = os.path.join(fleet, "fleet")                     # the fleet command, from the same checkout
-shutil.copy2(os.path.join(here, "..", "hub", "fleet.py"), cli); os.chmod(cli, 0o755)
+# The fleet command runs from a clone of this repo that nothing else touches, pulled from GitHub at most
+# hourly, so it is never an old copy (Oct 13: a copied fleet.py lacked `task done` and an agent's finished
+# task could never close).
+repo, cli = os.path.join(fleet, "repo"), os.path.join(fleet, "fleet")
+origin = "https://github.com/AgentNet01/fleet-telemetry.git"        # public: no GitHub login needed
+if os.path.isdir(repo) and not os.path.isdir(os.path.join(repo, ".git")):
+    shutil.rmtree(repo)                                # a clone cut short last time: start it again
+git = (["git", "-C", repo, "pull", "-q", "--ff-only"] if os.path.isdir(repo)
+       else ["git", "clone", "-q", "--depth", "1", origin, repo])
+if subprocess.run(git, env=dict(os.environ, GIT_TERMINAL_PROMPT="0"), timeout=120).returncode:
+    sys.exit(f"fleet: couldn't get the fleet-telemetry repo from GitHub ({' '.join(git)}). Paste this to Jack.")
+if os.path.islink(cli) or os.path.exists(cli):
+    os.remove(cli)
+open(cli, "w").write(f"""#!/bin/sh
+# fleet: pull {repo} from GitHub at most hourly, then run its fleet.py (written by agents/setup.py)
+if [ -z "$(find "$HOME/.fleet/pulled" -mmin -60 2>/dev/null)" ]; then
+  touch "$HOME/.fleet/pulled"   # never let a dead route or a password prompt stall the command itself
+  GIT_TERMINAL_PROMPT=0 timeout 20 git -C '{repo}' pull -q --ff-only >/dev/null 2>&1 </dev/null
+fi
+exec python3 '{repo}/hub/fleet.py' "$@"
+""")
+os.chmod(cli, 0o755)
 bindir = os.path.join(home, ".local", "bin")
 if os.path.isdir(bindir) and not os.path.exists(os.path.join(bindir, "fleet")):
     os.symlink(cli, os.path.join(bindir, "fleet"))
