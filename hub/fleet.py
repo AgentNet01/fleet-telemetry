@@ -10,6 +10,7 @@
     fleet secret put <name> [--scope agent|product|fleet]   store a secret (value on stdin)
     fleet switch "<product>" "<role>"   switch your brain (run when the hub tells you to)
     fleet status                     your product, role, your tasks and what's waiting for you
+    fleet task show <id>             any task: status, who has it, done-when, its result link and latest note
     fleet task note <id> "<text>"    progress on a task you hold (restarts its reminder clock)
     fleet task done <id> <link>      finish a task; the link is the evidence (commit, file, URL)
     fleet task verify <id> pass      approve a task you were asked to verify
@@ -21,6 +22,15 @@
                                      step); the task keeps going. Required before done on tasks that are work for Jack.
     fleet task release <id>          put a task back up for grabs (CEO / the product's PM only)
     fleet suggest "<text>"           suggest a change to your PM and the CEO
+
+  Tools: code the fleet writes, run on the hub machine (20 cores, 32 GB RAM, RTX 3070 Ti 8 GB, disk shared with the hub).
+  A tool is tools/<name>/run.py in the fleet-telemetry repo (+ README.md, first line = what it does). It runs with
+  your args in an empty folder ($OUT_DIR); everything it writes there comes back as files. pip install --user works.
+  One job at a time; a job is stopped past its time limit or if the disk or memory run low, so the hub stays up.
+    fleet tools                      the tools there are
+    fleet tool run <name> [args...] [--timeout <seconds>]   run one, wait for it (up to 10 min), show log + files
+    fleet tool job <job>             a job's status, log and files
+    fleet tool get <job> <file> [<dest>]   download a file a job made
 
   Running the company. The CEO can do all of this; a product's PM can manage that product's tasks.
   Parking agents is for Jack and Darragh. Every change is logged and shown on the dashboard.
@@ -177,6 +187,17 @@ def do_switch(product, role):
     return 0
 
 
+def show_job(j):
+    if not j:
+        print("No such job."); return
+    print(f"Job {j['id']} {j.get('tool', '')}: {j['status']}" + (f" ({j['ahead']} ahead)" if "ahead" in j else "")
+          + (f" — {j['note']}" if j.get("note") else ""))
+    if j.get("log"):
+        print("--- log (end) ---\n" + j["log"].rstrip())
+    for f in j.get("files", []):
+        print(f"file: {f['path']} ({f['size']} bytes)   fleet tool get {j['id']} {f['path']}")
+
+
 def main(args):
     if not args or args[0] in ("-h", "--help", "help"):
         print(__doc__); return 0
@@ -224,6 +245,15 @@ def main(args):
                           for t in s.get("tasks", [])) or "No open tasks."
         q = "\n".join(f"#{i['id']} {i['status']:6} from {i['frm']}: {i['text'][:80]}" for i in s["queue"]) or "Nothing waiting."
         print(where + "\n" + tasks + "\n" + q + ("\n\nWhat you can do: " + s["can"] if s.get("can") else ""))
+    elif cmd == "task" and len(args) == 3 and args[1] == "show":
+        t = call("GET", f"/api/task?id={int(args[2])}")
+        if not t:
+            print(f"No task #{args[2]}."); return 1
+        print(f"#{t['id']} {t['title']} ({t['product']}, {t['role']})\nstatus: {t['status']}"
+              f"{' · held by ' + t['owner'] if t.get('owner') else ''}"
+              f"{' · checked by ' + t['verified_by'] if t.get('verified_by') else ''}\n"
+              f"done when: {t.get('done_def') or '-'}\nresult: {t.get('evidence') or '(none yet)'}\n"
+              f"latest note: {t.get('progress_note') or '-'}")
     elif cmd == "task" and len(args) >= 3 and args[1] in ("note", "done", "verify", "release", "wait", "resume", "jack"):
         verb, tid = args[1], int(args[2])
         body = {"task": tid}
@@ -247,6 +277,33 @@ def main(args):
             or args[:2] in (["task", "add"], ["task", "set"], ["task", "remove"]):
         import shlex
         print(call("POST", "/api/manage", {"line": shlex.join(args)})["result"])
+    elif cmd == "tools":
+        ts = call("GET", "/api/tools")["tools"]
+        print("\n".join(f"{t['name']:20} {t['about']}" for t in ts) or "No tools yet. Add one: tools/<name>/run.py in the repo.")
+    elif cmd == "tool" and len(args) >= 3 and args[1] == "run":
+        rest, timeout = args[3:], None
+        if "--timeout" in rest:
+            i = rest.index("--timeout"); timeout = int(rest[i + 1]); rest = rest[:i] + rest[i + 2:]
+        jid = call("POST", "/api/tool/run", {"tool": args[2], "args": rest, "timeout": timeout})["job"]
+        print(f"Job {jid} queued.", flush=True)
+        for _ in range(120):
+            j = call("GET", f"/api/tool/job?id={jid}")
+            if j.get("status") not in ("queued", "running"):
+                break
+            time.sleep(5)
+        else:
+            print(f"Still {j.get('status')}. Check with: fleet tool job {jid} (you'll also get a note when it ends)"); return 0
+        show_job(j)
+    elif cmd == "tool" and len(args) == 3 and args[1] == "job":
+        show_job(call("GET", f"/api/tool/job?id={int(args[2])}"))
+    elif cmd == "tool" and len(args) in (4, 5) and args[1] == "get":
+        base, op = route()
+        req = urllib.request.Request(f"{base}/api/tool/file?job={int(args[2])}&path={urllib.parse.quote(args[3])}",
+                                     headers={"Authorization": "Bearer " + conf("token", "FLEET_TOKEN"), "X-Fleet-Rev": REV})
+        dest = args[4] if len(args) == 5 else os.path.basename(args[3])
+        with op.open(req, timeout=300) as r, open(dest, "wb") as f:
+            shutil.copyfileobj(r, f)
+        print(f"Saved {dest}")
     elif cmd == "suggest" and len(args) == 2:
         r = call("POST", "/api/suggest", {"text": args[1]})
         print(f"Suggestion #{r['id']} sent to your PM and the CEO.")

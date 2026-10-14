@@ -415,6 +415,7 @@ class Hub:
             self._watch_chair()
             self._watch_powers()
             self._watch_fleet()
+            self._watch_jobs()
             self._reviews()
             self._dry()
             agents = [dict(a) for a in self.db.execute(
@@ -1208,6 +1209,7 @@ class Hub:
                 "fleet task note|done on tasks you hold, fleet task wait <id> <jack|darragh|agent|outside> \"<what>\" "
                 "when you're waiting on someone (you're freed for other work; fleet task resume <id> when it's sorted), "
                 "fleet task verify when asked, fleet suggest \"<idea>\". "
+                "fleet task show <id> gives any task's status, holder and result link — look it up there, don't ask for it. "
                 "A step only Jack or Darragh can do (an account, a payment, an approval) goes on their list with "
                 "fleet task jack <id> \"<what to do, why, and the link>\" — one plain step each, written for someone who "
                 "hasn't read your work; they can reply to you from it. Tools (marked tool in fleet portfolio) are shared "
@@ -1854,6 +1856,74 @@ class Hub:
                     "tasks": tasks, "agents": agents, "live": live,
                     "per_hour": [sum(b[t] for t in ("sent", "reply")) for b in buckets]}
 
+    # ---- tools: agents' code run on this machine by tools_runner.py, as an account that can't touch the hub ----
+    jobs_dir = None                      # hub.json "jobs_dir"; unset = no tools on this hub
+
+    def tool_run(self, by, tool, args=(), timeout=None):
+        import tools_runner
+        if not self.jobs_dir:
+            raise ValueError("tools aren't set up on this hub")
+        if not tools_runner.TOOL.match(tool or ""):
+            raise ValueError("a tool name is lowercase letters, digits, - and _ (its folder under tools/ in the repo)")
+        with self.lock:
+            jid = max(int(self.clock() * 1000), getattr(self, "_last_job", 0) + 1)
+            self._last_job = jid
+            os.makedirs(os.path.join(self.jobs_dir, "queue"), exist_ok=True)
+            tools_runner.write_json(os.path.join(self.jobs_dir, "queue", f"{jid}.json"),
+                                    {"id": jid, "tool": tool, "args": [str(a) for a in args], "by": by, "timeout": timeout})
+            self._log(None, by, "out", f"tool {tool} job {jid} {' '.join(map(str, args))}"[:300])
+        return jid
+
+    def tool_job(self, jid):
+        d = os.path.join(self.jobs_dir or "", str(int(jid)))
+        if os.path.isfile(os.path.join(self.jobs_dir or "", "queue", f"{int(jid)}.json")):
+            ahead = len([f for f in os.listdir(os.path.join(self.jobs_dir, "queue")) if f < f"{int(jid)}.json"])
+            return {"id": int(jid), "status": "queued", "ahead": ahead}
+        if not os.path.isfile(os.path.join(d, "status.json")):
+            return None
+        out = {**json.load(open(os.path.join(d, "job.json"))), **json.load(open(os.path.join(d, "status.json")))}
+        try:
+            with open(os.path.join(d, "log.txt"), "rb") as f:
+                f.seek(max(0, os.path.getsize(f.name) - 4000))
+                out["log"] = f.read().decode("utf-8", "replace")
+        except OSError:
+            out["log"] = ""
+        root = os.path.join(d, "out")
+        out["files"] = [{"path": os.path.relpath(os.path.join(w, n), root).replace(os.sep, "/"), "size": os.path.getsize(os.path.join(w, n))}
+                        for w, _, ns in os.walk(root) for n in ns][:200]
+        return out
+
+    def tool_file(self, jid, rel):
+        """A file a job made, by its path under the job's out folder; nothing outside it."""
+        root = os.path.realpath(os.path.join(self.jobs_dir or "", str(int(jid)), "out"))
+        p = os.path.realpath(os.path.join(root, rel))
+        if not p.startswith(root + os.sep) or not os.path.isfile(p):
+            raise ValueError(f"job {jid} has no file {rel}")
+        return p
+
+    def tools(self):
+        try:
+            return json.load(open(os.path.join(self.jobs_dir, "tools.json")))
+        except (OSError, TypeError, ValueError):
+            return []
+
+    def _watch_jobs(self):
+        """A finished job is told to the agent that ran it, once."""
+        if not self.jobs_dir or not os.path.isdir(self.jobs_dir):
+            return
+        for f in os.listdir(self.jobs_dir):
+            d = os.path.join(self.jobs_dir, f)
+            if not f.isdigit() or os.path.exists(os.path.join(d, "told")) or not os.path.isfile(os.path.join(d, "status.json")):
+                continue
+            st = json.load(open(os.path.join(d, "status.json")))
+            if st.get("status") in (None, "running"):
+                continue
+            job = json.load(open(os.path.join(d, "job.json")))
+            open(os.path.join(d, "told"), "w").close()
+            if self._agent(job["by"]):
+                self._note(job["by"], f"tool {job['tool']} job {f} {st['status']}",
+                           f"{st.get('note') or ''}\nSee it: fleet tool job {f}   ·   files: fleet tool get {f} <file>\n— No reply needed.")
+
     def needs_jack(self):
         with self.lock:
             return [dict(r) for r in self.db.execute("select * from needs_jack where done=0 order by id desc")]
@@ -2148,6 +2218,24 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                 elif u.path == "/api/inbox":
                     name = self._agent()
                     name and self._json(200, {"item": hub.inbox(name)})
+                elif u.path == "/api/tools":                # tools the fleet built, run on this machine
+                    name = self._agent()
+                    name and self._json(200, {"tools": hub.tools()})
+                elif u.path == "/api/tool/job":
+                    name = self._agent()
+                    name and self._json(200, hub.tool_job(int(q.get("id", 0))) or {})
+                elif u.path == "/api/tool/file":
+                    name = self._agent()
+                    if name:
+                        body = open(hub.tool_file(int(q.get("job", 0)), q.get("path", "")), "rb").read()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/octet-stream")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                elif u.path == "/api/task":                 # any task's state and result link, so agents look it up instead of asking
+                    name = self._agent()
+                    name and self._json(200, hub.task(int(q.get("id", 0))) or {})
                 elif u.path == "/api/status":
                     name = self._agent()
                     name and self._json(200, hub.status(name))
@@ -2278,6 +2366,11 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         else:
                             raise ValueError(f"unknown task action {verb}")
                         self._json(200, {"ok": True, "task": hub.task(tid)["status"]})
+                elif u.path == "/api/tool/run":
+                    name = self._agent()
+                    if name:
+                        b = self._body()
+                        self._json(200, {"job": hub.tool_run(name, b["tool"], b.get("args") or [], b.get("timeout"))})
                 elif u.path == "/api/manage":                # CEO / PM run the company: products, projects, tasks, placement
                     name = self._agent()
                     name and self._json(200, {"result": hub.manage(name, self._body()["line"])})
@@ -2455,6 +2548,7 @@ def main(cfg_path, *args):
     parked = set(cfg.get("parked", []))
     muse_t = muse.MuseTransport(cfg["muse_cli"], accounts)
     h = Hub(cfg["db"], None)
+    h.jobs_dir = cfg.get("jobs_dir")
     vault = lambda name: (h.db.execute("select value from secrets where name=?", (name,)).fetchone() or {"value": None})["value"]
     slack_t = muse.SlackTransport(token=lambda: (vault("slack-bot-token") or "").strip() or None,
                                   users=cfg.get("slack_users", {}), state_dir=os.path.dirname(cfg["db"]))

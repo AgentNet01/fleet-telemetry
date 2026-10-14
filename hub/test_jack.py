@@ -4,6 +4,7 @@
     python3 test_jack.py reply    # Jack answers an item on his list; the agent gets it and the task goes back to it
     python3 test_jack.py tools    # a product can be a tool: shared by every product, listed apart
     python3 test_jack.py doc      # the doc viewer only fetches Muse files and can't be broken out of
+    python3 test_jack.py show     # any agent looks up any task's result link itself instead of asking the CEO
     python3 test_jack.py ui       # in the browser: Jack opens a #reference, replies from his list, sees Tools apart
 """
 import sys
@@ -95,6 +96,24 @@ def doc():
     print("doc OK")
 
 
+def show():
+    """Oct 13: Neo asked dot (the CEO, over Slack) for #188's evidence link; nothing let it look the link up."""
+    import os, subprocess, tempfile, threading
+    h, muse, clock = new_hub("Neo", "Pericles")
+    pj = h.add_project(h.add_product("Books", brief="storybooks"), "launch")
+    copy = h.add_task(pj, "storybook listing copy", "marketer", "copy doc", owner="Pericles")
+    h.tick(); h.tick()
+    h.task_done("Pericles", copy, "https://muse.ai/files/1/2/x/copy-188.md")
+    tok = h.add_agent("Neo", "muse")
+    srv = hub.serve(h, "127.0.0.1", 0, "pw")
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    env = dict(os.environ, FLEET_HUB=f"http://127.0.0.1:{srv.server_address[1]}", FLEET_TOKEN=tok, FLEET_HOME=tempfile.mkdtemp())
+    out = subprocess.run([sys.executable, "fleet.py", "task", "show", str(copy)], env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert "https://muse.ai/files/1/2/x/copy-188.md" in out.stdout and "Pericles" in out.stdout, out.stdout
+    print("show OK")
+
+
 def ui():
     import threading
     from playwright.sync_api import expect, sync_playwright
@@ -127,4 +146,4 @@ def ui():
     print("ui OK")
 
 
-{"steps": steps, "reply": reply, "tools": tools, "doc": doc, "ui": ui}[sys.argv[1]]()
+{"steps": steps, "reply": reply, "tools": tools, "doc": doc, "show": show, "ui": ui}[sys.argv[1]]()
