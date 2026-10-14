@@ -176,6 +176,7 @@ MIGRATIONS = [
     "alter table needs_jack add column what text",        # one short line: what the operator does
     "alter table needs_jack add column why text",         # what it's blocking
     "alter table needs_jack add column link text",        # where to do it
+    "alter table needs_jack add column triage text",      # the PM who merges this ask into Jack's list; null = on his list
     "alter table products add column kind text default 'product'",   # 'tool': shared by every product, not sold
     "create table if not exists approvals(id text primary key, agent text, label text, detail text, options text, expires real)",     # the powers text this agent was last told       # a PM's company command waiting on the CEO's review
 ]
@@ -793,9 +794,41 @@ class Hub:
             t = self._task_row(tid)
             if t["owner"] != agent or t["status"] != "working":
                 raise PermissionError(f"#{tid} isn't a task you're working on")
-            self.db.execute("insert into needs_jack(text, at, task, agent, what, why, link) values(?,?,?,?,?,?,?)",
-                            (" — ".join(filter(None, [what, why, link])), self.clock(), tid, agent, what, why, link))
+            self._ask_jack(tid, agent, " — ".join(filter(None, [what, why, link])), what, why, link)
             self._task_event(tid, agent, "for jack", what)
+
+    def _ask_jack(self, tid, agent, text, what, why=None, link=None):
+        """Jack, Oct 14: 30 items from many agents was overwhelming. An ask from a product with a PM goes to that PM,
+        who merges the asks into a few lines on Jack's list and routes his answer back."""
+        p = self.db.execute("select pm from products where name=?", (self._task_product(tid),)).fetchone()
+        pm = p and p["pm"] if p and p["pm"] != agent else None
+        self.db.execute("insert into needs_jack(text, at, task, agent, what, why, link, triage) values(?,?,?,?,?,?,?,?)",
+                        (text, self.clock(), tid, agent, what, why, link, pm))
+        self._note(pm, f"{agent} needs something from Jack (task #{tid})",
+                   f"{what}\nDon't pass it on as is. `fleet jack list` shows every ask waiting for you. Merge the same "
+                   f"asks into one plain line each with `fleet jack add`; skip anything an agent can do itself. "
+                   f"Jack's answer comes to you: send it to the agents who asked, then `fleet jack done <ids>`.")
+
+    def jack_list(self, who):
+        with self.lock:
+            return [dict(r) for r in self.db.execute(
+                "select * from needs_jack where done=0 and (triage=? or (agent=? and triage is null)) order by id", (who, who))]
+
+    def jack_add(self, who, what, why=None, link=None):
+        with self.lock:
+            if not (self._ceo_level(who) or self.db.execute("select 1 from products where pm=?", (who,)).fetchone()):
+                raise PermissionError("only a PM or the CEO puts items on Jack's list")
+            what, why, link = self._plain(what, why, link)
+            return self.db.execute("insert into needs_jack(text, at, agent, what, why, link) values(?,?,?,?,?,?)",
+                                   (" — ".join(filter(None, [what, why, link])), self.clock(), who, what, why, link)).lastrowid
+
+    def jack_done(self, who, ids):
+        with self.lock:
+            for i in ids:
+                if not self.db.execute("select 1 from needs_jack where id=? and triage=?", (i, who)).fetchone():
+                    raise PermissionError(f"item {i} isn't one of the asks waiting on you")
+        for i in ids:
+            self.resolve_need(i)
 
     def operator_items(self, tid):
         with self.lock:
@@ -867,9 +900,7 @@ class Hub:
             self._task_event(tid, agent, "waiting", note)
             self._log(None, agent, "out", f"task #{tid} {note}")
             if board:
-                self.db.execute("insert into needs_jack(text, at, task, agent, what, why) values(?,?,?,?,?,?)",
-                                (f"Task #{tid} “{t['title']}” ({agent}) is waiting on you: {what}", self.clock(), tid, agent,
-                                 what, None))
+                self._ask_jack(tid, agent, f"Task #{tid} “{t['title']}” ({agent}) is waiting on you: {what}", what)
             elif who != "outside":
                 self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('note',?,?,?,0,'queued',?)",
                                 (agent, who, f"Task #{tid} “{t['title']}” is waiting on you: {what}\n"
@@ -1985,7 +2016,7 @@ class Hub:
 
     def needs_jack(self):
         with self.lock:
-            return [dict(r) for r in self.db.execute("select * from needs_jack where done=0 order by id desc")]
+            return [dict(r) for r in self.db.execute("select * from needs_jack where done=0 and triage is null order by id desc")]
 
     def reply_need(self, nid, by, text):
         """Jack answers an item on his list: it goes to the agent who raised it, and the item is done."""
@@ -2300,6 +2331,9 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                     name = self._agent()
                     t = name and hub.task(int(q.get("id", 0)))
                     name and self._json(200, t and {**t, "operator": hub.operator_items(t["id"])} or {})
+                elif u.path == "/api/jack":
+                    name = self._agent()
+                    name and self._json(200, {"items": hub.jack_list(name)})
                 elif u.path == "/api/status":
                     name = self._agent()
                     name and self._json(200, hub.status(name))
@@ -2408,6 +2442,15 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                     if name:
                         b = self._body()
                         self._json(200, {"ok": hub.record_switch(name, b["product"], b["role"], b["hash"])})
+                elif u.path == "/api/jack":                 # a PM merges asks into Jack's list
+                    name = self._agent()
+                    if name:
+                        b = self._body()
+                        if b.get("verb") == "add":
+                            self._json(200, {"id": hub.jack_add(name, b.get("what"), b.get("why"), b.get("link"))})
+                        else:
+                            hub.jack_done(name, [int(i) for i in b.get("ids", [])])
+                            self._json(200, {"ok": True})
                 elif u.path.startswith("/api/task/"):        # an agent moves a task: note | done | verify | release
                     name = self._agent()
                     if name:

@@ -23,6 +23,9 @@
                                      account only they can open. What = one short line ("Create an Etsy API app for your
                                      shop"); why = what it blocks; link = where to do it. One step each; the task keeps
                                      going. Choices you decide yourself.
+    fleet jack list                  PM: the asks for Jack waiting on you, and your items on his list
+    fleet jack add "<what Jack does>" ["<why>"] [<link>]   PM: one merged, plain line on Jack's list
+    fleet jack done <id> [<id>...]   PM: Jack's answer is passed on to whoever asked; close their asks
     fleet task release <id>          put a task back up for grabs (CEO / the product's PM only)
     fleet suggest "<text>"           suggest a change to your PM and the CEO
 
@@ -240,6 +243,16 @@ def main(args):
         write("/api/secret", {"name": args[2], "value": value, "scope": scope}) and print(f"Stored {args[2]} ({scope}).")
     elif cmd == "switch" and len(args) == 3:
         return do_switch(args[1], args[2])
+    elif cmd == "jack" and args[1:2] == ["list"]:
+        for n in call("GET", "/api/jack")["items"]:
+            who = "on Jack's list" if not n.get("triage") else f"from {n['agent']} (task #{n['task']})"
+            print(f"{n['id']:>4}  {who}: {n['what'] or n['text']}" + (f" — {n['why']}" if n.get("why") else ""))
+    elif cmd == "jack" and len(args) >= 3 and args[1] == "add":
+        link = next((x for x in args[3:] if x.startswith(("http://", "https://"))), None)
+        r = write("/api/jack", {"verb": "add", "what": args[2], "why": next((x for x in args[3:] if x != link), None), "link": link})
+        r and print(f"On Jack's list as {r['id']}. His answer comes to you.")
+    elif cmd == "jack" and len(args) >= 3 and args[1] == "done":
+        write("/api/jack", {"verb": "done", "ids": [int(i) for i in args[2:]]}) and print("Closed; waiting tasks go back to their holders.")
     elif cmd == "status":
         flush()
         s = call("GET", "/api/status")

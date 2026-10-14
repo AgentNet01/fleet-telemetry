@@ -7,6 +7,7 @@
     python3 test_jack.py show     # any agent looks up any task's result link itself instead of asking the CEO
     python3 test_jack.py plain    # each item is one short action, why it blocks, and a link — rambling is refused
     python3 test_jack.py since    # the board says when each worker took its task, and since when an idle one has been free
+    python3 test_jack.py pm       # agents' asks go to the PM, who merges them into Jack's list and routes his answer
     python3 test_jack.py ui       # in the browser: Jack opens a #reference, replies from his list, sees Tools apart
 """
 import sys
@@ -213,4 +214,44 @@ def ui():
     print("ui OK")
 
 
-{"steps": steps, "reply": reply, "tools": tools, "doc": doc, "show": show, "plain": plain, "since": since, "ui": ui}[sys.argv[1]]()
+def pm():
+    """Jack, Oct 14: 30 items from many agents, mostly the same few asks — the PM merges them for him."""
+    h, muse, clock = new_hub("Neo", "Bo", "Pam")
+    pj = h.add_project(h.add_product("Hats", brief="hats", pm="Pam"), "launch")
+    a = h.add_task(pj, "Printify setup", "engineer", "doc", owner="Neo")
+    b = h.add_task(pj, "Hat listing", "designer", "doc", owner="Bo")
+    h.tick(); h.tick()
+    h.task_for_jack("Neo", a, "Create a Printify account")
+    h.task_wait("Bo", b, "jack", "Open Printify and connect it to Etsy")
+    assert not h.needs_jack(), f"pm: raw asks skip Jack's list: {h.needs_jack()}"
+    raw = h.jack_list("Pam")
+    assert len(raw) == 2 and {r["agent"] for r in raw} == {"Neo", "Bo"}, raw
+    for _ in range(3):
+        h.tick()
+    assert any("fleet jack list" in s for s in muse.sent.get("Pam", [])), "pm: the PM is told there's something to merge"
+
+    nid = h.jack_add("Pam", "Open a Printify account and connect it to Etsy", "hats can't sell", "https://printify.com")
+    mine = h.needs_jack()
+    assert [n["id"] for n in mine] == [nid] and mine[0]["agent"] == "Pam", mine
+    h.reply_need(nid, "jack", "Done, login is in the vault as printify")
+    for _ in range(3):
+        h.tick()
+    assert any("login is in the vault" in s for s in muse.sent.get("Pam", [])), "pm: Jack's answer goes to the PM"
+
+    try:
+        h.jack_done("Neo", [r["id"] for r in raw])
+        raise AssertionError("pm: only the PM closes the asks it was given")
+    except PermissionError:
+        pass
+    h.jack_done("Pam", [r["id"] for r in raw])
+    assert not h.jack_list("Pam"), "pm: routed asks close"
+    assert h.task(b)["waiting_on"] is None, "pm: a task parked on Jack goes back to its holder"
+    try:
+        h.jack_add("Neo", "x")
+        raise AssertionError("pm: only a PM or the CEO adds to Jack's list")
+    except PermissionError:
+        pass
+    print("pm OK")
+
+
+{"pm": pm, "steps": steps, "reply": reply, "tools": tools, "doc": doc, "show": show, "plain": plain, "since": since, "ui": ui}[sys.argv[1]]()
