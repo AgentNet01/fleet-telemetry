@@ -43,6 +43,10 @@ def ensure_deps():
     that don't have the deps yet (e.g. the hub). No-op when all deps exist.
     Set IMAGEGEN_NO_BOOTSTRAP=1 to disable, or IMAGEGEN_TORCH_INDEX to a
     torch wheel index (e.g. the CPU index) instead of default PyPI.
+
+    `--cuda-torch` (task #286): when the installed torch has no CUDA
+    support (CPU-only wheel), force-reinstall the CUDA torch wheel from
+    default PyPI and re-exec once. No-op when torch already has CUDA.
     """
     missing = [pkg for mod, pkg in DEPS if _missing(mod)]
     if not missing:
@@ -78,6 +82,47 @@ def ensure_deps():
     sys.exit(r.returncode)
 
 
+def ensure_cuda_torch():
+    """`--cuda-torch`: replace a CPU-only torch with the CUDA wheel, once.
+
+    The hub's imagegen was running on CPU because its torch was the CPU-only
+    wheel (the bootstrap no-ops when torch is merely *present*). Default
+    PyPI ships CUDA torch, so a force-reinstall fixes it. Guarded by
+    IMAGEGEN_CUDA_TORCH_DONE so the re-exec below runs the check once.
+    """
+    if "--cuda-torch" not in sys.argv or os.environ.get("IMAGEGEN_CUDA_TORCH_DONE") == "1":
+        return
+    os.environ["IMAGEGEN_CUDA_TORCH_DONE"] = "1"
+    import torch
+    if torch.version.cuda is not None:
+        print(f"[imagegen] torch already has CUDA ({torch.version.cuda}); keeping it", file=sys.stderr)
+        return
+    print("[imagegen] CPU-only torch detected; force-reinstalling the CUDA torch wheel", file=sys.stderr)
+    for attempt in (False, True):
+        cmd = [sys.executable, "-m", "pip", "install", "--user", "--force-reinstall", "torch"]
+        if attempt:
+            cmd.append("--break-system-packages")
+        if subprocess.run(cmd).returncode == 0:
+            break
+    else:
+        raise RuntimeError("pip force-reinstall of CUDA torch failed")
+    r = subprocess.run([sys.executable, os.path.abspath(__file__), *sys.argv[1:]])
+    sys.exit(r.returncode)
+
+
+def print_diagnostics():
+    """One-line torch / CUDA / GPU report for the job log."""
+    import torch
+    print(f"torch={torch.__version__} torch_cuda={torch.version.cuda} "
+          f"cuda_available={torch.cuda.is_available()} "
+          f"device_count={torch.cuda.device_count()}", file=sys.stderr)
+    if torch.cuda.is_available():
+        try:
+            print(f"gpu0={torch.cuda.get_device_name(0)}", file=sys.stderr)
+        except Exception as e:
+            print(f"gpu0=<unreadable: {e}>", file=sys.stderr)
+
+
 def _missing(mod):
     try:
         __import__(mod)
@@ -93,6 +138,7 @@ def slugify(prompt: str) -> str:
 
 def main() -> int:
     ensure_deps()
+    ensure_cuda_torch()
     # The runtime's NO_PROXY contains bracketed IPv6 entries (e.g. [fd8b:...])
     # that httpx cannot parse, which breaks Hugging Face downloads. Our
     # downloads go through the egress proxy anyway, so shrink NO_PROXY to
@@ -100,7 +146,11 @@ def main() -> int:
     for _k in ("NO_PROXY", "no_proxy"):
         os.environ[_k] = "localhost,127.0.0.1"
     ap = argparse.ArgumentParser(description="Generate one image with a local diffusion model.")
-    ap.add_argument("prompt", help="Text prompt for the image")
+    ap.add_argument("prompt", nargs="?", default="", help="Text prompt for the image")
+    ap.add_argument("--diag", action="store_true",
+                    help="Print torch/CUDA/GPU diagnostics and exit (no generation)")
+    ap.add_argument("--cuda-torch", action="store_true",
+                    help="Replace a CPU-only torch with the CUDA wheel, then generate")
     ap.add_argument("--out", default=".", help="Output directory (default: current dir)")
     ap.add_argument("--seed", type=int, default=None, help="Random seed (default: random)")
     ap.add_argument("--steps", type=int, default=25, help="Inference steps (default: 25)")
@@ -112,6 +162,12 @@ def main() -> int:
 
     import torch
     from diffusers import StableDiffusionPipeline
+
+    print_diagnostics()
+    if args.diag:
+        return 0
+    if not args.prompt:
+        ap.error("prompt is required unless --diag is given")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if device == "cuda" else torch.float32

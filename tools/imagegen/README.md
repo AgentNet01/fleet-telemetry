@@ -9,6 +9,8 @@ only where local output is as good.
 ```
 fleet tool run imagegen "<prompt>"
 python3 tools/imagegen/run.py "<prompt>" [--out DIR] [--seed N] [--steps N] [--size N]
+python3 tools/imagegen/run.py --diag          # torch/CUDA/GPU diagnostics, no generation
+fleet tool run imagegen --cuda-torch "<prompt>"  # replace CPU-only torch with CUDA wheel, then generate
 ```
 
 Writes a PNG, prints its path. First run downloads ~4 GB of weights to the
