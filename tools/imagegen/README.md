@@ -23,6 +23,11 @@ pip install --user torch diffusers transformers accelerate safetensors Pillow
 GPU machine: CUDA torch wheel. CPU-only machine: CPU wheel
 (`--index-url https://download.pytorch.org/whl/cpu`).
 
+You can skip this: `run.py` bootstraps — on first run it `pip install
+--user`s any missing deps itself and re-execs (disable with
+`IMAGEGEN_NO_BOOTSTRAP=1`; point torch at another wheel index with
+`IMAGEGEN_TORCH_INDEX`, e.g. the CPU index).
+
 ## Model
 
 `Lykon/dreamshaper-8` — SD 1.5 fine-tune, ungated (no HF token needed),

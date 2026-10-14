@@ -21,12 +21,66 @@ import argparse
 import hashlib
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 
 DEFAULT_MODEL = "Lykon/dreamshaper-8"
 DEFAULT_NEGATIVE = "blurry, low quality, distorted, deformed, bad anatomy, text, watermark"
+
+DEPS = [("torch", "torch"), ("diffusers", "diffusers"),
+        ("transformers", "transformers"), ("accelerate", "accelerate"),
+        ("safetensors", "safetensors"), ("PIL", "Pillow"),
+        ("huggingface_hub", "huggingface_hub")]
+
+
+def ensure_deps():
+    """pip-install any missing Python deps once, then re-exec.
+
+    The done-when includes `pip install --user`; doing it here keeps the
+    one-command contract (`fleet tool run imagegen "<prompt>"`) on machines
+    that don't have the deps yet (e.g. the hub). No-op when all deps exist.
+    Set IMAGEGEN_NO_BOOTSTRAP=1 to disable, or IMAGEGEN_TORCH_INDEX to a
+    torch wheel index (e.g. the CPU index) instead of default PyPI.
+    """
+    missing = [pkg for mod, pkg in DEPS if _missing(mod)]
+    if not missing:
+        return
+    if os.environ.get("IMAGEGEN_NO_BOOTSTRAP") == "1":
+        raise RuntimeError(f"missing Python packages: {', '.join(missing)} "
+                           "(bootstrap disabled via IMAGEGEN_NO_BOOTSTRAP=1)")
+    if os.environ.get("IMAGEGEN_BOOTSTRAPPED") == "1":
+        raise RuntimeError(f"packages still missing after install: {', '.join(missing)}")
+    print(f"[imagegen] installing missing packages: {', '.join(missing)}", file=sys.stderr)
+    index = os.environ.get("IMAGEGEN_TORCH_INDEX")
+    for attempt in (False, True):  # retry with --break-system-packages on PEP 668 systems
+        cmd = [sys.executable, "-m", "pip", "install", "--user"]
+        if attempt:
+            cmd.append("--break-system-packages")
+        if index:
+            cmd += ["--index-url", index, "torch"]
+            rest = [p for p in missing if p != "torch"]
+            if rest:
+                r = subprocess.run(cmd + rest)
+            else:
+                r = subprocess.run(cmd)
+        else:
+            r = subprocess.run(cmd + missing)
+        if r.returncode == 0:
+            break
+    else:
+        raise RuntimeError(f"pip install failed for: {', '.join(missing)}")
+    os.environ["IMAGEGEN_BOOTSTRAPPED"] = "1"
+    os.execv(sys.executable, [sys.executable, os.path.abspath(__file__), *sys.argv[1:]])
+
+
+def _missing(mod):
+    try:
+        __import__(mod)
+        return False
+    except ImportError:
+        return True
 
 
 def slugify(prompt: str) -> str:
@@ -35,6 +89,7 @@ def slugify(prompt: str) -> str:
 
 
 def main() -> int:
+    ensure_deps()
     # The runtime's NO_PROXY contains bracketed IPv6 entries (e.g. [fd8b:...])
     # that httpx cannot parse, which breaks Hugging Face downloads. Our
     # downloads go through the egress proxy anyway, so shrink NO_PROXY to
