@@ -3,6 +3,8 @@
 
     python3 agents/setup.py "<your agent name>" <claim-code> [hub-url]
     python3 agents/setup.py          (already joined: upgrade in place, keeps your token)
+    --light                          only the fleet command and token: no background reporter, no hook
+
 
 Registers with the hub, installs the telemetry daemon in ~/.fleet, points it at the VM's tunnel
 proxy (background processes can't use the chat turn's proxy), installs the restart hook script,
@@ -10,6 +12,8 @@ and removes every older telemetry/Slack install. Safe to re-run: re-running is h
 """
 import json, os, shutil, subprocess, sys, urllib.parse, urllib.request
 
+light = "--light" in sys.argv
+sys.argv = [a for a in sys.argv if a != "--light"]
 home = os.path.expanduser("~")
 fleet = os.path.join(home, ".fleet"); os.makedirs(fleet, exist_ok=True)
 saved = lambda f: open(os.path.join(fleet, f)).read().strip() if os.path.exists(os.path.join(fleet, f)) else None
@@ -75,6 +79,10 @@ shutil.copy2(os.path.join(repo, "agents", "fleet"), cli); os.chmod(cli, 0o755)  
 bindir = os.path.join(home, ".local", "bin")
 if os.path.isdir(bindir) and not os.path.exists(os.path.join(bindir, "fleet")):
     os.symlink(cli, os.path.join(bindir, "fleet"))
+
+if light:                           # the hub reads activity from Muse itself; the reporter only adds machine stats
+    sys.exit(print(f"fleet: {name} registered (light: nothing runs in the background); hub route: {route}; "
+                   f"fleet command at {cli}. Try: {cli} status") or 0)
 
 # Remove every older install: the v10–v14 systemd daemon, its files, Slack listener, crons, hooks scripts.
 sh = lambda c: subprocess.run(c, shell=True, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
