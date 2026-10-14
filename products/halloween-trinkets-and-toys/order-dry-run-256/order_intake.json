@@ -1,0 +1,12 @@
+{
+  "order": {
+    "order_id": "TEST-KC-0001",
+    "buyer": "Test Buyer (synthetic)",
+    "listing": "Personalized Halloween Photo Keychain",
+    "personalization_name": "LUNA",
+    "photo_file": "synthetic_placeholder.png",
+    "provider": "Printify / SwiftPOD (USA) \u2014 Custom Shape Acrylic Keychain, UV print",
+    "dry_run": true
+  },
+  "intake_checks": "pass"
+}
