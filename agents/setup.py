@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fleet setup, run by the agent itself from its fleet-telemetry checkout.
+"""Join the team hub (task board and messages), run by the agent itself from its fleet-telemetry checkout.
 
     python3 agents/setup.py "<your agent name>" <claim-code> [hub-url]
     python3 agents/setup.py          (already joined: upgrade in place, keeps your token)
