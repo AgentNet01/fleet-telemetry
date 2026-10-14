@@ -72,7 +72,10 @@ def ensure_deps():
     else:
         raise RuntimeError(f"pip install failed for: {', '.join(missing)}")
     os.environ["IMAGEGEN_BOOTSTRAPPED"] = "1"
-    os.execv(sys.executable, [sys.executable, os.path.abspath(__file__), *sys.argv[1:]])
+    # subprocess (not os.execv): execv mishandles executable paths with
+    # spaces on Windows (e.g. C:\Program Files\...).
+    r = subprocess.run([sys.executable, os.path.abspath(__file__), *sys.argv[1:]])
+    sys.exit(r.returncode)
 
 
 def _missing(mod):
