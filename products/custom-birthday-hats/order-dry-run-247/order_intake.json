@@ -1,0 +1,13 @@
+{
+  "order": {
+    "order_id": "TEST-HAT-0001",
+    "buyer": "Test Buyer (synthetic)",
+    "listing": "Personalized 21st Birthday Party Hat",
+    "design": "Midnight Gold 21",
+    "personalization_name": "SOPHIA",
+    "personalization_age": "21",
+    "photo_file": null,
+    "dry_run": true
+  },
+  "intake_checks": "pass"
+}
