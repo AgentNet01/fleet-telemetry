@@ -4,7 +4,6 @@
     python3 test_autonomy.py truth      # blocked work frees its holder; owned work starts when it can
     python3 test_autonomy.py planning   # PM asked, then an idle agent plans, its task gets taken
     python3 test_autonomy.py standin    # a silent CEO is stood in for, and gets the seat back by acting
-    python3 test_autonomy.py slack200   # a Slack thread past 200 messages is still read
 """
 import os
 import re
@@ -166,29 +165,6 @@ def standin():
     h.acted("dot")
     assert h._chair() == "dot", "dot acting takes the seat back"
     print("standin OK")
-
-
-def slack200():
-    import muse
-    thread = [{"ts": "1000.000000", "user": "UBOT", "text": "intro"}] + \
-             [{"ts": f"{1000 + i}.000000", "user": "UDOT" if i == 250 else "UBOT", "text": f"m{i}"} for i in range(1, 251)]
-
-    def api(method, **p):
-        if method == "chat.postMessage":
-            return {"ts": "1000.000000"}
-        old = float(p.get("oldest") or 0)
-        after = [m for m in thread[1:] if float(m["ts"]) > old]
-        page = after[:200]
-        return {"ok": True, "messages": [thread[0]] + page, "has_more": len(after) > 200}
-
-    t = muse.SlackTransport(lambda: "tok", {"dot": {"user": "UDOT", "channel": "C1"}}, api=api)
-    t.READ_EVERY = 0
-    t._ts = {"dot": "1000.000000"}
-    got = []
-    for _ in range(3):
-        got = t.replies("dot", 0)
-    assert got and got[-1][1] == "m250", f"250: dot's reply past the first 200 messages is read: {got[-3:]}"
-    print("slack200 OK")
 
 
 def planner_not_asker():
@@ -465,4 +441,4 @@ def chain():
 
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "slack200": slack200, "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain}[sys.argv[1]]()
+     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain}[sys.argv[1]]()

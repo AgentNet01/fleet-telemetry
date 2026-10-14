@@ -121,33 +121,46 @@ def intro():
 
 
 def slack():
-    """dot is a bot (no DMs between bots): the hub @mentions it in one thread in a shared channel."""
-    calls, posted = [], []
+    """dot is a bot reached in a shared channel. Jack, Oct 13: messages go in the channel itself, not one thread.
+    dot may answer in the channel or in a thread under the hub's message; both are its replies."""
+    chan, posted, n = [], [], [0]
+
+    def say(user, text, thread=None):
+        n[0] += 1
+        m = {"user": user, "ts": f"17000{n[0]:05d}.000100", "text": text}
+        if thread:
+            m["thread_ts"] = thread
+            parent = next(x for x in chan if x["ts"] == thread)
+            parent["reply_count"] = parent.get("reply_count", 0) + 1
+            parent["latest_reply"] = m["ts"]
+        chan.append(m)
+        return m["ts"]
 
     def api(method, **params):
-        calls.append((method, params))
         if method == "chat.postMessage":
-            ts = f"17000001{len(posted):02d}.000100"
-            posted.append((ts, params))
-            return {"ts": ts}
+            posted.append(params)
+            return {"ts": say("U0HUB", params["text"], params.get("thread_ts"))}
+        if method == "conversations.history":            # newest first, top-level only, with reply metadata
+            top = [m for m in chan if m.get("thread_ts", m["ts"]) == m["ts"]]
+            return {"messages": [dict(m) for m in reversed(top)][:int(params.get("limit", 100))]}
         if method == "conversations.replies":
-            return {"messages": [{"user": "U0HUB", "bot_id": "B0HUB", "ts": posted[0][0], "text": "our thread starter"},
-                                 {"user": "U0DOT", "ts": "1700000999.000200", "text": "on it — PMs asked"},
-                                 {"user": "U0JACK", "ts": "1700000999.000300", "text": "a person chiming in"}]}
+            return {"messages": [dict(m) for m in chan if m["ts"] == params["ts"] or m.get("thread_ts") == params["ts"]]}
         raise AssertionError(method)
 
-    state = tempfile.mkdtemp()
-    t = muse.SlackTransport(token=lambda: "xoxb-test", users={"dot": {"user": "U0DOT", "channel": "C0ALL"}},
-                            api=api, state_dir=state)
-    mark = t.deliver("dot", "4 agents idle over 12 h")
-    intro, note = posted[0][1], posted[1][1]
-    assert intro["channel"] == "C0ALL" and "<@U0DOT>" in intro["text"] and "thread_ts" not in intro, intro
-    assert note == {"channel": "C0ALL", "thread_ts": posted[0][0], "text": "<@U0DOT> 4 agents idle over 12 h"}, note
-    assert [text for _, text in t.replies("dot", mark)] == ["on it — PMs asked"], "only dot's later messages in the thread"
-    t2 = muse.SlackTransport(token=lambda: "xoxb-test", users={"dot": {"user": "U0DOT", "channel": "C0ALL"}},
-                             api=api, state_dir=state)
-    t2.deliver("dot", "after a restart")
-    assert len(posted) == 3 and posted[2][1]["thread_ts"] == posted[0][0], "a restart keeps the same thread"
+    t = muse.SlackTransport(token=lambda: "xoxb-test", users={"dot": {"user": "U0DOT", "channel": "C0ALL"}}, api=api)
+    t.READ_EVERY = 0
+    first = t.deliver("dot", "4 agents idle over 12 h")
+    assert posted[0] == {"channel": "C0ALL", "text": "<@U0DOT> 4 agents idle over 12 h"}, posted[0]
+    say("U0DOT", "on it — PMs asked")                        # answered in the channel
+    say("U0JACK", "a person chiming in")
+    assert [x for _, x in t.replies("dot", first)] == ["on it — PMs asked"], "dot's channel message is its reply"
+    second = t.deliver("dot", "which product first?")
+    say("U0DOT", "pet portraits", thread=f"{second:.6f}")       # answered in a thread under the hub's message
+    say("U0DOT", "late answer to the first", thread=f"{first:.6f}")
+    got = []
+    for _ in range(3):                                         # one thread read per pass (Slack's rate limit)
+        got += t.replies("dot", second)
+    assert {x for _, x in got} == {"pet portraits", "late answer to the first"}, got
 
     none = muse.SlackTransport(token=lambda: None, users={"dot": {"user": "U0DOT", "channel": "C0ALL"}}, api=api)
     try:

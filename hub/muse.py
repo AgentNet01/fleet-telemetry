@@ -190,18 +190,15 @@ def renew(account_dir, post=None, now=None):
 
 class SlackTransport:
     """An agent reached over Slack (dot, until Darragh connects it to the hub). dot is a bot, so the hub
-    can't DM it; it talks the way the fleet always has — @mentioning it in one long-lived thread in a
-    channel both bots are in. dot's later messages in that thread are its replies. The bot token comes
-    from the vault on every call; the thread's ts is kept in state_dir so it survives restarts.
+    can't DM it: it @mentions dot in a channel both bots are in, as a message in the channel itself (Jack, Oct 13:
+    not one long thread). dot's later messages are its replies, whether in the channel or in a thread under one
+    of the hub's messages. The bot token comes from the vault on every call.
       users = {"dot": {"user": "U0C6QLALEJV", "channel": "C0C6MQMSLFL"}}"""
 
-    INTRO = ("{who} this thread is where the fleet hub talks to you. Notes for the CEO seat (like agents sitting "
-             "idle, or suggestions from the optimizers) arrive here as replies. Answer in this thread and the hub "
-             "reads it. Jack and Darragh see everything on the hub dashboard.")
+    READ_EVERY = 65     # Slack lets non-Marketplace apps read a channel or thread about once a minute (429 otherwise)
 
     def __init__(self, token, users, api=None, state_dir=None):
         self.token, self.users, self.api = token, users, api or self._http
-        self.state_dir = state_dir
 
     def _http(self, method, **params):
         req = urllib.request.Request("https://slack.com/api/" + method, data=urllib.parse.urlencode(params).encode(),
@@ -212,41 +209,36 @@ class SlackTransport:
             raise RuntimeError(f"slack {method}: {out.get('error')}")
         return out
 
-    def _thread(self, name):
+    def _who(self, name):
         if not self.token():
             raise LoginError("no slack-bot-token in the vault — add the Fleet Reader bot token (scope: hub only) "
                              "so the hub can reach " + name)
-        u = self.users[name]
-        path = os.path.join(self.state_dir, f"slack_thread_{name}.txt") if self.state_dir else None
-        ts = getattr(self, "_ts", {}).get(name) or (open(path).read().strip() if path and os.path.exists(path) else None)
-        if not ts:
-            ts = self.api("chat.postMessage", channel=u["channel"], text=self.INTRO.format(who=f"<@{u['user']}>"))["ts"]
-            if path:
-                with open(path, "w") as f:
-                    f.write(ts)
-        self.__dict__.setdefault("_ts", {})[name] = ts
-        return u["user"], u["channel"], ts
+        return self.users[name]["user"], self.users[name]["channel"]
 
     def deliver(self, name, text):
-        uid, ch, thread = self._thread(name)
-        return float(self.api("chat.postMessage", channel=ch, thread_ts=thread, text=f"<@{uid}> {text}")["ts"])
-
-    READ_EVERY = 65     # Slack lets non-Marketplace apps read a thread about once a minute (429 otherwise)
+        uid, ch = self._who(name)
+        return float(self.api("chat.postMessage", channel=ch, text=f"<@{uid}> {text}")["ts"])
 
     def replies(self, name, after):
-        uid, ch, thread = self._thread(name)
-        cache = self.__dict__.setdefault("_read", {})
-        at, msgs = cache.get(name, (0, None))
-        if msgs is None or time.time() - at >= self.READ_EVERY:
-            # Slack pages a thread oldest-first, 200 at a time: read on from the newest message we hold, so a
-            # thread past 200 messages keeps being read (one page per read; after a restart it catches up)
-            newest = max((m["ts"] for m in msgs or []), key=float, default=None)
-            page = self.api("conversations.replies", channel=ch, ts=thread, limit=200,
-                            **({"oldest": newest} if newest else {}))["messages"]
-            msgs = list({m["ts"]: m for m in (msgs or []) + page}.values())
-            cache[name] = (time.time(), msgs)
-        return sorted((float(m["ts"]), m.get("text", "")) for m in msgs
-                      if m.get("user") == uid and float(m["ts"]) > float(after or 0))
+        uid, ch = self._who(name)
+        c = self.__dict__.setdefault("_read", {}).setdefault(name, {"at": 0, "got": {}, "threads": {}})
+        if time.time() - c["at"] >= self.READ_EVERY:
+            c["at"] = time.time()
+            # the newest 100 channel messages: dot's own, and which of the hub's messages have new thread replies
+            # ponytail: a channel busier than 100 messages a minute would drop some; page with `oldest` if it ever is
+            changed = []
+            for m in self.api("conversations.history", channel=ch, limit=100)["messages"]:
+                if m.get("user") == uid:
+                    c["got"][m["ts"]] = m.get("text", "")
+                elif m.get("latest_reply") and m.get("latest_reply") != c["threads"].get(m["ts"]):
+                    changed.append(m)
+            if changed:                                   # one thread a pass: the same once-a-minute limit
+                m = max(changed, key=lambda x: float(x["latest_reply"]))
+                for r in self.api("conversations.replies", channel=ch, ts=m["ts"], limit=200)["messages"]:
+                    if r.get("user") == uid and r["ts"] != m["ts"]:
+                        c["got"][r["ts"]] = r.get("text", "")
+                c["threads"][m["ts"]] = m["latest_reply"]
+        return sorted((float(ts), text) for ts, text in c["got"].items() if float(ts) > float(after or 0))
 
     def session(self, name):
         return "slack:" + name
