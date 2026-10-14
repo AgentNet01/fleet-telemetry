@@ -17,6 +17,8 @@
     fleet task wait <id> <who> "<what you need>"   waiting on jack, darragh, an agent, or outside: the task
                                      is parked for you and you take other work meanwhile
     fleet task resume <id>           the wait is over: the task comes back to you
+    fleet task jack <id> "<what to do, why, link>"   put a step only Jack/Darragh can do on their list (one per
+                                     step); the task keeps going. Required before done on tasks that are work for Jack.
     fleet task release <id>          put a task back up for grabs (CEO / the product's PM only)
     fleet suggest "<text>"           suggest a change to your PM and the CEO
 
@@ -26,6 +28,7 @@
     fleet changes                    the latest changes and who made them
     fleet product add "<name>" "<brief>" ["<goal>"]
     fleet product set "<product>" brief|metric "<value>"   (status: Jack/Darragh only)
+    fleet product set "<product>" kind tool|product   a tool is shared by every product (fulfillment, image generation)
     fleet product rename "<product>" "<new name>"
     fleet product remove "<product>"    (Jack/Darragh only) cancels its open tasks, frees its agents (undo: status active)
     fleet project add|remove "<product>" "<project>"
@@ -221,10 +224,10 @@ def main(args):
                           for t in s.get("tasks", [])) or "No open tasks."
         q = "\n".join(f"#{i['id']} {i['status']:6} from {i['frm']}: {i['text'][:80]}" for i in s["queue"]) or "Nothing waiting."
         print(where + "\n" + tasks + "\n" + q + ("\n\nWhat you can do: " + s["can"] if s.get("can") else ""))
-    elif cmd == "task" and len(args) >= 3 and args[1] in ("note", "done", "verify", "release", "wait", "resume"):
+    elif cmd == "task" and len(args) >= 3 and args[1] in ("note", "done", "verify", "release", "wait", "resume", "jack"):
         verb, tid = args[1], int(args[2])
         body = {"task": tid}
-        if verb == "note" and len(args) == 4:
+        if verb in ("note", "jack") and len(args) == 4:
             body["text"] = args[3]
         elif verb == "done" and len(args) == 4:
             body["link"] = args[3]
@@ -238,7 +241,8 @@ def main(args):
         print({"note": f"Noted on #{tid}.", "done": f"#{tid} is done and goes to verification.",
                "verify": f"Verification of #{tid} recorded.", "release": f"#{tid} released.",
                "wait": f"#{tid} is parked for you; take other work. `fleet task resume {tid}` when it's sorted.",
-               "resume": f"#{tid} resumed; it comes back to its holder."}[verb])
+               "resume": f"#{tid} resumed; it comes back to its holder.",
+               "jack": f"On Jack's list, linked to #{tid}. Keep working; his reply comes to you."}[verb])
     elif cmd in ("portfolio", "changes", "product", "project", "pm", "place", "seat", "role", "park", "wake", "grant", "powers", "team") \
             or args[:2] in (["task", "add"], ["task", "set"], ["task", "remove"]):
         import shlex

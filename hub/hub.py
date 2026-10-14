@@ -54,6 +54,30 @@ def _evidence_ok(link):
         return False
 
 
+def doc_source_ok(url):
+    """The doc viewer fetches agents' Muse files and nothing else (it runs on Jack's machine)."""
+    u = urlparse(url)
+    return u.scheme == "https" and u.hostname == "muse.ai" and not u.username and u.path.startswith("/files/")
+
+
+def doc_page(url, text):
+    """A Markdown file shown as a page instead of downloaded. Agents write these, so the HTML is sanitised."""
+    data = json.dumps(text).replace("<", "\\u003c")            # the text can't close the script it sits in
+    name = html.escape(url.rsplit("/", 1)[-1])
+    return (f"<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>{name}</title>"
+            "<style>:root{color-scheme:light dark}body{font:16px/1.6 system-ui;max-width:860px;margin:0 auto;padding:24px 16px;"
+            "background:Canvas;color:CanvasText}pre,code{background:color-mix(in srgb,CanvasText 8%,Canvas);border-radius:4px}"
+            "pre{padding:12px;overflow:auto}code{padding:1px 4px}table{border-collapse:collapse}td,th{border:1px solid "
+            "color-mix(in srgb,CanvasText 25%,Canvas);padding:4px 8px}img{max-width:100%}.src{font-size:13px;opacity:.7}</style>"
+            f"<p class=src>{name} · <a href='{html.escape(url)}'>download</a></p><main id=doc></main>"
+            f"<script type=application/json id=md>{data}</script>"
+            "<script src='https://cdn.jsdelivr.net/npm/marked@12/marked.min.js'></script>"
+            "<script src='https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js'></script>"
+            "<script>const t=JSON.parse(document.getElementById('md').textContent);"
+            "document.getElementById('doc').innerHTML=DOMPurify.sanitize(marked.parse(t));"
+            "document.querySelectorAll('#doc a').forEach(a=>{a.target='_blank';a.rel='noopener'});</script>")
+
+
 def _tally(views, chair_text):
     """Label the council outcome from the views and the chair's own answer."""
     from collections import Counter
@@ -148,6 +172,8 @@ MIGRATIONS = [
     "alter table needs_jack add column task integer",     # a wait on Jack/Darragh: done on his list clears it
     "alter table agents add column fleet_rev text",       # version of the fleet command it last called with
     "alter table agents add column fleet_told real",
+    "alter table needs_jack add column agent text",       # who raised it: Jack's reply goes to them
+    "alter table products add column kind text default 'product'",   # 'tool': shared by every product, not sold
     "create table if not exists approvals(id text primary key, agent text, label text, detail text, options text, expires real)",     # the powers text this agent was last told       # a PM's company command waiting on the CEO's review
 ]
 WORKERS = ("muse", "poll")            # kinds that take tasks; 'slack' (dot) and 'jack' (the board) don't
@@ -732,11 +758,27 @@ class Hub:
             self._log(None, agent, "out", f"task #{tid} note: {text}")
             self._task_event(tid, agent, "note", text)
 
+    def task_for_jack(self, agent, tid, text):
+        """A step only Jack/Darragh can do, put on their list with the task it came from; the task keeps going."""
+        with self.lock:
+            t = self._task_row(tid)
+            if t["owner"] != agent or t["status"] != "working":
+                raise PermissionError(f"#{tid} isn't a task you're working on")
+            self.db.execute("insert into needs_jack(text, at, task, agent) values(?,?,?,?)",
+                            (f"From task #{tid} “{t['title']}” ({agent}): {text.strip()}", self.clock(), tid, agent))
+            self._task_event(tid, agent, "for jack", text)
+
     def task_done(self, agent, tid, link):
         with self.lock:
             t = self._task_row(tid)
             if t["owner"] != agent or t["status"] != "working":
                 raise PermissionError(f"#{tid} isn't a task you're working on")
+            # ponytail: a name match, not intent; a task that names the board but needs nothing files one "nothing to do" step
+            if re.search(r"\b(jack|darragh)\b", f"{t['title']} {t['done_def']}", re.I) and \
+                    not self.db.execute("select 1 from needs_jack where task=?", (tid,)).fetchone():
+                raise ValueError(f"#{tid} is work for Jack, and nothing from it is on his list. Put each step he must do "
+                                 f"there first, one per step, in plain words with the link he needs:\n"
+                                 f"  fleet task jack {tid} \"<what to do, why, link>\"\nthen run task done again.")
         if not self.evidence_ok(link):                                  # network check, outside the lock
             raise ValueError(f"the evidence link doesn't open: {link}")
         with self.lock:
@@ -788,9 +830,9 @@ class Hub:
             self._task_event(tid, agent, "waiting", note)
             self._log(None, agent, "out", f"task #{tid} {note}")
             if board:
-                self.db.execute("insert into needs_jack(text, at, task) values(?,?,?)",
+                self.db.execute("insert into needs_jack(text, at, task, agent) values(?,?,?,?)",
                                 (f"Task #{tid} “{t['title']}” ({agent}) is waiting on you: {what}. "
-                                 "Mark this done when it's sorted and the task goes back to them.", self.clock(), tid))
+                                 "Reply, or mark this done when it's sorted, and the task goes back to them.", self.clock(), tid, agent))
             elif who != "outside":
                 self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('note',?,?,?,0,'queued',?)",
                                 (agent, who, f"Task #{tid} “{t['title']}” is waiting on you: {what}\n"
@@ -1165,7 +1207,11 @@ class Hub:
                 "Everyone: fleet status, fleet inbox, fleet portfolio, fleet changes, fleet ask, fleet reply, "
                 "fleet task note|done on tasks you hold, fleet task wait <id> <jack|darragh|agent|outside> \"<what>\" "
                 "when you're waiting on someone (you're freed for other work; fleet task resume <id> when it's sorted), "
-                "fleet task verify when asked, fleet suggest \"<idea>\".")
+                "fleet task verify when asked, fleet suggest \"<idea>\". "
+                "A step only Jack or Darragh can do (an account, a payment, an approval) goes on their list with "
+                "fleet task jack <id> \"<what to do, why, and the link>\" — one plain step each, written for someone who "
+                "hasn't read your work; they can reply to you from it. Tools (marked tool in fleet portfolio) are shared "
+                "by every product: use them, and put tool work in the tool, not in your product.")
         if self._ceo_level(who):
             ceo = (self.db.execute("select agent from seats where role='ceo'").fetchone() or {"agent": None})["agent"]
             seat = ("You hold the CEO seat" if who == ceo else f"You're standing in as CEO while {ceo} is silent"
@@ -1251,8 +1297,10 @@ class Hub:
         verb = a[:2]
         if verb == ["product", "add"] and len(a) in (4, 5):
             return f"product #{self.add_product(a[2], brief=a[3], metric=a[4] if len(a) == 5 else None)} {a[2]} created"
-        if verb == ["product", "set"] and len(a) == 5 and a[3] in ("brief", "metric", "status"):
+        if verb == ["product", "set"] and len(a) == 5 and a[3] in ("brief", "metric", "status", "kind"):
             p = product(a[2])
+            if a[3] == "kind" and a[4] not in ("product", "tool"):
+                raise ValueError("kind is product or tool")
             self._set("products", p["id"], **{a[3]: a[4]})
             return f"{p['name']}: {a[3]} set"
         if verb == ["product", "rename"] and len(a) == 4:
@@ -1359,7 +1407,7 @@ class Hub:
     def _portfolio(self):
         out = []
         for p in self.db.execute("select * from products where status != 'removed' order by id"):
-            out.append(f"product #{p['id']} {p['name']} ({p['status']}) PM {p['pm'] or '(none)'} · goal {p['metric'] or '-'}\n  {p['brief'] or ''}")
+            out.append(f"{p['kind'] or 'product'} #{p['id']} {p['name']} ({p['status']}) PM {p['pm'] or '(none)'} · goal {p['metric'] or '-'}\n  {p['brief'] or ''}")
             for j in self.db.execute("select * from projects where product=? and status != 'removed' order by id", (p["id"],)):
                 out.append(f"  project #{j['id']} {j['name']}")
                 for t in self.db.execute("select * from tasks where project=? and status != 'done' order by id", (j["id"],)):
@@ -1810,6 +1858,19 @@ class Hub:
         with self.lock:
             return [dict(r) for r in self.db.execute("select * from needs_jack where done=0 order by id desc")]
 
+    def reply_need(self, nid, by, text):
+        """Jack answers an item on his list: it goes to the agent who raised it, and the item is done."""
+        with self.lock:
+            n = self.db.execute("select * from needs_jack where id=?", (nid,)).fetchone()
+            if not n or not n["agent"]:
+                raise ValueError("no agent raised this, so there's nobody to reply to")
+            if not text.strip():
+                raise ValueError("the reply is empty")
+            head = n["text"].split("\n")[0][:300]
+        self.ask(by, n["agent"], f"{by.title()} answered your item on their list:\n“{head}”\n\n{text}")
+        self.resolve_need(nid)
+        return n["agent"]
+
     def resolve_need(self, nid):
         with self.lock:
             self.db.execute("update needs_jack set done=1 where id=?", (nid,))
@@ -1898,7 +1959,7 @@ class Hub:
                     projects.append({"id": pr["id"], "name": pr["name"], "tasks": tasks})
                 rev = self.db.execute("select coalesce(sum(amount),0) s from sales where product=?", (p["name"],)).fetchone()["s"]
                 out.append({"id": p["id"], "name": p["name"], "brief": p["brief"], "pm": p["pm"], "metric": p["metric"],
-                            "budget": p["budget"], "kill_date": p["kill_date"], "status": p["status"],
+                            "budget": p["budget"], "kill_date": p["kill_date"], "status": p["status"], "kind": p["kind"] or "product",
                             "revenue": rev, "projects": projects})
             return out
 
@@ -2000,6 +2061,24 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                     self.send_header("Content-Length", str(len(body)))
                     self.end_headers()
                     self.wfile.write(body)
+                elif u.path == "/doc":                     # an agent's Markdown file, rendered instead of downloaded
+                    if self._jack():
+                        src = q.get("u", "")
+                        if not doc_source_ok(src):
+                            self._page(400, "Only Muse file links open here.")
+                        else:
+                            import urllib.request
+                            try:
+                                with urllib.request.urlopen(src, timeout=15) as r:
+                                    text = r.read(3_000_000).decode("utf-8", "replace")
+                                body = doc_page(src, text).encode()
+                                self.send_response(200)
+                                self.send_header("Content-Type", "text/html; charset=utf-8")
+                                self.send_header("Content-Length", str(len(body)))
+                                self.end_headers()
+                                self.wfile.write(body)
+                            except OSError as e:
+                                self._page(502, f"Couldn't fetch that file: {e}")
                 elif u.path in ("/", "/index.html"):
                     if self._jack():
                         body = open(page_path, "rb").read()
@@ -2194,6 +2273,8 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                             hub.task_wait(name, tid, b.get("who"), b.get("what", ""))
                         elif verb == "resume":
                             hub.task_resume(name, tid)
+                        elif verb == "jack":
+                            hub.task_for_jack(name, tid, b["text"])
                         else:
                             raise ValueError(f"unknown task action {verb}")
                         self._json(200, {"ok": True, "task": hub.task(tid)["status"]})
@@ -2258,6 +2339,14 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         b = self._body()
                         try:
                             hub.decide_approval(self.who, b["agent"], b["id"], b["decision"])
+                            self._json(200, {"ok": True})
+                        except ValueError as e:
+                            self._json(400, {"error": str(e)})
+                elif u.path == "/api/jack/reply":          # Jack answers an item on his list; it goes to whoever raised it
+                    if self._jack():
+                        b = self._body()
+                        try:
+                            hub.deliver_now(hub.reply_need(int(b["id"]), self.who, str(b["text"]).strip()))
                             self._json(200, {"ok": True})
                         except ValueError as e:
                             self._json(400, {"error": str(e)})

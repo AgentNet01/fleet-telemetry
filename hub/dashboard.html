@@ -62,6 +62,7 @@ button.row{cursor:pointer}button.row:hover{background:var(--panel2)}
 .njrow{display:flex;gap:10px;align-items:flex-start}
 .njrow .t{flex:1;min-width:0;word-break:break-word;font-size:14px}
 .njrow .when{color:var(--faint);font-size:12px;white-space:nowrap}
+.njreply{display:flex;gap:8px;margin-top:8px;align-items:flex-end}.njreply textarea{flex:1;font:inherit;font-size:14px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
 .njrow details summary{color:var(--faint);font-size:12px;cursor:pointer;margin-top:4px}
 .njrow pre{white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:8px;margin:6px 0 0;overflow:auto}
 .btn{background:var(--panel3);border:1px solid var(--line);color:var(--fg);font:inherit;font-size:13px;font-weight:600;padding:7px 13px;border-radius:9px;cursor:pointer}
@@ -308,6 +309,9 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <div class="hint">A product is a small business. Open one to see its projects (phases) and tasks (the work). The CEO and PMs create tasks — you can too.</div>
     <div id="prodform"></div>
     <div id="products"></div>
+    <h2 style="margin-top:22px">Tools</h2>
+    <div class="hint">Shared by every product — fulfillment, image generation and the like. Not sold; any product's work can use them.</div>
+    <div id="tools"></div>
   </section>
   <section id="product" hidden>
     <button class="back" data-back="portfolio">← Portfolio</button>
@@ -366,6 +370,12 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// agents' Markdown files open formatted in the hub's viewer instead of downloading
+const docUrl = u => /^https:\/\/muse\.ai\/files\/[^?#]+\.md([?#]|$)/i.test(u) ? "doc?u="+encodeURIComponent(u) : u;
+const lnk = (u, label) => `<a href="${esc(docUrl(u))}" target="_blank" rel="noopener">${esc(label||u)}</a>`;
+// text with its links and #numbers clickable (a #number opens that task, or else that message)
+const rich = s => String(s ?? "").split(/(https?:\/\/[^\s<>"]*[^\s<>".,;:!?)\]'”]|#\d+)/)
+  .map((p,i)=> i%2 ? (p[0]==="#" ? `<a href="#" data-ref="${p.slice(1)}">${p}</a>` : lnk(p)) : esc(p)).join("");
 const money = n => "$" + (n || 0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 let now = Date.now()/1000, openAgent=null, openProduct=null, tab="overview", board=null, org=null;
 const opt = (v, txt, sel) => `<option value="${esc(v)}"${sel?" selected":""}>${esc(txt)}</option>`;
@@ -420,10 +430,14 @@ async function load(){
   $("njn").innerHTML = nj.length?`<span style="color:var(--warn)">(${nj.length})</span>`:"";
   $("nj").innerHTML = nj.length ? nj.map(n=>{
     const [head,...rest]=String(n.text).split("\n"); const more=rest.join("\n").trim();
-    return `<div class="row njrow"><div class="t">${esc(head)}
-      ${more?`<details><summary>details</summary><pre>${esc(more)}</pre></details>`:""}</div>
-      <div class="when">${ago(n.at)}</div><button class="btn sm" data-dismiss="${n.id}" title="${n.task?"Done: the task goes back to its agent":"Dismiss"}">${n.task?"Done":"Dismiss"}</button></div>`;}).join("")
+    return `<div class="row njrow"><div class="t">${rich(head)}
+      ${more?`<details><summary>details</summary><pre>${rich(more)}</pre></details>`:""}
+      ${n.agent?`<form class="njreply" data-reply="${n.id}" hidden><textarea name="text" rows="2" required aria-label="Reply to ${esc(n.agent)}" placeholder="Your answer goes to ${esc(n.agent)}"></textarea><button class="btn sm primary" type="submit">Send</button></form>`:""}</div>
+      <div class="when">${ago(n.at)}</div>${n.agent?`<button class="btn sm" data-replyopen="${n.id}">Reply</button>`:""}<button class="btn sm" data-dismiss="${n.id}" title="${n.task?"Done: the task goes back to its agent":"Dismiss"}">${n.task?"Done":"Dismiss"}</button></div>`;}).join("")
     : `<div class="row empty">Nothing needs you right now.</div>`;
+  document.querySelectorAll("[data-replyopen]").forEach(el=>el.onclick=()=>{ const f=document.querySelector(`[data-reply="${el.dataset.replyopen}"]`); f.hidden=!f.hidden; if(!f.hidden) f.text.focus(); });
+  document.querySelectorAll("[data-reply]").forEach(f=>f.onsubmit=async e=>{ e.preventDefault(); const b=f.querySelector("button"); b.disabled=true;
+    try{ await jpost("api/jack/reply",{id:+f.dataset.reply,text:f.text.value}); toast("Sent — it's off your list"); load(); }catch(err){ b.disabled=false; toast(err.message); }});
   document.querySelectorAll("[data-dismiss]").forEach(el=>el.onclick=async()=>{
     el.disabled=true; try{ await jpost("api/jack/dismiss",{id:+el.dataset.dismiss}); toast("Dismissed"); load(); }catch(e){ el.disabled=false; toast(e.message); }});
 
@@ -457,17 +471,21 @@ async function load(){
 }
 
 // ---- portfolio ----
-function renderPortfolio(products){
-  $("products").innerHTML = products.length ? products.map(p=>{
+function renderPortfolio(all){
+  const products=all.filter(p=>p.kind!=="tool"), tools=all.filter(p=>p.kind==="tool");
+  $("tools").innerHTML = tools.length ? tools.map(card).join("") : `<div class="card"><div class="row muted">No tools yet — a PM or the CEO turns one on with fleet product set "&lt;name&gt;" kind tool.</div></div>`;
+  $("products").innerHTML = products.length ? products.map(card).join("")
+    : `<div class="card"><div class="row muted">No products yet — add one above.</div></div>`;
+  document.querySelectorAll("[data-product]").forEach(el=>el.onclick=()=>renderProduct(+el.dataset.product));
+}
+function card(p){
     const nt=(p.projects||[]).reduce((n,pr)=>n+(pr.tasks||[]).length,0);
     return `<button class="card prodcard" data-product="${p.id}">
-      <div class="phead"><span class="pname">${esc(p.name)}</span><span class="prev">${money(p.revenue)}</span></div>
+      <div class="phead"><span class="pname">${esc(p.name)}</span>${p.kind==="tool"?"":`<span class="prev">${money(p.revenue)}</span>`}</div>
       <div class="brief">${esc(p.brief||"")}</div>
       <div class="pmeta">${p.metric?`<span class="chip">goal · ${esc(p.metric)}</span>`:""}
         <span class="chip">${(p.projects||[]).length} projects</span><span class="chip">${nt} tasks</span>
-        ${p.pm?`<span class="chip">PM ${esc(p.pm)}</span>`:""}</div></button>`;}).join("")
-    : `<div class="card"><div class="row muted">No products yet — add one above.</div></div>`;
-  document.querySelectorAll("[data-product]").forEach(el=>el.onclick=()=>renderProduct(+el.dataset.product));
+        ${p.pm?`<span class="chip">PM ${esc(p.pm)}</span>`:""}</div></button>`;
 }
 $("addprod").onclick=()=>{ const h=$("prodform"); if(h.dataset.open){h.innerHTML="";h.dataset.open="";return;} h.dataset.open="1";
   h.innerHTML=`<div class="card" style="margin-bottom:12px"><form class="form">
@@ -515,6 +533,16 @@ function renderProduct(pid, quiet){
 const STATUS={blocked:"Blocked — waiting on other tasks",ready:"Ready — goes to the next free agent who fits",open:"Ready — goes to the next free agent who fits",
   working:"Being worked on",verifying:"Being checked",done:"Done",cancelled:"Cancelled"};
 function findTask(id){ for(const p of (board&&board.products)||[]) for(const pr of p.projects||[]) for(const t of pr.tasks||[]) if(t.id===id) return {t,pr,p}; return null; }
+document.addEventListener("click", async e=>{ const r=e.target.closest("[data-ref]"); if(!r) return; e.preventDefault();
+  const id=+r.dataset.ref; if(findTask(id)) return openTask(id);     // ponytail: task numbers win over message numbers
+  const it=await jget("api/item?id="+id); if(!it||!it.id) return toast(`Nothing numbered #${id}`);
+  const dlg=$("taskdlg"); dlg.innerHTML=`<div class="dlgh"><div><h3 id="taskdlgh">#${it.id} message</h3>
+      <div class="faint" style="font-size:13px;margin-top:3px">${esc(it.frm)} → ${esc(it.too)} · ${ago(it.created)}</div></div>
+      <button class="btn sm" data-close aria-label="Close">Close</button></div>
+    <div class="dlgb"><div class="note" style="white-space:pre-wrap">${rich(it.text)}</div>
+      ${it.reply?`<h3 style="margin-top:14px">Reply</h3><div class="note" style="white-space:pre-wrap">${rich(it.reply)}</div>`:""}</div>`;
+  dlg.querySelector("[data-close]").onclick=()=>dlg.close(); dlg.onclick=ev=>{ if(ev.target===dlg) dlg.close(); };
+  if(!dlg.open) dlg.showModal(); });
 function openTask(id){
   const f=findTask(id); if(!f) return; const {t,pr,p}=f, dlg=$("taskdlg");
   const ag=n=>(board.agents||[]).find(a=>a.name===n);
@@ -534,7 +562,7 @@ function openTask(id){
       ${kv("Done when",esc(t.done_def||""))}
       ${blk?kv("Waits on",blk):""}
       ${t.progress_note?kv("Latest note",`<div class="note">${esc(t.progress_note)}</div>`):""}
-      ${t.evidence?kv("Evidence",`<a href="${esc(t.evidence)}" target="_blank" rel="noopener">${esc(t.evidence)}</a>`):""}
+      ${t.evidence?kv("Evidence",lnk(t.evidence)):""}
       ${["working","verifying"].includes(t.status)?kv("Stuck?",`<button class="btn sm" data-release="${t.id}">Release</button>
         <div class="faint" style="font-size:12px;margin-top:5px">You don't need this normally — tasks move on their own. Release takes it back from ${esc(t.owner||"its holder")} so the next free agent can pick it up.</div>`):""}
     </div>`;
@@ -811,7 +839,7 @@ async function renderActivity(){
   // tasks
   const T=d.tasks, tk=t=>`<div class="row tk" data-open="${esc(t.owner||"")}"><div class="tt">#${t.id} ${esc(t.title)}</div>
     <div class="tm">${esc(t.product||"")} · ${esc(t.role||"")}${t.owner?" · "+esc(t.owner):""}${t.progress_note?` — ${esc(t.progress_note)}`:""}</div>
-    ${t.evidence&&t.status==="done"?`<a href="${esc(t.evidence)}" target="_blank" rel="noopener">evidence</a>`:""}</div>`;
+    ${t.evidence&&t.status==="done"?lnk(t.evidence,"evidence"):""}</div>`;
   $("acttasks").innerHTML=`<div class="hourh">Finished in this window · ${T.finished.length}</div>${T.finished.map(tk).join("")||`<div class="row muted">None yet.</div>`}
     <div class="hourh">In progress · ${T.in_progress.length}</div>${T.in_progress.map(tk).join("")||`<div class="row muted">Nothing in progress.</div>`}
     <div class="hourh">Waiting for someone · ${T.waiting}</div>`;
