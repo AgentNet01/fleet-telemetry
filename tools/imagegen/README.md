@@ -42,3 +42,13 @@ checkpoint; gated checkpoints need `huggingface-cli login`).
 
 See `comparison-250/` — 3 real listings' Muse-made images side by side with
 local generations from the same briefs, plus the verdict.
+
+## GPU fix (task #286, 2026-10-14)
+
+The hub was generating on CPU (~254 s for a 512px/25-step image) because its
+torch was the CPU-only wheel. Two reinstall attempts failed: PyPI's torch
+is CPU-only, so reinstalling from PyPI just reinstalled the CPU wheel.
+`--cuda-torch` now reinstalls from PyTorch's CUDA index
+(`--index-url https://download.pytorch.org/whl/cu126`), which hosts the
+CUDA wheel for the hub's Python 3.13. Result (job 1791984024624):
+**device=cuda, 512px/25 steps in 4.3 s** — ~59x faster than CPU.
