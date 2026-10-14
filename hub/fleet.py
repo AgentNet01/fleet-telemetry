@@ -15,11 +15,12 @@
     fleet task done <id> <link>      finish a task; the link is the evidence (commit, file, URL)
     fleet task verify <id> pass      approve a task you were asked to verify
     fleet task verify <id> fail "<reason>"   send it back to its holder with the reason
-    fleet task wait <id> <who> "<what you need>"   waiting on jack, darragh, an agent, or outside: the task
+    fleet task wait <id> <who> "<what you need>"   waiting on operator, an agent, or outside: the task
                                      is parked for you and you take other work meanwhile
     fleet task resume <id>           the wait is over: the task comes back to you
-    fleet task jack <id> "<what to do, why, link>"   put a step only Jack/Darragh can do on their list (one per
-                                     step); the task keeps going. Required before done on tasks that are work for Jack.
+    fleet task operator <id> "<what to do, why, link>"   anything only an operator (Jack or Darragh) can do — an
+                                     account, ID/SSN/tax, a payment, a signature, an approval — onto their list, one
+                                     step each, as soon as you find it; the task keeps going
     fleet task release <id>          put a task back up for grabs (CEO / the product's PM only)
     fleet suggest "<text>"           suggest a change to your PM and the CEO
 
@@ -253,11 +254,12 @@ def main(args):
               f"{' · held by ' + t['owner'] if t.get('owner') else ''}"
               f"{' · checked by ' + t['verified_by'] if t.get('verified_by') else ''}\n"
               f"done when: {t.get('done_def') or '-'}\nresult: {t.get('evidence') or '(none yet)'}\n"
-              f"latest note: {t.get('progress_note') or '-'}")
-    elif cmd == "task" and len(args) >= 3 and args[1] in ("note", "done", "verify", "release", "wait", "resume", "jack"):
+              f"latest note: {t.get('progress_note') or '-'}"
+              + "".join(f"\non the operators' list{' (done)' if o['done'] else ''}: {o['text']}" for o in t.get("operator", [])))
+    elif cmd == "task" and len(args) >= 3 and args[1] in ("note", "done", "verify", "release", "wait", "resume", "operator", "jack"):
         verb, tid = args[1], int(args[2])
         body = {"task": tid}
-        if verb in ("note", "jack") and len(args) == 4:
+        if verb in ("note", "operator", "jack") and len(args) == 4:
             body["text"] = args[3]
         elif verb == "done" and len(args) == 4:
             body["link"] = args[3]
@@ -267,12 +269,13 @@ def main(args):
             body.update(ok=args[3] == "pass", reason=" ".join(args[4:]))
         elif verb not in ("release", "resume"):
             print(__doc__); return 2
-        call("POST", "/api/task/" + verb, body)
+        call("POST", "/api/task/" + ("operator" if verb == "jack" else verb), body)
         print({"note": f"Noted on #{tid}.", "done": f"#{tid} is done and goes to verification.",
                "verify": f"Verification of #{tid} recorded.", "release": f"#{tid} released.",
                "wait": f"#{tid} is parked for you; take other work. `fleet task resume {tid}` when it's sorted.",
                "resume": f"#{tid} resumed; it comes back to its holder.",
-               "jack": f"On Jack's list, linked to #{tid}. Keep working; his reply comes to you."}[verb])
+               "operator": f"On the operators' list, linked to #{tid}. Keep working; a reply comes to you.",
+               "jack": f"On the operators' list, linked to #{tid}. Keep working; a reply comes to you."}[verb])
     elif cmd in ("portfolio", "changes", "product", "project", "pm", "place", "seat", "role", "park", "wake", "grant", "powers", "team") \
             or args[:2] in (["task", "add"], ["task", "set"], ["task", "remove"]):
         import shlex

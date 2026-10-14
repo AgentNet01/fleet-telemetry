@@ -23,7 +23,7 @@ def steps():
         h.task_done("Neo", tid, "https://x/checklist.md")
         raise AssertionError("steps: a task for Jack finished with nothing on his list")
     except ValueError as e:
-        assert "fleet task jack" in str(e), e
+        assert "fleet task operator" in str(e), e
     h.task_for_jack("Neo", tid, "Open a Printful account at https://printful.com — needed before any order ships")
     need = [n for n in h.needs_jack() if n["task"] == tid]
     assert need and "Printful" in need[0]["text"] and need[0]["agent"] == "Neo", h.needs_jack()
@@ -31,6 +31,9 @@ def steps():
     h.task_done("Neo", tid, "https://x/checklist.md")
     assert h.task(tid)["status"] == "verifying"
     assert [n for n in h.needs_jack() if n["task"] == tid], "steps: Jack's step stays on his list after done"
+
+    assert any("fleet task operator" in s for s in muse.sent.get("Neo", [])), \
+        "steps: handed a task, the agent is told to file operator-only steps as it finds them"
 
     plain = h.add_task(pj, "Packaging research", "optimizer", "doc", owner="Neo")
     h.tick(); h.tick()
@@ -40,6 +43,11 @@ def steps():
         raise AssertionError("steps: only the holder of a working task files steps for it")
     except PermissionError:
         pass
+    h.add_agent("Bo", "muse")
+    for _ in range(4):
+        h.tick()
+    asked = [s for s in muse.sent.get("Bo", []) + muse.sent.get("Neo", []) if "verify task" in s]
+    assert asked and all("operator" in s for s in asked), f"steps: verifiers check nothing operator-only was left off: {asked}"
     print("steps OK")
 
 
@@ -111,6 +119,11 @@ def show():
     out = subprocess.run([sys.executable, "fleet.py", "task", "show", str(copy)], env=env, capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert "https://muse.ai/files/1/2/x/copy-188.md" in out.stdout and "Pericles" in out.stdout, out.stdout
+    ops = h.add_task(pj, "What an operator must set up", "marketer", "steps on the operator list", owner="Pericles")
+    h.tick(); h.tick()
+    h.task_for_jack("Pericles", ops, "Open a Printful account at https://printful.com")
+    out = subprocess.run([sys.executable, "fleet.py", "task", "show", str(ops)], env=env, capture_output=True, text=True)
+    assert "Open a Printful account" in out.stdout, "show: what's on the operator list for the task: " + out.stdout
     print("show OK")
 
 

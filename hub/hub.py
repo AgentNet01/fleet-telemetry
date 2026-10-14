@@ -357,12 +357,17 @@ class Hub:
             t = it["ref"]
             return (f"{head}[fleet · task #{t}]\n{body}\n"
                     f"— It's yours until it's done. Post progress with `fleet task note {t} \"...\"`; when it's "
-                    f"finished run `fleet task done {t} <link>` with a link to the evidence (commit, file or URL).")
+                    f"finished run `fleet task done {t} <link>` with a link to the evidence (commit, file or URL). "
+                    f"Anything only an operator (Jack or Darragh) can do — an account, ID/SSN/tax details, a payment, a "
+                    f"signature, an approval — put on their list the moment you find it: "
+                    f"`fleet task operator {t} \"<what to do, why, link>\"`.")
         if kind == "verify":
             t = it["ref"]
             return (f"{head}[fleet · verify task #{t}]\n{body}\n"
                     f"— Check it yourself against the definition of done, then run `fleet task verify {t} pass` "
-                    f"or `fleet task verify {t} fail \"<reason>\"`.")
+                    f"or `fleet task verify {t} fail \"<reason>\"`. Also fail it if it needs anything only an operator "
+                    f"(Jack or Darragh) can do — an account, ID/SSN/tax details, a payment, a signature, an approval — "
+                    f"that isn't on their list yet (`fleet task show {t}` shows what is).")
         if kind == "plan":
             return f"{head}[fleet #{iid} · planner]\n{body}"
         if kind == "question":
@@ -769,17 +774,23 @@ class Hub:
                             (f"From task #{tid} “{t['title']}” ({agent}): {text.strip()}", self.clock(), tid, agent))
             self._task_event(tid, agent, "for jack", text)
 
+    def operator_items(self, tid):
+        with self.lock:
+            return [{"text": r["text"], "done": bool(r["done"])}
+                    for r in self.db.execute("select text, done from needs_jack where task=? order by id", (tid,))]
+
     def task_done(self, agent, tid, link):
         with self.lock:
             t = self._task_row(tid)
             if t["owner"] != agent or t["status"] != "working":
                 raise PermissionError(f"#{tid} isn't a task you're working on")
-            # ponytail: a name match, not intent; a task that names the board but needs nothing files one "nothing to do" step
-            if re.search(r"\b(jack|darragh)\b", f"{t['title']} {t['done_def']}", re.I) and \
+            # ponytail: a name match, not intent (verifiers catch the rest); a task that names the operators but needs
+            # nothing from them files one "nothing to do" step
+            if re.search(r"\b(jack|darragh|operators?)\b", f"{t['title']} {t['done_def']}", re.I) and \
                     not self.db.execute("select 1 from needs_jack where task=?", (tid,)).fetchone():
-                raise ValueError(f"#{tid} is work for Jack, and nothing from it is on his list. Put each step he must do "
-                                 f"there first, one per step, in plain words with the link he needs:\n"
-                                 f"  fleet task jack {tid} \"<what to do, why, link>\"\nthen run task done again.")
+                raise ValueError(f"#{tid} is work for an operator (Jack or Darragh), and nothing from it is on their list. "
+                                 f"Put each step they must do there first, one per step, in plain words with the link:\n"
+                                 f"  fleet task operator {tid} \"<what to do, why, link>\"\nthen run task done again.")
         if not self.evidence_ok(link):                                  # network check, outside the lock
             raise ValueError(f"the evidence link doesn't open: {link}")
         with self.lock:
@@ -820,9 +831,9 @@ class Hub:
             if t["owner"] != agent or t["status"] != "working":
                 raise PermissionError(f"#{tid} isn't a task you're working on")
             who = (who or "outside").strip()
-            board = who.lower() in ("jack", "darragh", "board")
+            board = who.lower() in ("jack", "darragh", "board", "operator")
             if not board and who != "outside" and not self.db.execute("select 1 from agents where name=?", (who,)).fetchone():
-                raise ValueError(f"no agent {who}: wait on jack, darragh, an agent's name, or outside")
+                raise ValueError(f"no agent {who}: wait on operator (Jack or Darragh), an agent's name, or outside")
             note = f"waiting on {who}: {what}"
             self._set("tasks", tid, waiting_on=who, waiting_for=what, progress_note=note, touched=self.clock(),
                       status="blocked", owner=None, pin=agent)          # freed now, not at the next tick
@@ -918,7 +929,7 @@ class Hub:
                     lines.append(f"#{t['id']} “{t['title']}” — {prod}, as {t['role']}: progress with "
                                  f"`fleet task note {t['id']} \"...\"`, finished with `fleet task done {t['id']} <link>`, "
                                  f"or if you're waiting on someone, park it and take other work: "
-                                 f"`fleet task wait {t['id']} <jack|darragh|agent|outside> \"<what you need>\"`")
+                                 f"`fleet task wait {t['id']} <operator|agent|outside> \"<what you need>\"`")
             self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('nudge','hub',?,?,0,'queued',?)",
                             (a["name"], NUDGES[idx] + f"\nNo progress posted for {int((now - last_progress) // 3600)}h.\n"
                              + "\n".join(lines), now))
@@ -1206,13 +1217,14 @@ class Hub:
                 "product context per task. Pick your own team with fleet team me <role|generalist> (roles: "
                 f"{', '.join(self.roles())}).\n"
                 "Everyone: fleet status, fleet inbox, fleet portfolio, fleet changes, fleet ask, fleet reply, "
-                "fleet task note|done on tasks you hold, fleet task wait <id> <jack|darragh|agent|outside> \"<what>\" "
+                "fleet task note|done on tasks you hold, fleet task wait <id> <operator|agent|outside> \"<what>\" "
                 "when you're waiting on someone (you're freed for other work; fleet task resume <id> when it's sorted), "
                 "fleet task verify when asked, fleet suggest \"<idea>\". "
                 "fleet task show <id> gives any task's status, holder and result link — look it up there, don't ask for it. "
-                "A step only Jack or Darragh can do (an account, a payment, an approval) goes on their list with "
-                "fleet task jack <id> \"<what to do, why, and the link>\" — one plain step each, written for someone who "
-                "hasn't read your work; they can reply to you from it. Tools (marked tool in fleet portfolio) are shared "
+                "Anything only an operator (Jack or Darragh) can do — an account, ID/SSN/tax details, a payment, a "
+                "signature, an approval — goes on their list the moment you find it: fleet task operator <id> \"<what to do, "
+                "why, and the link>\" — one plain step each, written for someone who hasn't read your work; they can reply "
+                "to you from it. To stop until they act, use fleet task wait <id> operator \"<what>\". Tools (marked tool in fleet portfolio) are shared "
                 "by every product: use them, and put tool work in the tool, not in your product.")
         if self._ceo_level(who):
             ceo = (self.db.execute("select agent from seats where role='ceo'").fetchone() or {"agent": None})["agent"]
@@ -2235,7 +2247,8 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         self.wfile.write(body)
                 elif u.path == "/api/task":                 # any task's state and result link, so agents look it up instead of asking
                     name = self._agent()
-                    name and self._json(200, hub.task(int(q.get("id", 0))) or {})
+                    t = name and hub.task(int(q.get("id", 0)))
+                    name and self._json(200, t and {**t, "operator": hub.operator_items(t["id"])} or {})
                 elif u.path == "/api/status":
                     name = self._agent()
                     name and self._json(200, hub.status(name))
@@ -2361,7 +2374,7 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                             hub.task_wait(name, tid, b.get("who"), b.get("what", ""))
                         elif verb == "resume":
                             hub.task_resume(name, tid)
-                        elif verb == "jack":
+                        elif verb in ("operator", "jack"):
                             hub.task_for_jack(name, tid, b["text"])
                         else:
                             raise ValueError(f"unknown task action {verb}")
