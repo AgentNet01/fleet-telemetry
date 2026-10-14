@@ -265,7 +265,7 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     </div>
     <div id="njwrap">
       <h2>Needs an operator <span id="njn"></span></h2>
-      <div class="hint">Only Jack or Darragh can do these — accounts, ID and tax details, payments, approvals. Reply, or mark done when handled.</div>
+      <div class="hint">Agents are blocked on these until Jack or Darragh act — ID and tax details, phone numbers, payments, accounts in your name. Reply, or mark done when handled.</div>
       <div class="card nj" id="nj"></div>
     </div>
     <div class="office" id="office">
@@ -312,6 +312,9 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <h2 style="margin-top:22px">Tools</h2>
     <div class="hint">Shared by every product — fulfillment, image generation and the like. Not sold; any product's work can use them.</div>
     <div id="tools"></div>
+    <h2 style="margin-top:22px">On the hub machine</h2>
+    <div class="hint">Code agents wrote (tools/&lt;name&gt; in the repo), run on the Alienware as a locked-down account: one job at a time, stopped if the disk or memory run low.</div>
+    <div class="card" id="hubjobs"></div>
   </section>
   <section id="product" hidden>
     <button class="back" data-back="portfolio">← Portfolio</button>
@@ -459,7 +462,7 @@ async function load(){
   document.querySelectorAll(".agent").forEach(el=>el.onclick=()=>showAgent(el.dataset.agent));
   if(typeof Office!=="undefined") Office.update(b);
 
-  renderPortfolio(b.products||[]);
+  renderPortfolio(b.products||[]); renderMachine(b);
   if(openProduct) renderProduct(openProduct, true);
   if(tab==="suggestions") renderSuggestions();
   jget("api/suggestions").then(d=>{ const n=((d&&d.suggestions)||[]).filter(x=>x.status==="open").length;
@@ -477,6 +480,17 @@ function renderPortfolio(all){
   $("products").innerHTML = products.length ? products.map(card).join("")
     : `<div class="card"><div class="row muted">No products yet — add one above.</div></div>`;
   document.querySelectorAll("[data-product]").forEach(el=>el.onclick=()=>renderProduct(+el.dataset.product));
+}
+function renderMachine(b){
+  const ts=b.tools||[], js=b.jobs||[];
+  const COL={done:"var(--ok)",failed:"var(--bad)",stopped:"var(--warn)",refused:"var(--warn)"};
+  $("hubjobs").innerHTML = (ts.length ? ts.map(t=>`<div class="row"><b>${esc(t.name)}</b>&nbsp;<span class="faint">${esc(t.about||"")}</span></div>`).join("")
+      : `<div class="row muted">No tools yet. An agent adds one as tools/&lt;name&gt;/run.py in the repo.</div>`)
+    + (js.length ? `<div class="row faint" style="font-size:12px">Recent jobs</div>` + js.map(j=>`<div class="row" style="display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline">
+        <b>${esc(j.tool)}</b>&nbsp;<span class="faint">${esc((j.args||[]).join(" ").slice(0,60))}</span>
+        <span style="margin-left:auto">${esc(j.by)} · <span class="faint">#${j.id}</span> · <span style="color:${COL[j.status]||"inherit"}">${esc(j.status)}</span>
+        ${j.files?` · ${j.files} file${j.files>1?"s":""}`:""}${j.started?` · ${ago(j.ended||j.started)}`:""}</span>
+        ${j.note?`<div class="faint" style="flex-basis:100%;font-size:12px">${esc(j.note)}</div>`:""}</div>`).join("") : "");
 }
 function card(p){
     const nt=(p.projects||[]).reduce((n,pr)=>n+(pr.tasks||[]).length,0);

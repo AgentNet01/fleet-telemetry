@@ -179,6 +179,11 @@ MIGRATIONS = [
 WORKERS = ("muse", "poll")            # kinds that take tasks; 'slack' (dot) and 'jack' (the board) don't
 PUSH = ("muse", "slack")              # kinds the hub sends to; 'poll' agents fetch with `fleet inbox`
 ONE_SHOT = ("note", "task", "verify", "nudge", "plan")
+# Jack, Oct 13: "I don't want the agents coming to us unless they're literally blocked"
+OPERATOR_ONLY = ("Go to an operator (Jack or Darragh) only when you're truly blocked on something that needs a real person: "
+                 "their ID, SSN or tax details, a phone number or 2FA code, a payment or purchase, or an account only they "
+                 "can open. Everything else — choices, sign-offs, which option to take — decide yourself or with your PM; "
+                 "don't send it to them.")
 NUDGE_AFTER = 3600                     # a task holder silent this long is reminded, then its PM an hour later
 IDLE_AFTER = 12 * 3600
 STANDIN_AFTER = 3 * 3600              # a CEO silent this long is stood in for by seat ceo_backup
@@ -358,16 +363,16 @@ class Hub:
             return (f"{head}[fleet · task #{t}]\n{body}\n"
                     f"— It's yours until it's done. Post progress with `fleet task note {t} \"...\"`; when it's "
                     f"finished run `fleet task done {t} <link>` with a link to the evidence (commit, file or URL). "
-                    f"Anything only an operator (Jack or Darragh) can do — an account, ID/SSN/tax details, a payment, a "
-                    f"signature, an approval — put on their list the moment you find it: "
+                    f"{OPERATOR_ONLY} When you hit one, put it on their list at once: "
                     f"`fleet task operator {t} \"<what to do, why, link>\"`.")
         if kind == "verify":
             t = it["ref"]
             return (f"{head}[fleet · verify task #{t}]\n{body}\n"
                     f"— Check it yourself against the definition of done, then run `fleet task verify {t} pass` "
-                    f"or `fleet task verify {t} fail \"<reason>\"`. Also fail it if it needs anything only an operator "
-                    f"(Jack or Darragh) can do — an account, ID/SSN/tax details, a payment, a signature, an approval — "
-                    f"that isn't on their list yet (`fleet task show {t}` shows what is).")
+                    f"or `fleet task verify {t} fail \"<reason>\"`. Also fail it if it's blocked on something only an "
+                    f"operator can provide (ID, SSN or tax details, a phone number or 2FA, a payment, an account only they "
+                    f"can open) that isn't on their list yet, or if it put a choice on their list that an agent should have "
+                    f"made (`fleet task show {t}` shows the list).")
         if kind == "plan":
             return f"{head}[fleet #{iid} · planner]\n{body}"
         if kind == "question":
@@ -1221,8 +1226,7 @@ class Hub:
                 "when you're waiting on someone (you're freed for other work; fleet task resume <id> when it's sorted), "
                 "fleet task verify when asked, fleet suggest \"<idea>\". "
                 "fleet task show <id> gives any task's status, holder and result link — look it up there, don't ask for it. "
-                "Anything only an operator (Jack or Darragh) can do — an account, ID/SSN/tax details, a payment, a "
-                "signature, an approval — goes on their list the moment you find it: fleet task operator <id> \"<what to do, "
+                f"{OPERATOR_ONLY} When you hit one: fleet task operator <id> \"<what to do, "
                 "why, and the link>\" — one plain step each, written for someone who hasn't read your work; they can reply "
                 "to you from it. To stop until they act, use fleet task wait <id> operator \"<what>\". Tools (marked tool in fleet portfolio) are shared "
                 "by every product: use them, and put tool work in the tool, not in your product.")
@@ -1888,9 +1892,10 @@ class Hub:
 
     def tool_job(self, jid):
         d = os.path.join(self.jobs_dir or "", str(int(jid)))
-        if os.path.isfile(os.path.join(self.jobs_dir or "", "queue", f"{int(jid)}.json")):
-            ahead = len([f for f in os.listdir(os.path.join(self.jobs_dir, "queue")) if f < f"{int(jid)}.json"])
-            return {"id": int(jid), "status": "queued", "ahead": ahead}
+        qf = os.path.join(self.jobs_dir or "", "queue", f"{int(jid)}.json")
+        if os.path.isfile(qf):
+            ahead = len([f for f in os.listdir(os.path.dirname(qf)) if f < os.path.basename(qf)])
+            return {**json.load(open(qf)), "status": "queued", "ahead": ahead}
         if not os.path.isfile(os.path.join(d, "status.json")):
             return None
         out = {**json.load(open(os.path.join(d, "job.json"))), **json.load(open(os.path.join(d, "status.json")))}
@@ -1903,6 +1908,19 @@ class Hub:
         root = os.path.join(d, "out")
         out["files"] = [{"path": os.path.relpath(os.path.join(w, n), root).replace(os.sep, "/"), "size": os.path.getsize(os.path.join(w, n))}
                         for w, _, ns in os.walk(root) for n in ns][:200]
+        return out
+
+    def recent_jobs(self, n=12):
+        """The newest jobs, queued or not, for the dashboard."""
+        q = os.path.join(self.jobs_dir or "", "queue")
+        if not self.jobs_dir or not os.path.isdir(q):
+            return []
+        ids = [int(f) for f in os.listdir(self.jobs_dir) if f.isdigit()] + \
+              [int(f[:-5]) for f in os.listdir(q) if f.endswith(".json") and f[:-5].isdigit()]
+        out = []
+        for j in filter(None, map(self.tool_job, sorted(set(ids), reverse=True)[:n])):
+            out.append({**{k: j.get(k) for k in ("id", "tool", "by", "args", "status", "started", "ended", "note")},
+                        "files": len(j.get("files", []))})
         return out
 
     def tool_file(self, jid, rel):
@@ -2018,7 +2036,7 @@ class Hub:
                             "task": next(({"id": t["id"], "title": t["title"], "status": t["status"],
                                            "product": self._task_product(t["id"])} for t in self._open_tasks(a["name"])), None)})
             return {"now": self.clock(), "agents": out, "needs_jack": self.needs_jack(), "changes": self.changes(30),
-                    "approvals": self.approvals(),
+                    "approvals": self.approvals(), "tools": self.tools(), "jobs": self.recent_jobs(),
                     "revenue": self.revenue(), "products": self.portfolio()}
 
     def org(self):

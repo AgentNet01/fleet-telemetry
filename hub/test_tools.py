@@ -3,6 +3,7 @@
     python3 test_tools.py run      # an agent runs a tool: log and files come back, and it's told once when it ends
     python3 test_tools.py guards   # low disk refuses; running past the limit or the disk filling stops it; no escapes
     python3 test_tools.py cli      # fleet tools / tool run / tool get, end to end over HTTP
+    python3 test_tools.py ui       # Jack sees the tools and what ran on the machine, who ran it, and how it ended
 """
 import os
 import subprocess
@@ -111,4 +112,24 @@ def cli():
     print("cli OK")
 
 
-{"run": run, "guards": guards, "cli": cli}[sys.argv[1]]()
+def ui():
+    from playwright.sync_api import expect, sync_playwright
+    h, muse, r = world()
+    done = h.tool_run("Ada", "hello", ["21st"]); r.run_once()
+    waiting = h.tool_run("Ada", "slow")
+    srv = hub.serve(h, "127.0.0.1", 0, "pw")
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    with sync_playwright() as pw:
+        page = pw.chromium.launch().new_page(http_credentials={"username": "jack", "password": "pw"})
+        page.goto(f"http://127.0.0.1:{srv.server_address[1]}/")
+        page.get_by_role("tab", name="Portfolio").click()
+        machine = page.locator("#hubjobs")
+        expect(machine).to_contain_text("Makes a birthday card")
+        expect(machine.locator(".row", has_text=f"#{done}")).to_contain_text("hello")
+        expect(machine.locator(".row", has_text=f"#{done}")).to_contain_text("Ada")
+        expect(machine.locator(".row", has_text=f"#{done}")).to_contain_text("done")
+        expect(machine.locator(".row", has_text=f"#{waiting}")).to_contain_text("queued")
+    print("ui OK")
+
+
+{"run": run, "guards": guards, "cli": cli, "ui": ui}[sys.argv[1]]()

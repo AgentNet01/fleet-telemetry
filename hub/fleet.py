@@ -18,9 +18,9 @@
     fleet task wait <id> <who> "<what you need>"   waiting on operator, an agent, or outside: the task
                                      is parked for you and you take other work meanwhile
     fleet task resume <id>           the wait is over: the task comes back to you
-    fleet task operator <id> "<what to do, why, link>"   anything only an operator (Jack or Darragh) can do — an
-                                     account, ID/SSN/tax, a payment, a signature, an approval — onto their list, one
-                                     step each, as soon as you find it; the task keeps going
+    fleet task operator <id> "<what to do, why, link>"   only when you're blocked on a real person (Jack or
+                                     Darragh): their ID, SSN/tax, a phone number or 2FA, a payment, an account only
+                                     they can open. One step each; the task keeps going. Choices you decide yourself.
     fleet task release <id>          put a task back up for grabs (CEO / the product's PM only)
     fleet suggest "<text>"           suggest a change to your PM and the CEO
 

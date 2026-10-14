@@ -32,6 +32,9 @@ def steps():
     assert h.task(tid)["status"] == "verifying"
     assert [n for n in h.needs_jack() if n["task"] == tid], "steps: Jack's step stays on his list after done"
 
+    handout = [s for s in muse.sent.get("Neo", []) if "fleet task operator" in s]
+    assert handout and "phone number" in handout[0] and "decide yourself" in handout[0] and "approval" not in handout[0], \
+        "steps: only real blockers go to the operators; choices stay with the agents"
     assert any("fleet task operator" in s for s in muse.sent.get("Neo", [])), \
         "steps: handed a task, the agent is told to file operator-only steps as it finds them"
 
