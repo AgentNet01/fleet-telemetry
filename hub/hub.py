@@ -187,7 +187,8 @@ ONE_SHOT = ("note", "task", "verify", "nudge", "plan")
 OPERATOR_ONLY = ("Go to an operator (Jack or Darragh) only when you're truly blocked on something that needs a real person: "
                  "their ID, SSN or tax details, a phone number or 2FA code, a payment or purchase, or an account only they "
                  "can open. Everything else — choices, sign-offs, which option to take — decide yourself or with your PM; "
-                 "don't send it to them.")
+                 "don't send it to them. Prices are yours to set; never below cost after maker, shipping and Etsy fees. "
+                 "Facts you can look up, read in a file or ask a maker's support for are yours too.")
 ALLOW = ("allow_always", "allow_today", "allow_session", "allow_once")     # broadest allow Muse offers, first
 NUDGE_AFTER = 3600                     # a task holder silent this long is reminded, then its PM an hour later
 IDLE_AFTER = 12 * 3600
