@@ -166,6 +166,8 @@ def main() -> int:
                     help="Print torch/CUDA/GPU diagnostics and exit (no generation)")
     ap.add_argument("--cuda-torch", action="store_true",
                     help="Replace a CPU-only torch with the CUDA wheel, then generate")
+    ap.add_argument("--sdxl", action="store_true",
+                    help="Use the SDXL pipeline (for SDXL-class models, e.g. Lykon/dreamshaper-xl-1-0)")
     ap.add_argument("--out", default=".", help="Output directory (default: current dir)")
     ap.add_argument("--seed", type=int, default=None, help="Random seed (default: random)")
     ap.add_argument("--steps", type=int, default=25, help="Inference steps (default: 25)")
@@ -176,7 +178,8 @@ def main() -> int:
     args = ap.parse_args()
 
     import torch
-    from diffusers import StableDiffusionPipeline
+    from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
+    Pipeline = StableDiffusionXLPipeline if args.sdxl else StableDiffusionPipeline
 
     print_diagnostics()
     if args.diag:
@@ -189,7 +192,7 @@ def main() -> int:
     print(f"device={device} dtype={dtype} model={args.model}", file=sys.stderr)
 
     try:
-        pipe = StableDiffusionPipeline.from_pretrained(
+        pipe = Pipeline.from_pretrained(
             args.model, dtype=dtype, safety_checker=None)
     except Exception as e:  # fall back to a single-file checkpoint in the same repo
         print(f"diffusers-format load failed ({e}); trying single-file checkpoint", file=sys.stderr)
@@ -198,12 +201,17 @@ def main() -> int:
         ckpts = [f for f in files if f.endswith((".safetensors", ".ckpt")) and "pruned" in f]
         if not ckpts:
             raise RuntimeError(f"no pruned single-file checkpoint found in {args.model}") from e
-        pipe = StableDiffusionPipeline.from_single_file(
+        pipe = Pipeline.from_single_file(
             f"https://huggingface.co/{args.model}/resolve/main/{ckpts[0]}",
             dtype=dtype, safety_checker=None)
     pipe = pipe.to(device)
     if device == "cpu":
         pipe.enable_attention_slicing()
+    if args.sdxl:
+        # SDXL weights (~7 GB fp16) are tight on 8 GB VRAM; slicing keeps
+        # 1024px generation inside memory at a small speed cost.
+        pipe.enable_attention_slicing()
+        pipe.enable_vae_slicing()
 
     seed = args.seed if args.seed is not None else int.from_bytes(os.urandom(4), "big")
     generator = torch.Generator(device=device).manual_seed(seed)
