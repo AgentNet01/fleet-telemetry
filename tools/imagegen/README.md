@@ -10,11 +10,29 @@ only where local output is as good.
 fleet tool run imagegen "<prompt>"
 python3 tools/imagegen/run.py "<prompt>" [--out DIR] [--seed N] [--steps N] [--size N]
 python3 tools/imagegen/run.py --diag          # torch/CUDA/GPU diagnostics, no generation
-fleet tool run imagegen --cuda-torch "<prompt>"  # replace CPU-only torch with CUDA wheel, then generate
+fleet tool run imagegen --cuda-torch "<prompt>"  # force the CUDA-torch repair check
 ```
 
 Writes a PNG, prints its path. First run downloads ~4 GB of weights to the
 Hugging Face cache (`~/.cache/huggingface`).
+
+## GPU (task #333)
+
+The tool uses the hub's RTX 3070 Ti via CUDA automatically. If torch is the
+CPU-only wheel while NVIDIA hardware is present, the tool force-reinstalls
+the CUDA torch wheel from PyPI and re-execs once (no flag needed;
+`--cuda-torch` forces the check, `IMAGEGEN_NO_CUDA_REPAIR=1` disables it).
+CPU-only machines keep using the CPU path. `--diag` prints the
+torch/CUDA/GPU state without generating.
+
+## Output paths (task #333)
+
+Under the hub runner, `--out` is contained to the job's output dir: a
+foreign absolute path (e.g. a Linux path handed to the Windows hub, which
+`os.path.join` used to turn into a stray `C:\home\...` location outside the
+job folder, "losing" the file) now prints a warning and the PNG is written
+to the job dir so it stays retrievable. Direct local runs still honor
+`--out` anywhere.
 
 ## Install (once per machine)
 

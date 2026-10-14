@@ -44,9 +44,11 @@ def ensure_deps():
     Set IMAGEGEN_NO_BOOTSTRAP=1 to disable, or IMAGEGEN_TORCH_INDEX to a
     torch wheel index (e.g. the CPU index) instead of default PyPI.
 
-    `--cuda-torch` (task #286): when the installed torch has no CUDA
-    support (CPU-only wheel), force-reinstall the CUDA torch wheel from
-    default PyPI and re-exec once. No-op when torch already has CUDA.
+    `--cuda-torch` (tasks #286, #333): when the installed torch has no CUDA
+    support (CPU-only wheel) but NVIDIA hardware is present, force-reinstall
+    the CUDA torch wheel from PyTorch's cu126 index and re-exec once. Since
+    #333 this repair is automatic (the flag forces it); no-op when torch
+    already has CUDA or the machine has no NVIDIA GPU.
     """
     missing = [pkg for mod, pkg in DEPS if _missing(mod)]
     if not missing:
@@ -82,27 +84,48 @@ def ensure_deps():
     sys.exit(r.returncode)
 
 
-def ensure_cuda_torch():
-    """`--cuda-torch`: replace a CPU-only torch with the CUDA wheel, once.
+def _nvidia_gpu_present():
+    """True when NVIDIA driver tooling reports at least one GPU.
 
-    The hub's imagegen was running on CPU because its torch was the CPU-only
-    wheel (the bootstrap no-ops when torch is merely *present*). PyPI's
-    torch is CPU-only, so a reinstall from PyPI (plain or explicit index)
-    just reinstalls the CPU wheel — jobs 1791959699900 and 1791976447507
-    proved that. The CUDA wheels live on PyTorch's own index, so the
-    reinstall uses --index-url https://download.pytorch.org/whl/cu126
-    (verified to host torch-2.14.1+cu126-cp313-win_amd64, matching the
-    hub's Python 3.13). Guarded by
-    IMAGEGEN_CUDA_TORCH_DONE so the re-exec below runs the check once.
+    Lets the tool tell "CPU-only machine" (CPU path is correct) apart from
+    "GPU machine with a CPU-only torch wheel" (repair torch automatically).
+    nvidia-smi ships with the NVIDIA driver on both Windows and Linux.
     """
-    if "--cuda-torch" not in sys.argv or os.environ.get("IMAGEGEN_CUDA_TORCH_DONE") == "1":
+    try:
+        r = subprocess.run(["nvidia-smi", "-L"], capture_output=True, timeout=20)
+        return r.returncode == 0 and b"GPU" in r.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def ensure_cuda_torch():
+    """Use the CUDA torch wheel on GPU machines (task #333: automatic).
+
+    The hub's imagegen was silently running on CPU because its torch was the
+    CPU-only wheel (the bootstrap no-ops when torch is merely *present*, and
+    #286's `--cuda-torch` flag only helped when someone remembered to pass
+    it). Now the repair is automatic: when torch has no CUDA build but
+    NVIDIA hardware is present, force-reinstall the CUDA wheel from PyTorch's
+    cu126 index and re-exec once. No-op when torch already has CUDA, and
+    no-op on CPU-only machines (nvidia-smi finds no GPU), where the CPU path
+    is correct. `--cuda-torch` still forces the check;
+    IMAGEGEN_NO_CUDA_REPAIR=1 disables the automatic repair.
+    """
+    if os.environ.get("IMAGEGEN_CUDA_TORCH_DONE") == "1":
         return
-    os.environ["IMAGEGEN_CUDA_TORCH_DONE"] = "1"
     import torch
     if torch.version.cuda is not None:
-        print(f"[imagegen] torch already has CUDA ({torch.version.cuda}); keeping it", file=sys.stderr)
+        return  # CUDA-capable torch already; nothing to do
+    forced = "--cuda-torch" in sys.argv
+    if not forced and os.environ.get("IMAGEGEN_NO_CUDA_REPAIR") == "1":
+        print("[imagegen] CPU-only torch; automatic CUDA repair disabled", file=sys.stderr)
         return
-    print("[imagegen] CPU-only torch detected; force-reinstalling the CUDA torch wheel", file=sys.stderr)
+    if not forced and not _nvidia_gpu_present():
+        print("[imagegen] CPU-only torch on a machine with no NVIDIA GPU; using CPU", file=sys.stderr)
+        return
+    os.environ["IMAGEGEN_CUDA_TORCH_DONE"] = "1"
+    print("[imagegen] NVIDIA GPU present but torch is the CPU-only wheel; "
+          "force-reinstalling the CUDA torch wheel", file=sys.stderr)
     print(f"[imagegen] pip index config: IMAGEGEN_TORCH_INDEX={os.environ.get('IMAGEGEN_TORCH_INDEX')} "
           f"PIP_INDEX_URL={os.environ.get('PIP_INDEX_URL')}", file=sys.stderr)
     for attempt in (False, True):
@@ -168,7 +191,9 @@ def main() -> int:
                     help="Replace a CPU-only torch with the CUDA wheel, then generate")
     ap.add_argument("--sdxl", action="store_true",
                     help="Use the SDXL pipeline (for SDXL-class models, e.g. Lykon/dreamshaper-xl-1-0)")
-    ap.add_argument("--out", default=".", help="Output directory (default: current dir)")
+    ap.add_argument("--out", default=".", help="Output directory (default: current dir). "
+                      "Under the hub runner, paths outside the job's output dir are "
+                      "contained to it so files stay retrievable (task #333)")
     ap.add_argument("--seed", type=int, default=None, help="Random seed (default: random)")
     ap.add_argument("--steps", type=int, default=25, help="Inference steps (default: 25)")
     ap.add_argument("--size", type=int, default=512, help="Square image size in px (default: 512)")
@@ -227,11 +252,32 @@ def main() -> int:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     digest = hashlib.sha256(args.prompt.encode()).hexdigest()[:8]
     name = f"imagegen-{stamp}-{slugify(args.prompt)}-{digest}-seed{seed}.png"
-    out_path = os.path.join(args.out, name)
-    os.makedirs(args.out, exist_ok=True)
+    # Task #333 (backslash bug): a Linux-style --out path handed to the
+    # Windows hub made os.path.join produce a mixed-separator path that
+    # resolved outside the job folder (e.g. C:\home\hatch\...), so the PNG
+    # was "lost" -- the hub only serves files under the job's out dir.
+    # Normalize the path, and under the hub runner (JOB_ID is set by
+    # tools_runner) contain --out to the job's out dir so output files can
+    # never be lost again. Direct local runs keep honoring --out anywhere.
+    out_dir = os.path.abspath(os.path.expanduser(args.out))
+    if os.environ.get("JOB_ID"):
+        job_out = os.path.abspath(os.environ.get("OUT_DIR", "."))
+        # normcase: case-insensitive on Windows, identity on POSIX
+        same = os.path.normcase(out_dir) == os.path.normcase(job_out)
+        inside = os.path.normcase(out_dir).startswith(os.path.normcase(job_out) + os.sep)
+        if not same and not inside:
+            print(f"[imagegen] WARNING: --out {args.out!r} is outside the job's "
+                  f"output dir; writing to {job_out} instead so the file stays "
+                  f"retrievable", file=sys.stderr)
+            out_dir = job_out
+    out_path = os.path.join(out_dir, name)
+    os.makedirs(out_dir, exist_ok=True)
     image.save(out_path)
+    if not os.path.isfile(out_path):
+        raise RuntimeError(f"image was not written to {out_path}")
+    size = os.path.getsize(out_path)
     print(f"wrote {out_path}  seed={seed} steps={args.steps} size={args.size} "
-          f"device={device} secs={elapsed:.1f}")
+          f"device={device} secs={elapsed:.1f} bytes={size}")
     return 0
 
 
