@@ -172,7 +172,11 @@ def ui():
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     with sync_playwright() as pw:
         page = pw.chromium.launch().new_page(http_credentials={"username": "jack", "password": "pw"})
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
         page.goto(f"http://127.0.0.1:{srv.server_address[1]}/")
+        page.wait_for_timeout(1500)
+        assert not errors, f"ui: the page runs without errors (one blanked the office): {errors}"
         page.get_by_role("link", name="1 thing needs you").click()          # Overview points to the page
         expect(page.get_by_role("tab", name="Needs you")).to_have_attribute("aria-selected", "true")
         row = page.locator(".njrow", has_text="is physical work in scope")

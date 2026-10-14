@@ -1503,7 +1503,7 @@ function paintHud() {
   hudEl.innerHTML = `<b>Foundlings HQ</b><span class="o-w">● ${w} working</span><span class="o-i">● ${i} on break</span>`
     + (d ? `<span class="o-d">● ${d} not answering</span>` : "") + (nj ? `<button class="o-nj" type="button">⚑ ${nj} need${nj > 1 ? "" : "s"} you</button>` : "")
     + `<span class="o-ph">${phaseText()}</span>`;
-  const njb = hudEl.querySelector(".o-nj"); if (njb) njb.onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); $((lastBoard.approvals || []).length ? "apwrap" : "njwrap").scrollIntoView({ behavior: "smooth" }); };
+  const njb = hudEl.querySelector(".o-nj"); if (njb) njb.onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); if ((lastBoard.approvals || []).length) $("apwrap").scrollIntoView({ behavior: "smooth" }); else selectTab("needs"); };
   tickEl.innerHTML = events.length ? events.slice(0, 4).map((e, k) => `<div style="opacity:${1 - k * .2}"><time>${stamp(e.at)}</time> ${esc(e.line)}</div>`).join("")
     : `<div class="faint">Moves show up here as they happen.</div>`;
 }
@@ -1566,7 +1566,7 @@ function mount() {
   if (document.fullscreenEnabled) fs.onclick = () => document.fullscreenElement ? document.exitFullscreen() : wrap.requestFullscreen();
   else fs.hidden = true;
   document.addEventListener("fullscreenchange", () => { fs.textContent = document.fullscreenElement ? "✕ Exit full screen" : "⛶ Full screen"; fit(); });
-  addEventListener("resize", fit); new ResizeObserver(fit).observe($("njwrap")); fit();
+  addEventListener("resize", fit); new ResizeObserver(fit).observe($("njlink")); fit();
   // the plain list instead of the office: one or the other, so the page never needs to scroll
   const showList = on => { if (on && document.fullscreenElement) document.exitFullscreen(); wrap.hidden = on; $("roster").hidden = !on; try { localStorage.officeList = on ? "1" : ""; } catch {} fit(); };
   $("olist").onclick = () => showList(true); $("ooffice").onclick = () => showList(false);
