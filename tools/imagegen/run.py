@@ -120,10 +120,17 @@ def ensure_cuda_torch():
 
 def print_diagnostics():
     """One-line torch / CUDA / GPU report for the job log."""
+    import site
     import torch
     print(f"torch={torch.__version__} torch_cuda={torch.version.cuda} "
           f"cuda_available={torch.cuda.is_available()} "
           f"device_count={torch.cuda.device_count()}", file=sys.stderr)
+    # Where torch actually came from: a system-site CPU wheel shadows a
+    # user-site CUDA reinstall (pip --user), so torch.__file__ decides
+    # whether a reinstall can ever take effect.
+    print(f"torch_file={torch.__file__}", file=sys.stderr)
+    print(f"user_site={site.getusersitepackages()}", file=sys.stderr)
+    print(f"sys_path={os.pathsep.join(sys.path)}", file=sys.stderr)
     if torch.cuda.is_available():
         try:
             print(f"gpu0={torch.cuda.get_device_name(0)}", file=sys.stderr)
