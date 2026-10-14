@@ -2061,7 +2061,11 @@ class Hub:
                             "last_work": (lambda w: {"title": w["title"], "at": w["at"]} if w else None)(self.db.execute(
                                 "select title, at from work where agent=? order by at desc limit 1", (a["name"],)).fetchone()),
                             "task": next(({"id": t["id"], "title": t["title"], "status": t["status"],
-                                           "product": self._task_product(t["id"])} for t in self._open_tasks(a["name"])), None)})
+                                           "product": self._task_product(t["id"]),
+                                           # when this agent took it (the office shows how long it's been on it)
+                                           "since": self.db.execute("select max(at) from task_events where task=? and agent=? "
+                                                                    "and what='assigned'", (t["id"], a["name"])).fetchone()[0]
+                                                    or t["touched"]} for t in self._open_tasks(a["name"])), None)})
             return {"now": self.clock(), "agents": out, "needs_jack": self.needs_jack(), "changes": self.changes(30),
                     "approvals": self.approvals(), "tools": self.tools(), "jobs": self.recent_jobs(),
                     "revenue": self.revenue(), "products": self.portfolio()}

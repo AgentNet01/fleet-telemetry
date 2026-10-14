@@ -7,17 +7,20 @@ export const DT = .75, CT = .9375;                          // table tops and th
 const GLASS = "#ffffff", DARK = "#3b414a";
 
 export function buildWorld(sim) {
-  const { X, Y, C, SOLIDS, DESKS, BOOTHS, OBJ, LIGHTS, shade, hash } = sim;
+  const { X, Y, C, SOLIDS, DESKS, BOOTHS, OBJ, LIGHTS, shade, hash, WALL, SY, EX, DOOR, OFFICE, ZONE } = sim;
   const scene = new THREE.Scene(), ticks = [], tick = f => ticks.push(f);
   const st = new Mesher(), gl = new Mesher();              // everything static and solid; everything static and glass
   const add = (o, x = 0, y = 0, z = 0, parent = scene) => (parent.add(at(o, x, y, z)), o);
   const glowBox = (w, d, h, c) => piece(m => m.box(0, 0, 0, w, d, h, "#fff"), MAT.glow(c), false);
+  // a room the 2D plan moved (office.js shiftTo): the same builders, offset, so its numbers stay as they were
+  const shifted = (ox, oy) => ({ st: { box: (x, y, ...r) => st.box(x + ox, y + oy, ...r) }, gl: { box: (x, y, ...r) => gl.box(x + ox, y + oy, ...r) },
+    add: (o, x = 0, y = 0, z = 0, parent = scene) => add(o, x + ox, y + oy, z, parent), pool: (x, y, ...r) => pool(x + ox, y + oy, ...r) });
 
   // ── light: a sun that casts, a sky that fills; at night the room's own lamps take over
   const hemi = new THREE.HemisphereLight(0xffffff, 0xc9c2b6, 1.4), sun = new THREE.DirectionalLight(0xfff3df, 2.5);
-  sun.position.set(10.5 - 15, 24, 5.75 + 10.5); sun.target.position.set(10.5, 0, 5.75); sun.castShadow = true;
+  sun.position.set(X / 2 - 15, 24, Y / 2 + 10.5); sun.target.position.set(X / 2, 0, Y / 2); sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -.0004; sun.shadow.normalBias = .03;
-  Object.assign(sun.shadow.camera, { left: -17, right: 17, top: 13, bottom: -13, near: 1, far: 70 });
+  Object.assign(sun.shadow.camera, { left: -22, right: 22, top: 17, bottom: -17, near: 1, far: 80 });
   scene.add(hemi, sun, sun.target);
   const lamps = LIGHTS.filter(l => l.kind !== "desk").map(l => { const p = new THREE.PointLight(`rgb(${l.col})`, 0, 7.5, 1.5);   // desk lamps glow instead: every real light is paid for on every pixel
     scene.add(at(p, l.x, l.y, l.kind === "pendant" ? 2.2 : l.z)); return { l, p }; });
@@ -27,7 +30,7 @@ export function buildWorld(sim) {
     m.rotation.x = -Math.PI / 2; return add(m, x, y, z); };                                       // a soft pool of light lying on a surface
 
   // ── floors, by room (the same zones the 2D office paints)
-  const zone = (x, y) => x >= 14 ? "deck" : y < 5.6 ? (x < 9.6 ? "carpet" : y < 4.6 ? "board" : "review") : x < 5.1 ? "tile" : x < 9.6 ? "plank" : "review";
+  const zone = ZONE;
   const tone = { carpet: [C.carpet, C.carpet2], board: [C.board, C.board2], tile: [C.tile, C.tile2], review: [C.review, C.review2] };
   for (let y = 0; y < Y - .01; y += .5) for (let x = 0; x < X - .01; x += .5) {
     const z = zone(x + .25, y + .25), i = Math.round(x * 2), j = Math.round(y * 2);
@@ -42,11 +45,12 @@ export function buildWorld(sim) {
       b += len;
     }
   };
-  boards(14, X, 0, Y, true, C.deck); boards(5, 9.5, 5.5, Y, false, C.plank);
+  boards(WALL, X, 0, Y, true, C.deck); boards(5, 9.5, 5.5 + SY, Y, false, C.plank); boards(OFFICE.x, WALL, 0, OFFICE.end, false, C.plank);
   st.box(0, 0, -.32, X, Y, .32, C.slab, { faces: "EWSND" });                                        // the floor slab's edge
-  st.box(-.25, -.25, -.32, 14.25, .25, .32, C.slab); st.box(-.25, 0, -.32, .25, Y, .32, C.slab);
-  st.box(6.45, 7.3, 0, 2.3, 2.45, .02, C.rugEdge); st.box(6.6, 7.45, 0, 2.0, 2.15, .03, C.rug);      // rugs
-  for (let k = 0; k < 3; k++) st.box(6.9, 7.75 + k * .4, 0, 1.4, .1, .035, "#dcae8e");
+  st.box(-.25, -.25, -.32, WALL + .25, .25, .32, C.slab); st.box(-.25, 0, -.32, .25, Y, .32, C.slab);
+  st.box(6.45, 7.3 + SY, 0, 2.3, 2.45, .02, C.rugEdge); st.box(6.6, 7.45 + SY, 0, 2.0, 2.15, .03, C.rug);      // rugs
+  for (let k = 0; k < 3; k++) st.box(6.9, 7.75 + SY + k * .4, 0, 1.4, .1, .035, "#dcae8e");
+  for (const oy of [0, OFFICE.split]) { st.box(15.6, oy + .6, 0, 2.9, 2.4, .02, C.rugEdge); st.box(15.75, oy + .75, 0, 2.6, 2.1, .03, oy ? "#cfd8e3" : "#e3d5c7"); }
   st.box(9.85, 1.0, 0, 3.7, 2.15, .02, "#d5cde6"); st.box(10.0, 1.15, 0, 3.4, 1.85, .025, "#ddd6ec");
   for (const b of BOOTHS) st.box(12.8, b.y, 0, 1.05, 1.1, .02, "#cfd5dc");
 
@@ -75,13 +79,14 @@ export function buildWorld(sim) {
     B(m, a0, a1, 0, .1, "#e4e8ed", 0, .02);                                                           // skirting
     grp.add(m.mesh(), g.mesh(MAT.glass, false));
   };
-  wall(north, "x", -.25, 14, [[.3, 3.0], [4.8, 9.4], [9.75, 10.45], [12.95, 13.9]]);
-  wall(west, "y", 0, Y, [[.3, 5.3]]);
+  wall(north, "x", -.25, WALL, [[.3, 3.0], [4.8, 9.4], [9.75, 10.45], [12.95, 13.9], [14.6, 18.6]]);
+  wall(west, "y", 0, Y, [[.3, 5.3], [5.6, 10.3]]);
   const sign = (text, h, grp, x, y, z, turn) => {
     const t = textTexture(text, { px: 44, pad: 14, radius: 10 }), m = new THREE.Mesh(new THREE.PlaneGeometry(h * t.userData.aspect, h), new THREE.MeshLambertMaterial({ map: t, transparent: true }));
     if (turn) m.rotation.y = Math.PI / 2; add(m, x, y, z, grp);
   };
-  sign("BOARDROOM", .2, north, 11.7, .012, 2.58); sign("PRODUCT FLOOR", .2, north, 3.9, .012, 2.58); sign("KITCHEN", .2, west, .012, 7.9, 2.58, true);
+  sign("BOARDROOM", .2, north, 11.7, .012, 2.58); sign("PRODUCT FLOOR", .2, north, 3.9, .012, 2.58); sign("KITCHEN", .2, west, .012, 7.9 + SY, 2.58, true);
+  sign("CEO", .2, north, 17.0, .012, 2.58);
 
   // the whiteboard: whatever the sim's doodlers have drawn
   const wn = new Mesher();
@@ -111,12 +116,12 @@ export function buildWorld(sim) {
 
   // kitchen wall: upper cabinets, and a clock that tells the real time
   const ww = new Mesher();
-  for (let y = 5.95; y < 9.9; y += 1.0) { ww.box(0, y, 1.55, .32, .98, .72, C.white);
+  for (let y = 5.95 + SY; y < 9.9 + SY; y += 1.0) { ww.box(0, y, 1.55, .32, .98, .72, C.white);
     ww.box(.32, y + .44, 1.62, .02, .03, .14, "#8c959e"); ww.box(.32, y + .52, 1.62, .02, .03, .14, "#8c959e"); ww.box(.32, y + .485, 1.56, .004, .01, .7, "#cfd4da"); }
-  ww.box(0, 10.5, 2.2, .03, .36, .36, DARK); ww.box(.03, 10.53, 2.23, .012, .3, .3, "#fff");
-  for (let k = 0; k < 4; k++) ww.box(.042, 10.665 + [0, .12, 0, -.12][k], 2.365 + [.12, 0, -.12, 0][k], .004, .03, .03, "#9aa3ab");
+  ww.box(0, 10.5 + SY, 2.2, .03, .36, .36, DARK); ww.box(.03, 10.53 + SY, 2.23, .012, .3, .3, "#fff");
+  for (let k = 0; k < 4; k++) ww.box(.042, 10.665 + SY + [0, .12, 0, -.12][k], 2.365 + [.12, 0, -.12, 0][k], .004, .03, .03, "#9aa3ab");
   west.add(ww.mesh());
-  const hand = (len, w) => { const m = piece(q => q.box(0, -w / 2, 0, .008, w, len, "#222"), MAT.solid, false); add(m, .046, 10.68, 2.38, west); return m; };
+  const hand = (len, w) => { const m = piece(q => q.box(0, -w / 2, 0, .008, w, len, "#222"), MAT.solid, false); add(m, .046, 10.68 + SY, 2.38, west); return m; };
   const hr = hand(.085, .028), mn = hand(.125, .02);
   tick(() => { const d = new Date(); hr.rotation.x = -((d.getHours() % 12 + d.getMinutes() / 60) / 12) * Math.PI * 2; mn.rotation.x = -(d.getMinutes() / 60) * Math.PI * 2; });
 
@@ -126,7 +131,7 @@ export function buildWorld(sim) {
     t.wrapT = THREE.RepeatWrapping; t.magFilter = THREE.NearestFilter; return t; })();
   const screenOff = new THREE.MeshLambertMaterial({ color: "#2b3038" });
   for (const d of DESKS) {
-    const { x, y, i } = d;
+    const { y, i } = d, x = d.ax;
     st.box(x + .38, y + .42, DT, .5, .16, .025, "#e9ecef"); for (let r = 0; r < 3; r++) st.box(x + .4, y + .435 + r * .045, DT + .025, .46, .03, .006, "#cdd3d9");
     st.box(x + 1.0, y + .46, DT, .07, .1, .03, "#e9ecef");
     if (i % 3 === 1) for (let j = 0; j < 3; j++) st.box(x + .08 + j * .01, y + .42, DT + j * .014, .24, .18, .014, ["#fafafa", "#f3efe2", "#fff"][j]);
@@ -155,6 +160,8 @@ export function buildWorld(sim) {
   let lidOpen = 0;
   tick(dt => { lidOpen = lerp(lidOpen, OBJ.laptop.open, 1 - Math.exp(-dt * 6)); lid.rotation.x = lerp(-Math.PI / 2, .22, lidOpen); logo.material.color.set(OBJ.laptop.glow ? "#e8f4ff" : "#b8c0c8"); });
 
+  const shadeMat = new THREE.MeshLambertMaterial({ color: "#f3e3c3", emissive: "#ffcf8a", emissiveIntensity: 0 });
+  { const { st, gl, add, pool } = shifted(0, SY);                    // the south rooms, moved down like the 2D plan
   // ── kitchen: counter doors, coffee machine, sink, microwave, watering can, fridge, fruit
   for (let k = 0; k < 4; k++) { st.box(.75, 5.94 + k, .08, .02, .92, .72, "#eef0f2"); st.box(.77, 6.72 + k, .46, .02, .03, .2, "#7d8790"); }
   st.box(.12, 6.1, CT, .48, .48, .5, DARK); st.box(.1, 6.08, CT + .5, .52, .52, .06, C.black);                    // coffee machine
@@ -193,7 +200,6 @@ export function buildWorld(sim) {
   st.box(5.72, 7.15, .375, .14, .32, .3, C.sand); st.box(5.72, 9.2, .375, .14, .32, .3, C.teal); st.box(8.25, 10.44, .375, .32, .14, .3, C.sand);
   st.box(7.05, 7.85, .3125, .32, .24, .02, "#e76f51"); st.box(7.1, 7.9, .3325, .3, .22, .016, "#f6f1e8"); st.box(7.5, 8.3, .3125, .12, .12, .1, "#f5f5f2");
   st.box(8.94, 7.04, .0625, .04, .04, 1.5, DARK);
-  const shadeMat = new THREE.MeshLambertMaterial({ color: "#f3e3c3", emissive: "#ffcf8a", emissiveIntensity: 0 });
   add(piece(m => { m.box(-.16, -.16, 0, .32, .32, .1, "#fff"); m.box(-.13, -.13, .1, .26, .26, .1, "#fff"); m.box(-.1, -.1, .2, .2, .2, .08, "#fff"); }, shadeMat), 8.96, 7.06, 1.5);
   for (let r = 0; r < 4; r++) { const z = .06 + r * .375; st.box(5.25, 6.5, z, 1.4, .035, .025, shade(C.wood, -.3));
     for (let b = 0; b < 9; b++) { const u = .04 + b * .105, h = (.13 + ((b * 7 + r * 3 + 52) % 5) * .015) * 1.5;
@@ -204,11 +210,13 @@ export function buildWorld(sim) {
   // ── review table, call booths (glass doors, a strip that goes green on a call), ping-pong
   [[10.45, 6.05, "#fff"], [10.62, 6.12, "#f6f6f0"], [11.05, 6.5, "#fff"]].forEach(([px, py, c], k) => st.box(px, py, DT + k * .004, .3, .22, .008, c));
   [[10.95, 6.0, "#ffe27a"], [11.1, 6.05, "#ffb3c6"], [11.25, 6.0, "#9ee6c0"]].forEach(([px, py, c]) => st.box(px, py, DT, .1, .1, .008, c));
+  }
   for (const b of BOOTHS) { gl.box(12.86, b.y + 1.085, 0, .99, .02, 2.12, GLASS); st.box(12.92, b.y + 1.07, 1.0, .03, .05, .22, "#9aa3ab");
     st.box(12.95, b.y + .12, .9, .5, .28, .04, "#8c96a3");                                             // a small shelf inside
     const strip = add(glowBox(.9, .04, .05, "#58606a"), 12.9, b.y + 1.07, 2.14); tick(() => strip.material.color.set(b.busy ? "#3fe08a" : "#58606a")); }
+  { const { st } = shifted(0, SY);
   st.box(10.3, 10.335, DT, 1.8, .03, .004, "#fff"); st.box(10.3, 9.9, DT, 1.8, .02, .004, "#fff"); st.box(10.3, 10.78, DT, 1.8, .02, .004, "#fff");
-  st.box(11.19, 9.85, DT, .02, 1.0, .12, "#f4f4f4"); st.box(11.17, 9.83, DT, .06, .04, .14, DARK); st.box(11.17, 10.83, DT, .06, .04, .14, DARK);
+  st.box(11.19, 9.85, DT, .02, 1.0, .12, "#f4f4f4"); st.box(11.17, 9.83, DT, .06, .04, .14, DARK); st.box(11.17, 10.83, DT, .06, .04, .14, DARK); }
   const ball = add(piece(m => m.box(-.025, -.025, -.025, .05, .05, .05, "#fff8e8")), 0, 0, 0);
   tick(() => { const b = OBJ.ball; ball.visible = !!b; if (b) at(ball, b.x, b.y, b.z + .03); });
 
@@ -230,6 +238,7 @@ export function buildWorld(sim) {
     tick((dt, T) => { fol.rotation.z = Math.sin(T * .9 + p.seed % 7) * .035; fol.material.color.setScalar(1 + clamp(1 - (T - p.watered) / 20, 0, 1) * .25); });
   }
 
+  { const { st, add } = shifted(EX, 0);                              // the patio, moved east like the 2D plan
   // ── patio: striped umbrellas, lounger pads, heater, bar cart, ashtray, railings, the glass wall and its door
   for (const [cx, cy, uc] of [[16.8, 2.8, C.teal], [16.9, 8.3, C.sand]]) {
     st.box(cx - .03, cy - .03, DT, .0625, .0625, 1.42, C.metal);
@@ -242,20 +251,26 @@ export function buildWorld(sim) {
   add(glowBox(.2, .2, .12, "#ff7a32"), 19.15, 7.9, 1.42);
   for (const [px, py] of [[14.9, 10.55], [15.76, 10.55], [14.9, 10.96], [15.76, 10.96]]) { st.box(px, py, 0, .04, .04, .76, C.metal); st.box(px - .01, py - .01, 0, .06, .06, .06, DARK); }
   [[15.05, "#2a9d8f"], [15.25, "#e9c46a"], [15.45, "#e76f51"], [15.62, "#f4f1e6"]].forEach(([bx, c]) => { st.box(bx - .035, 10.72, .6875, .07, .07, .2, c); st.box(bx - .015, 10.74, .8875, .03, .03, .08, c); });
-  st.box(15.0, 10.62, .1875, .3, .2, .14, "#b9895a"); st.box(20.28, 10.57, .8125, .27, .27, .03, "#555");
+  st.box(15.0, 10.62, .1875, .3, .2, .14, "#b9895a"); st.box(20.28, 10.57, .8125, .27, .27, .03, "#555"); }
   const rail = (x0, y0, x1, y1) => { const n = Math.round(Math.hypot(x1 - x0, y1 - y0)), dx = (x1 - x0) / n, dy = (y1 - y0) / n;
     for (let i = 0; i <= n; i++) st.box(x0 + dx * i - .025, y0 + dy * i - .025, 0, .05, .05, .9, C.metal);
     st.box(Math.min(x0, x1) - .03, Math.min(y0, y1) - .03, .9, Math.abs(x1 - x0) + .06, Math.abs(y1 - y0) + .06, .05, "#8f9aa4");
     gl.box(Math.min(x0, x1) - .01, Math.min(y0, y1) - .01, .06, Math.abs(x1 - x0) + .02, Math.abs(y1 - y0) + .02, .82, GLASS); };
-  rail(14, Y, X, Y); rail(X, 0, X, Y); rail(14, 0, X, 0);
-  for (let y = 0; y < Y - .01; y += 1.15) { const y1 = Math.min(y + 1.15, Y); if (!(y1 <= 4.62 || y >= 6.78)) continue;
-    gl.box(13.99, y, 0, .02, y1 - y, 2.6, GLASS); st.box(13.97, y, 0, .06, .05, 2.6, C.metal); st.box(13.97, y, 2.6, .06, y1 - y, .06, C.metal); st.box(13.97, y, 0, .06, y1 - y, .05, C.metal); }
-  st.box(13.95, 4.55, 0, .1, .1, 2.66, C.metal); st.box(13.95, 6.8, 0, .1, .1, 2.66, C.metal); st.box(13.95, 4.55, 2.6, .1, 2.35, .06, C.metal); st.box(13.97, 11.45, 0, .06, .05, 2.6, C.metal);
+  rail(WALL, Y, X, Y); rail(X, 0, X, Y); rail(WALL, 0, X, 0);
+  // glass partitions (the patio wall, with its door; the two offices): pane, posts, top and bottom rails
+  const glassWall = (x0, y0, x1, y1) => { const vx = x0 === x1, L = vx ? y1 - y0 : x1 - x0;
+    vx ? gl.box(x0 - .01, y0, 0, .02, L, 2.6, GLASS) : gl.box(x0, y0 - .01, 0, L, .02, 2.6, GLASS);
+    for (const z of [0, 2.6]) vx ? st.box(x0 - .03, y0, z, .06, L, z ? .06 : .05, C.metal) : st.box(x0, y0 - .03, z, L, .06, z ? .06 : .05, C.metal);
+    for (let k = 0; k <= Math.ceil(L / 1.15); k++) { const t = Math.min(k * 1.15, L); vx ? st.box(x0 - .03, y0 + t - .025, 0, .06, .05, 2.6, C.metal) : st.box(x0 + t - .025, y0 - .03, 0, .05, .06, 2.6, C.metal); } };
+  glassWall(WALL, 0, WALL, DOOR[0]); glassWall(WALL, DOOR[1], WALL, Y); st.box(WALL - .05, DOOR[0], 2.6, .1, DOOR[1] - DOOR[0], .06, C.metal);
+  glassWall(OFFICE.x, 0, OFFICE.x, OFFICE.doors[0][0]); glassWall(OFFICE.x, OFFICE.doors[0][1], OFFICE.x, OFFICE.doors[1][0]);
+  glassWall(OFFICE.x, OFFICE.doors[1][1], OFFICE.x, OFFICE.end); glassWall(OFFICE.x, OFFICE.split, WALL, OFFICE.split); glassWall(OFFICE.x, OFFICE.end, WALL, OFFICE.end);
+  for (const [a, b] of OFFICE.doors) st.box(OFFICE.x - .05, a, 2.6, .1, b - a, .06, C.metal);
   // string lights over the patio: grey beads by day, warm at night
   const beadMat = MAT.glow("#cfd3d8"), beads = new Mesher(), wire = [];
-  for (const [px, py] of [[14.1, Y - .05], [X - .05, Y - .05], [X - .05, .2]]) st.box(px - .02, py - .02, .9, .04, .04, .85, C.metal);
+  for (const [px, py] of [[WALL + .1, Y - .05], [X - .05, Y - .05], [X - .05, .2]]) st.box(px - .02, py - .02, .9, .04, .04, .85, C.metal);
   for (let t = 0; t <= 1.0001; t += 1 / 22) {
-    const [bx, by, bz] = t < .5 ? [14.1 + t * 2 * (X - 14.2), Y - .05, 1.62 - Math.abs(Math.sin(t * 2 * Math.PI * 3)) * .14] : [X - .05, Y - .1 - (t - .5) * 2 * (Y - .3), 1.62 - Math.abs(Math.sin((t - .5) * 2 * Math.PI * 4)) * .14];
+    const [bx, by, bz] = t < .5 ? [WALL + .1 + t * 2 * (X - WALL - .2), Y - .05, 1.62 - Math.abs(Math.sin(t * 2 * Math.PI * 3)) * .14] : [X - .05, Y - .1 - (t - .5) * 2 * (Y - .3), 1.62 - Math.abs(Math.sin((t - .5) * 2 * Math.PI * 4)) * .14];
     beads.box(bx - .03, by - .03, bz - .06, .06, .06, .06, "#fff"); wire.push(new THREE.Vector3(bx, bz, by));
   }
   scene.add(beads.mesh(beadMat, false), new THREE.Line(new THREE.BufferGeometry().setFromPoints(wire), new THREE.LineBasicMaterial({ color: 0x3b414a })));

@@ -314,9 +314,9 @@ def shots(pw):
         ("3d-day", "?officeHour=.2", None),
         ("3d-night", "?officeHour=.75", None),
         ("3d-close", "?officeHour=.2", "Office3D.debug.view({ target: [4.5, 0.6, 3.2], dist: 9, yaw: 0.55, pitch: 0.5 })"),
-        ("3d-kitchen", "?officeHour=.2", "Office3D.debug.view({ target: [3.5, 0.6, 8.6], dist: 10, yaw: 1.05, pitch: 0.55 })"),
+        ("3d-kitchen", "?officeHour=.2", "Office3D.debug.view({ target: [3.5, 0.6, 13.6], dist: 10, yaw: 1.05, pitch: 0.55 })"),
         ("3d-orbit", "?officeHour=.2", "Office3D.debug.view({ yaw: -0.5, pitch: 0.42 })"),
-        ("3d-patio-night", "?officeHour=.75", "Office3D.debug.view({ target: [17.5, 0.6, 6], dist: 13, yaw: 0.2, pitch: 0.45 })"),
+        ("3d-patio-night", "?officeHour=.75", "Office3D.debug.view({ target: [22.5, 0.6, 9], dist: 15, yaw: 0.2, pitch: 0.45 })"),
         ("3d-head", "?officeHour=.2", "Office3D.debug.setHead(.8, .3, .8)"),
     ]:
         o = Office(pw, query)

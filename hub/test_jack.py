@@ -6,6 +6,7 @@
     python3 test_jack.py doc      # the doc viewer only fetches Muse files and can't be broken out of
     python3 test_jack.py show     # any agent looks up any task's result link itself instead of asking the CEO
     python3 test_jack.py plain    # each item is one short action, why it blocks, and a link — rambling is refused
+    python3 test_jack.py since    # the board says when each worker took its task, and since when an idle one has been free
     python3 test_jack.py ui       # in the browser: Jack opens a #reference, replies from his list, sees Tools apart
 """
 import sys
@@ -158,6 +159,20 @@ def show():
     print("show OK")
 
 
+def since():
+    """Jack, Oct 14: above everybody, how long they've been on the task, or how long they've been idle."""
+    h, muse, clock = new_hub("Ada", "Bo")
+    pj = h.add_project(h.add_product("Shop", brief="x"), "launch")
+    h.tick(); taken = clock()
+    t = h.add_task(pj, "build the sheet", "engineer", "xlsx", owner="Ada")
+    h.tick(); h.tick()
+    clock.go(1500); h.tick()
+    rows = {a["name"]: a for a in h.board()["agents"]}
+    assert rows["Ada"]["task"]["id"] == t and abs(rows["Ada"]["task"]["since"] - (taken)) < 60, rows["Ada"]["task"]
+    assert rows["Bo"]["task"] is None and rows["Bo"]["free_since"] and clock() - rows["Bo"]["free_since"] >= 1500, rows["Bo"]
+    print("since OK")
+
+
 def ui():
     import threading
     from playwright.sync_api import expect, sync_playwright
@@ -198,4 +213,4 @@ def ui():
     print("ui OK")
 
 
-{"steps": steps, "reply": reply, "tools": tools, "doc": doc, "show": show, "plain": plain, "ui": ui}[sys.argv[1]]()
+{"steps": steps, "reply": reply, "tools": tools, "doc": doc, "show": show, "plain": plain, "since": since, "ui": ui}[sys.argv[1]]()

@@ -6,7 +6,7 @@ import { People } from "./office3d-people.js";
 import { createLook } from "./office3d-look.js";
 
 const FOV = 30 * Math.PI / 180, NEAR = .5, FAR = 2400;
-const HOME = { yaw: Math.PI / 4, pitch: .42, zoom: 1, target: [10.2, .7, 5.9] };      // the classic corner view (three coords: x, up, y)
+const HOME = { yaw: Math.PI / 4, pitch: .42, zoom: 1, target: [13.0, .7, 8.2] };      // the classic corner view (three coords: x, up, y)
 const HEAD_GAIN = +new URLSearchParams(location.search).get("officeHead") || 1;      // calibration: how far the view swings per head move
 const LEAN = +new URLSearchParams(location.search).get("officeLean") || 3;           // calibration: lean in to 0.7 of your resting distance → zoom 0.7^-LEAN (2.9× at 3)
 
@@ -20,9 +20,9 @@ export function start(wrap, overlay, sim) {
 
   // ── camera rig: where we want to be (goal) and where we are (cur), eased
   const goal = { ...HOME, target: new THREE.Vector3(...HOME.target) }, cur = { ...HOME, target: goal.target.clone() };
-  const fitDist = () => { const a = W / Math.max(1, H), t = Math.tan(FOV / 2); return Math.max(13.2 / (t * a), 7.6 / t); };   // the whole floor in frame, whatever the shape
+  const fitDist = () => { const a = W / Math.max(1, H), t = Math.tan(FOV / 2); return Math.max(16.4 / (t * a), 9.6 / t); };   // the whole floor in frame, whatever the shape
   const limit = () => { goal.pitch = clamp(goal.pitch, .06, 1.5); goal.zoom = clamp(goal.zoom, .45, 9);
-    goal.target.set(clamp(goal.target.x, -8, 30), clamp(goal.target.y, 0, 4), clamp(goal.target.z, -8, 20)); };
+    goal.target.set(clamp(goal.target.x, -8, 36), clamp(goal.target.y, 0, 4), clamp(goal.target.z, -8, 26)); };
   const keys = new Set(); let over = wrap.matches(":hover");          // the 3D button is inside the office: the pointer is usually already here
   const typing = e => /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
   const onKey = e => { if (typing(e) || e.metaKey || e.ctrlKey || !(over || document.fullscreenElement === wrap)) return;

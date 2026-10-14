@@ -9,7 +9,10 @@ const SPEED = +Q.get("officeSpeed") || 1;                 // debug: run the sim 
 const HOUR = Q.has("officeHour") ? +Q.get("officeHour") : null;   // debug: pin day/night (0..1 of the hour)
 
 // ───────────────────────────── basics ─────────────────────────────
-const TW = 64, TH = 32, ZH = 32, X = 21, Y = 11.5, D2R = Math.PI / 180;
+const TW = 64, TH = 32, ZH = 32, X = 26, Y = 16.5, D2R = Math.PI / 180;
+// Jack, Oct 14: more room. The work floor got 5 tiles south (kitchen, lounge, review, booths and pong moved down by
+// SY) and the patio moved 5 tiles east (EX), freeing a strip for two glass offices; WALL is the glass wall to the patio.
+const WALL = 19, SY = 5, EX = 5;
 const wx = (x, y) => (x - y) * TW / 2, wy = (x, y, z = 0) => (x + y) * TH / 2 - z * ZH;
 const P = (x, y, z = 0) => [wx(x, y), wy(x, y, z)];
 const rnd = (a, b) => a + Math.random() * (b - a), pick = a => a[Math.floor(Math.random() * a.length)];
@@ -65,6 +68,9 @@ const onR = (x, y, z, w, d, h) => (u, v) => P(x + w, y + d * u, z + h * v);   //
 const onT = (x, y, z, w, d) => (u, v) => P(x + w * u, y + d * v, z);           // a top face
 const quad = (f, u0, v0, u1, v1) => [f(u0, v0), f(u1, v0), f(u1, v1), f(u0, v1)];
 
+// floors by room; the 3D view paints the same zones
+const ZONE = (x, y) => x >= WALL ? "deck" : x >= 14.2 ? (y < 7.6 ? "plank" : "carpet") : y < 5.6 + SY ? (x >= 9.6 && y < 4.6 ? "board" : "carpet")
+  : x < 5.1 ? "tile" : x < 9.6 ? "plank" : "review";
 // ───────────────────────────── the floor plan: sortable items ─────────────────────────────
 // Each item has a footprint and a sort key (footprint centre x+y). Long pieces are split into ≤1-tile chunks so a
 // person standing between them sorts correctly. `draw` is static (cached as a sprite); `live` is drawn every frame.
@@ -85,6 +91,23 @@ function solid(x, y, z, w, d, h, c, o = {}) {
 }
 // small things sitting on another item's top: drawn just after it
 const deco = (key, fp, z0, z1, draw, live) => item({ key, fp, z0, z1, draw, live });
+// a block of the floor plan drawn somewhere else: the same builders, offset by (ox, oy). A section keeps its own
+// numbers and shadows these names, so moving a room is one shift, not a hundred edited coordinates.
+function shiftTo(ox, oy) {
+  const fp = f => f && [f[0] + ox, f[1] + oy, f[2], f[3]];
+  return {
+    P: (x, y, z) => P(x + ox, y + oy, z),
+    box: (g, x, y, ...r) => box(g, x + ox, y + oy, ...r),
+    onT: (x, y, ...r) => onT(x + ox, y + oy, ...r), onR: (x, y, ...r) => onR(x + ox, y + oy, ...r), onL: (x, y, ...r) => onL(x + ox, y + oy, ...r),
+    solid: (x, y, z, w, d, h, c, o = {}) => solid(x + ox, y + oy, z, w, d, h, c, { ...o, block: Array.isArray(o.block) ? fp(o.block) : o.block,
+      after: o.after && ((g, x1, y1, ...r) => o.after(g, x1 - ox, y1 - oy, ...r)) }),
+    item: o => item({ ...o, key: o.key + ox + oy, fp: fp(o.fp) }),
+    deco: (key, f, z0, z1, draw, live) => deco(key + ox + oy, fp(f), z0, z1, draw, live),
+    chair: (x, y, ...r) => chair(x + ox, y + oy, ...r), plantAt: (x, y, ...r) => plantAt(x + ox, y + oy, ...r),
+    lamp: (x, y, ...r) => lamp(x + ox, y + oy, ...r), BLOCK: { push: (...bs) => BLOCK.push(...bs.map(fp)) },
+    slots: (...lists) => lists.flat().forEach(q => { q.x += ox; q.y += oy; }),
+  };
+}
 
 // chairs: seat + stem, back on the side away from where the sitter faces
 function chair(x, y, dir, c = C.fabric, o = {}) {
@@ -121,37 +144,40 @@ function lamp(x, y, z, r, col, kind = "pool") {
   LIGHTS.push({ x, y, z, r, col, kind });
 }
 
-// ── desks: two rows of five, each with chair, monitor(s), keyboard, mug spot, a little clutter
+// ── desks: a 4 x 4 grid of wide desks with walking room between the rows, each with chair, monitor(s), keyboard,
+// mug spot, a little clutter; and one desk in each glass office (the CEO's and the PM's)
 const DESKS = [];
-[.9, 3.1].forEach((yy, row) => [.9, 2.55, 4.2, 5.85, 7.5].forEach((xx, col) => {
-  const i = DESKS.length, two = [0, 3, 6, 9].includes(i), d = { i, x: xx, y: yy, two, busy: null, typing: false, mug: false };
+function makeDesk(xx, yy, w = 1.9, office = null) {
+  const i = DESKS.length, two = i % 3 === 0, ax = xx + (w - 1.4) / 2, d = { i, x: xx, y: yy, w, ax, two, office, busy: null, typing: false, mug: false };
   DESKS.push(d);
-  solid(xx, yy, .66, 1.4, .75, .06, C.white, { block: [xx, yy, 1.4, .75], shadowA: .1 });
+  solid(xx, yy, .66, w, .75, .06, office ? C.wood : C.white, { block: [xx, yy, w, .75], shadowA: .1 });
   solid(xx, yy + .05, 0, .05, .65, .66, C.steel, { shadow: false, hl: false });
-  solid(xx + 1.35, yy + .05, 0, .05, .65, .66, C.steel, { shadow: false, hl: false });
-  const k = xx + yy + 1.46;
-  deco(k + .02, [xx + .35, yy + .4, .55, .16], .72, .75, g => {             // keyboard + mouse
-    poly(g, quad(onT(xx + .38, yy + .42, .725, .52, .15), 0, 0, 1, 1), "#e9ecef", "rgba(0,0,0,.18)", .6);
-    for (let r = 0; r < 3; r++) line(g, [P(xx + .41, yy + .46 + r * .04, .727), P(xx + .87, yy + .46 + r * .04, .727)], "rgba(0,0,0,.12)", .6);
-    g.fillStyle = "#e9ecef"; const [mx, my] = P(xx + 1.04, yy + .5, .725); g.beginPath(); g.ellipse(mx, my, 2.4, 1.6, 0, 0, 7); g.fill();
+  solid(xx + w - .05, yy + .05, 0, .05, .65, .66, C.steel, { shadow: false, hl: false });
+  const k = ax + yy + 1.46;
+  deco(k + .02, [ax + .35, yy + .4, .55, .16], .72, .75, g => {             // keyboard + mouse
+    poly(g, quad(onT(ax + .38, yy + .42, .725, .52, .15), 0, 0, 1, 1), "#e9ecef", "rgba(0,0,0,.18)", .6);
+    for (let r = 0; r < 3; r++) line(g, [P(ax + .41, yy + .46 + r * .04, .727), P(ax + .87, yy + .46 + r * .04, .727)], "rgba(0,0,0,.12)", .6);
+    g.fillStyle = "#e9ecef"; const [mx, my] = P(ax + 1.04, yy + .5, .725); g.beginPath(); g.ellipse(mx, my, 2.4, 1.6, 0, 0, 7); g.fill();
   });
-  if (i % 3 === 1) deco(k + .01, [xx + .08, yy + .4, .25, .2], .72, .8, g => { for (let j = 0; j < 3; j++) box(g, xx + .08, yy + .42, .72 + j * .02, .24, .18, .018, ["#fafafa", "#f3efe2", "#fff"][j], { hl: false, seam: false }); });
+  if (i % 3 === 1) deco(k + .01, [ax + .08, yy + .4, .25, .2], .72, .8, g => { for (let j = 0; j < 3; j++) box(g, ax + .08, yy + .42, .72 + j * .02, .24, .18, .018, ["#fafafa", "#f3efe2", "#fff"][j], { hl: false, seam: false }); });
   if (i % 3 === 0) {                                                          // desk lamp
-    deco(k + .03, [xx + 1.15, yy + .1, .15, .15], .72, 1.25, g => {
-      box(g, xx + 1.16, yy + .12, .72, .12, .12, .02, C.dark, { hl: false });
-      line(g, [P(xx + 1.22, yy + .18, .74), P(xx + 1.22, yy + .18, 1.12), P(xx + 1.12, yy + .3, 1.2)], C.dark, 1.2);
-      const [lx, ly] = P(xx + 1.1, yy + .32, 1.17); g.fillStyle = C.dark; g.beginPath(); g.ellipse(lx, ly, 4, 2.4, -.4, 0, 7); g.fill(); });
-    LIGHTS.push({ x: xx + 1.1, y: yy + .35, z: 1.1, r: 46, col: "255,214,150", kind: "desk", desk: d });
+    deco(k + .03, [ax + 1.15, yy + .1, .15, .15], .72, 1.25, g => {
+      box(g, ax + 1.16, yy + .12, .72, .12, .12, .02, C.dark, { hl: false });
+      line(g, [P(ax + 1.22, yy + .18, .74), P(ax + 1.22, yy + .18, 1.12), P(ax + 1.12, yy + .3, 1.2)], C.dark, 1.2);
+      const [lx, ly] = P(ax + 1.1, yy + .32, 1.17); g.fillStyle = C.dark; g.beginPath(); g.ellipse(lx, ly, 4, 2.4, -.4, 0, 7); g.fill(); });
+    LIGHTS.push({ x: ax + 1.1, y: yy + .35, z: 1.1, r: 46, col: "255,214,150", kind: "desk", desk: d });
   }
-  d.slot = { x: xx + .7, y: yy + 1.32, dir: "NE", pose: "sit" };
-  chair(xx + .7, yy + 1.32, "NE", C.fabric);
+  d.slot = { x: ax + .7, y: yy + 1.32, dir: "NE", pose: "sit" };
+  chair(ax + .7, yy + 1.32, "NE", office ? C.plum : C.fabric);
   // monitor(s): live, so the screen shows real work
-  item({ key: k, fp: [xx + .2, yy + .08, 1, .1], z0: .72, z1: 1.4, pad: 8, live: (g, T) => drawMonitors(g, d, T) });
-  item({ key: k + .04, fp: [xx + 1.05, yy + .45, .1, .1], z0: .72, z1: .85, live: g => { if (d.mug) drawMugAt(g, ...P(xx + 1.15, yy + .55, .72), d.mugColor || "#fff"); } });
-}));
+  item({ key: k, fp: [ax + .2, yy + .08, 1, .1], z0: .72, z1: 1.4, pad: 8, live: (g, T) => drawMonitors(g, d, T) });
+  item({ key: k + .04, fp: [ax + 1.05, yy + .45, .1, .1], z0: .72, z1: .85, live: g => { if (d.mug) drawMugAt(g, ...P(ax + 1.15, yy + .55, .72), d.mugColor || "#fff"); } });
+  return d;
+}
+[.8, 3.2, 5.6, 8.0].forEach(yy => [.5, 2.95, 5.4, 7.85].forEach(xx => makeDesk(xx, yy)));
 function drawMonitors(g, d, T) {
   const scr = (x0, w, j) => {
-    const x = d.x + x0, y = d.y + .1;
+    const x = d.ax + x0, y = d.y + .1;
     box(g, x + w / 2 - .03, y + .02, .72, .06, .06, .16, C.dark, { hl: false });                       // neck
     box(g, x + w / 2 - .12, y - .02, .72, .24, .12, .015, C.dark, { hl: false });                      // foot
     const f = box(g, x, y, .86, w, .05, .42, C.black, { hl: false });
@@ -192,6 +218,8 @@ item({ key: 14.2, fp: [11.45, 1.55, .5, .35], z0: .72, z1: 1, live: g => {
     const [lx, ly] = P(11.7, 1.6, .89); g.fillStyle = o.glow ? "#e8f4ff" : "#b8c0c8"; g.beginPath(); g.arc(lx, ly, 1.4, 0, 7); g.fill(); } } });
 lamp(11.7, 2.05, 2.3, 120, "255,224,170", "pendant");
 
+var DINE, REVIEW, BOOTHS, PONG;
+{ const { P, box, onT, onR, onL, solid, item, deco, chair, plantAt, lamp, BLOCK, slots } = shiftTo(0, SY);              // the south rooms, moved down by SY
 // ── kitchen: counter with coffee machine, sink, microwave, watering can; fridge; dining table
 solid(0, 5.9, 0, .72, 4.0, .86, C.white, { block: true, wallY: true, after: (g, x, y, w, d, f) => {
   const s = onR(x, y, 0, w, d, .86);
@@ -255,7 +283,7 @@ solid(2.92, 8.92, 0, .16, .16, .66, C.dark, { shadow: false });
 deco(3.0 + 9.0 + .3, [2.8, 8.8, .4, .4], .72, .9, g => {
   const [x, y] = P(3.0, 9.0, .72); g.fillStyle = "#d9cdb8"; g.beginPath(); g.ellipse(x, y - 1, 7, 3, 0, 0, 7); g.fill();
   [["#e76f51", -3, -3], ["#f4d35e", 1, -4], ["#8fb996", 3, -2], ["#e76f51", -1, -5]].forEach(([c, dx, dy]) => { g.fillStyle = c; g.beginPath(); g.arc(x + dx, y + dy, 2.2, 0, 7); g.fill(); }); });
-const DINE = [{ x: 3.0, y: 8.0, dir: "SW" }, { x: 3.0, y: 10.0, dir: "NE" }, { x: 2.0, y: 9.0, dir: "SE" }, { x: 4.0, y: 9.0, dir: "NW" }];
+DINE = [{ x: 3.0, y: 8.0, dir: "SW" }, { x: 3.0, y: 10.0, dir: "NE" }, { x: 2.0, y: 9.0, dir: "SE" }, { x: 4.0, y: 9.0, dir: "NW" }];
 DINE.forEach(s => { s.pose = "sit"; chair(s.x, s.y, s.dir, C.sage); });
 lamp(3.0, 9.0, 2.2, 110, "255,206,140", "pendant");
 
@@ -287,10 +315,10 @@ solid(10.35, 5.95, 0, .05, .9, .66, C.steel, { shadow: false, hl: false }); soli
 deco(10.9 + 6.4 + .4, [10.4, 6.0, 1.0, .8], .71, .75, g => {
   for (const [px, py, c] of [[10.45, 6.05, "#fff"], [10.62, 6.12, "#f6f6f0"], [11.05, 6.5, "#fff"]]) box(g, px, py, .712, .3, .22, .006, c, { hl: false, seam: false });
   for (const [px, py, c] of [[10.95, 6.0, "#ffe27a"], [11.1, 6.05, "#ffb3c6"], [11.25, 6.0, "#9ee6c0"]]) box(g, px, py, .712, .1, .1, .006, c, { hl: false, seam: false }); });
-const REVIEW = [{ x: 10.9, y: 7.25, dir: "NE" }, { x: 11.85, y: 6.4, dir: "NW" }, { x: 10.9, y: 5.55, dir: "SW" }, { x: 9.95, y: 6.4, dir: "SE" }];
+REVIEW = [{ x: 10.9, y: 7.25, dir: "NE" }, { x: 11.85, y: 6.4, dir: "NW" }, { x: 10.9, y: 5.55, dir: "SW" }, { x: 9.95, y: 6.4, dir: "SE" }];
 REVIEW.forEach(s => { s.pose = "sit"; chair(s.x, s.y, s.dir, C.teal); });
 lamp(10.9, 6.4, 2.2, 100, "255,224,170", "pendant");
-const BOOTHS = [6.9, 8.2].map(by => {
+BOOTHS = [6.9, 8.2].map(by => {
   const b = { y: by, busy: false };
   solid(12.8, by, 0, 1.05, .06, 2.1, "#6b7684", { shadow: false }); solid(12.8, by + .06, 0, .06, 1.04, 2.1, "#6b7684", { shadow: false });
   solid(12.8, by, 2.1, 1.05, 1.1, .08, "#6b7684", { shadow: false, top: "#7d8896" });
@@ -305,7 +333,9 @@ solid(10.3, 9.9, .7, 1.8, .9, .05, C.green, { block: [10.3, 9.9, 1.8, .9], after
   line(g, [P(x, y + d / 2, .755), P(x + w, y + d / 2, .755)], "rgba(255,255,255,.7)", .7); } });
 solid(10.4, 10.0, 0, .05, .7, .7, C.dark, { shadow: false, hl: false }); solid(12.0, 10.0, 0, .05, .7, .7, C.dark, { shadow: false, hl: false });
 deco(11.2 + 10.35 + .4, [11.18, 9.85, .04, 1.0], .75, .9, g => poly(g, [P(11.2, 9.85, .755), P(11.2, 10.85, .755), P(11.2, 10.85, .87), P(11.2, 9.85, .87)], "rgba(255,255,255,.55)", "#ddd", .6));
-const PONG = [{ x: 9.85, y: 10.35, dir: "SE", pose: "stand" }, { x: 12.55, y: 10.35, dir: "NW", pose: "stand" }];
+PONG = [{ x: 9.85, y: 10.35, dir: "SE", pose: "stand" }, { x: 12.55, y: 10.35, dir: "NW", pose: "stand" }];
+slots(DINE, REVIEW, PONG); BOOTHS.forEach(b => { b.y += SY; b.slot.y += SY; });
+}
 OBJ.ball = null;
 item({ key: 0, fp: [0, 0, 0, 0], z0: 0, z1: 0, dynKey: () => OBJ.ball ? OBJ.ball.x + OBJ.ball.y : -1, live: g => {
   const b = OBJ.ball; if (!b) return; const [x, y] = P(b.x, b.y, b.z), [sx, sy] = P(b.x, b.y, .755);
@@ -314,11 +344,14 @@ item({ key: 0, fp: [0, 0, 0, 0], z0: 0, z1: 0, dynKey: () => OBJ.ball ? OBJ.ball
 
 // ── plants indoors
 const PLANT_SPOTS = [[9.35, .35, 1.1, { x: 9.35, y: .95, dir: "NE" }], [13.75, .3, 1.2, { x: 13.4, y: .75, dir: "NE" }],
-  [9.4, 9.6, 1.2, { x: 9.4, y: 9.0, dir: "SW" }], [5.0, 5.35, 1, { x: 5.0, y: 4.85, dir: "SW" }], [14.4, .35, 1.3, null], [20.65, .4, 1.3, null], [14.4, 11.1, 1.15, null]];
+  [9.4, 9.6 + SY, 1.2, { x: 9.4, y: 9.0 + SY, dir: "SW" }], [5.0, 5.35 + SY, 1, { x: 5.0, y: 4.85 + SY, dir: "SW" }],
+  [WALL + .4, .35, 1.3, null], [X - .35, .4, 1.3, null], [WALL + .4, Y - .4, 1.15, null],
+  [10.6, 9.8, 1.2, { x: 11.2, y: 9.8, dir: "NW" }], [13.6, 4.3, 1.1, null], [14.6, 8.2, 1.2, { x: 15.2, y: 8.4, dir: "NW" }], [18.5, 15.9, 1.3, null]];
 const PLANTS = PLANT_SPOTS.map(([x, y, s, w]) => { const p = plantAt(x, y, s); if (w) p.slot = { ...w, pose: "stand" }; return p; });
 
+var PATIO = [], LOUNGERS, SMOKE;
+{ const { P, box, onT, onR, onL, solid, item, deco, chair, plantAt, lamp, BLOCK, slots } = shiftTo(EX, 0);             // the patio, moved east by EX
 // ── patio: two umbrella tables, loungers, heater, bar cart, smoking corner, planters
-const PATIO = [];
 for (const [cx, cy, uc] of [[16.8, 2.8, C.teal], [16.9, 8.3, C.sand]]) {
   solid(cx - .45, cy - .45, .66, .9, .9, .05, C.white, { block: [cx - .45, cy - .45, .9, .9] });
   solid(cx - .05, cy - .05, 0, .1, .1, .66, C.metal, { shadow: false });
@@ -334,7 +367,7 @@ for (const [cx, cy, uc] of [[16.8, 2.8, C.teal], [16.9, 8.3, C.sand]]) {
     for (let i = 0; i < N; i++) { const a = rim[i], b = rim[(i + 1) % N]; line(g, [a, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2 + 2.2], b], shade(uc, -.28), .9); }
   } });
 }
-const LOUNGERS = [4.6, 5.75].map(ly => {
+LOUNGERS = [4.6, 5.75].map(ly => {
   solid(18.6, ly, 0, 1.55, .6, .26, C.white, { block: true });
   solid(19.95, ly, .26, .2, .6, .32, C.white, { shadow: false });
   deco(19.4 + ly + .3 + .1, [18.7, ly + .05, 1.2, .5], .26, .3, g => poly(g, quad(onT(18.7, ly + .06, .27, 1.2, .48), 0, 0, 1, 1), ly < 5 ? C.teal : C.sand));
@@ -348,8 +381,10 @@ solid(14.9, 10.55, .1, .9, .45, .05, C.metal, { block: [14.9, 10.55, .9, .45] })
 deco(15.35 + 10.8 + .2, [14.95, 10.6, .8, .35], .67, 1.0, g => [[15.05, "#2a9d8f"], [15.25, "#e9c46a"], [15.45, "#e76f51"], [15.62, "#f4f1e6"]].forEach(([bx, c]) => {
   const [x, y] = P(bx, 10.75, .67); g.fillStyle = c; g.beginPath(); g.roundRect(x - 1.5, y - 8, 3, 8, 1); g.fill(); g.fillRect(x - .6, y - 11, 1.2, 3); }));
 solid(20.3, 10.6, 0, .22, .22, .78, C.metal, { block: true, after: (g) => { const [x, y] = P(20.41, 10.71, .78); g.fillStyle = "#555"; g.beginPath(); g.ellipse(x, y, 4, 2, 0, 0, 7); g.fill(); } });
-const SMOKE = [{ x: 19.9, y: 10.2, dir: "SE", pose: "stand" }, { x: 20.65, y: 10.05, dir: "SW", pose: "stand" }];
+SMOKE = [{ x: 19.9, y: 10.2, dir: "SE", pose: "stand" }, { x: 20.65, y: 10.05, dir: "SW", pose: "stand" }];
 for (const [px, py] of [[20.45, 2.2], [20.45, 6.9], [17.6, 11.1]]) plantAt(px, py, 1.05, C.wood);
+slots(PATIO, LOUNGERS, SMOKE);
+}
 
 // ── railings + glass wall + door: transparent panels, sorted with people
 const glassP = (x0, y0, x1, y1, h, key, frame = true) => item({ key, fp: [Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0)], z0: 0, z1: h, pad: 4, draw: g => {
@@ -358,31 +393,67 @@ const glassP = (x0, y0, x1, y1, h, key, frame = true) => item({ key, fp: [Math.m
   line(g, [P(x0, y0), P(x0, y0, h)], "rgba(150,165,175,.8)", 1);
   g.strokeStyle = "rgba(255,255,255,.45)"; g.lineWidth = 1.2; g.beginPath();
   const a = P(lerp(x0, x1, .2), lerp(y0, y1, .2), h * .2), b = P(lerp(x0, x1, .45), lerp(y0, y1, .45), h * .85); g.moveTo(...a); g.lineTo(...b); g.stroke(); } });
-for (let x = 14; x < X - .01; x += 1) glassP(x, Y, x + 1, Y, .9, x + .5 + Y + .4);
+for (let x = WALL; x < X - .01; x += 1) glassP(x, Y, x + 1, Y, .9, x + .5 + Y + .4);
 for (let y = 0; y < Y - .01; y += 1) glassP(X, y, X, Math.min(y + 1, Y), .9, X + y + .5 + .4);
-for (let x = 14; x < X - .01; x += 1) glassP(x, 0, x + 1, 0, .9, x + .5 - .4);
-for (let y = 0; y < Y - .01; y += 1.15) { const y1 = Math.min(y + 1.15, Y); if (y1 <= 4.62 || y >= 6.78) glassP(14, y, 14, y1, 2.6, 14 + (y + y1) / 2 + .01); }
-for (let y = 0; y < Y; y += .5) if (y < 4.6 || y > 6.75) BLOCK.push([13.9, y, .2, .5]);
-deco(14 + 4.6, [13.95, 4.55, .1, .1], 0, 2.6, g => box(g, 13.95, 4.55, 0, .1, .1, 2.6, C.metal, { hl: false }));
-deco(14 + 6.85, [13.95, 6.8, .1, .1], 0, 2.6, g => box(g, 13.95, 6.8, 0, .1, .1, 2.6, C.metal, { hl: false }));
+for (let x = WALL; x < X - .01; x += 1) glassP(x, 0, x + 1, 0, .9, x + .5 - .4);
+// the glass wall to the patio, with its door opposite the open floor (the offices take its north end)
+const DOOR = [9.6, 11.8];
+for (const [a, b] of [[0, DOOR[0]], [DOOR[1], Y]]) for (let y = a; y < b - .01; y += 1.15) { const y1 = Math.min(y + 1.15, b); glassP(WALL, y, WALL, y1, 2.6, WALL + (y + y1) / 2 + .01); }
+for (let y = 0; y < Y; y += .5) if (y < DOOR[0] - .05 || y > DOOR[1] - .1) BLOCK.push([WALL - .1, y, .2, .5]);
+for (const dy of DOOR) deco(WALL + dy, [WALL - .05, dy - .05, .1, .1], 0, 2.6, g => box(g, WALL - .05, dy - .05, 0, .1, .1, 2.6, C.metal, { hl: false }));
+
+// ── two glass offices against the patio glass: the CEO's (north) and the PM's, each a door on the floor side
+const OFFICE = { x: 14.2, split: 3.75, end: 7.6, doors: [[2.3, 3.3], [6.1, 7.1]] };
+const pane = (x0, y0, x1, y1) => {                                // a glass partition, in ≤1-tile pieces so people sort right
+  const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) - 1e-6));
+  for (let i = 0; i < n; i++) { const a = lerp(x0, x1, i / n), b = lerp(y0, y1, i / n), c = lerp(x0, x1, (i + 1) / n), d = lerp(y0, y1, (i + 1) / n);
+    glassP(a, b, c, d, 2.6, (a + c) / 2 + (b + d) / 2 + .01); BLOCK.push([Math.min(a, c) - .05, Math.min(b, d) - .05, Math.abs(c - a) + .1, Math.abs(d - b) + .1]); }
+};
+pane(OFFICE.x, 0, OFFICE.x, OFFICE.doors[0][0]); pane(OFFICE.x, OFFICE.doors[0][1], OFFICE.x, OFFICE.doors[1][0]);
+pane(OFFICE.x, OFFICE.doors[1][1], OFFICE.x, OFFICE.end); pane(OFFICE.x, OFFICE.split, WALL, OFFICE.split); pane(OFFICE.x, OFFICE.end, WALL, OFFICE.end);
+const OFFICES = { ceo: makeDesk(16.1, 1.0, 2.2, "ceo"), pm: makeDesk(16.1, 4.75, 2.2, "pm") };
+for (const oy of [0, OFFICE.split]) {                             // a bookcase and an armchair in each
+  solid(18.4, oy + .15, 0, .45, 1.3, 1.5, C.wood, { block: true, after: (g, x, y, w, d) => { const s2 = onR(x, y, 0, w, d, 1.5);
+    for (let r = 0; r < 4; r++) for (let b = 0; b < 6; b++) poly(g, quad(s2, .08 + b * .14, .06 + r * .25, .18 + b * .14, .2 + r * .25), ["#e76f51", "#2a9d8f", "#e9c46a", "#5a7bbf", "#8d6cab"][(b + r) % 5]); } });
+  chair(14.85, oy + .75, "SE", C.sand, { back: .6 });
+}
+
+// ── the pool: a raised plunge pool on the patio's new south end, with loungers along the rail
+const POOL = [20.4, 12.0, 4.6, 3.6];                              // x, y, w, d (outer edge of the coping)
+{ const [x, y, w, d] = POOL, cw = .22;
+  solid(x + cw, y + cw, 0, w - 2 * cw, d - 2 * cw, .1, "#3fa7d6", { top: "#62c4ec", hl: false, shadow: false, block: [x, y, w, d] });
+  for (const [a, b, c, e] of [[x, y, w, cw], [x, y + d - cw, w, cw], [x, y + cw, cw, d - 2 * cw], [x + w - cw, y + cw, cw, d - 2 * cw]])
+    solid(a, b, 0, c, e, .16, C.stone, { shadow: false });
+  solid(x + w - .7, y + .05, .16, .05, .05, .55, C.metal, { shadow: false, hl: false }); solid(x + w - .4, y + .05, .16, .05, .05, .55, C.metal, { shadow: false, hl: false });
+  item({ key: x + w / 2 + y + d / 2 + .05, fp: [x + cw, y + cw, w - 2 * cw, d - 2 * cw], z0: .1, z1: .12, live: (g, T) => {   // light on the water
+    for (let k = 0; k < 7; k++) { const u = ((k * .37 + T * .05) % 1), v = (k * .61) % 1, wob = Math.sin(T * 1.6 + k) * .05;
+      line(g, [P(x + cw + u * (w - 2 * cw - .5), y + cw + v * (d - 2 * cw) + wob, .105), P(x + cw + u * (w - 2 * cw - .5) + .45, y + cw + v * (d - 2 * cw) + wob, .105)], "rgba(255,255,255,.45)", 1); } } });
+}
+for (const lx of [20.4, 22.4]) {
+  solid(lx, Y - .62, 0, 1.55, .55, .26, C.white, { block: true }); solid(lx + 1.55, Y - .62, .26, .2, .55, .32, C.white, { shadow: false });
+  deco(lx + .8 + Y - .35 + .1, [lx + .1, Y - .57, 1.2, .45], .26, .3, g => poly(g, quad(onT(lx + .1, Y - .56, .27, 1.2, .43), 0, 0, 1, 1), lx < 21 ? C.sand : C.teal));
+  LOUNGERS.push({ x: lx + .65, y: Y - .35, dir: "SE", pose: "lie", z: .28, lieAng: Math.atan2(TH / 2, TW / 2) });
+}
 
 // ── slots people can use (fixed spots; idle routines and work both claim them)
 const SLOTS = {
-  desk: DESKS.map(d => ({ ...d.slot, desk: d })), ceo: [BOARD.back[1], BOARD.back[0], BOARD.back[2], BOARD.head],
+  desk: DESKS.filter(d => !d.office).map(d => ({ ...d.slot, desk: d })),
+  ceo: [{ ...OFFICES.ceo.slot, desk: OFFICES.ceo }, BOARD.back[1], BOARD.back[0], BOARD.back[2], BOARD.head],
+  pmoffice: [{ ...OFFICES.pm.slot, desk: OFFICES.pm }],
   board: [...BOARD.front, ...BOARD.back, BOARD.head], review: REVIEW, booth: BOOTHS.map(b => ({ ...b.slot, booth: b })),
-  coffee: [{ x: 1.15, y: 6.35, dir: "NW", pose: "stand" }], coffeeQ: [{ x: 1.75, y: 6.9, dir: "NW", pose: "stand" }],
-  sink: [{ x: 1.15, y: 7.4, dir: "NW", pose: "stand" }], micro: [{ x: 1.15, y: 8.65, dir: "NW", pose: "stand" }],
-  fridge: [{ x: 1.45, y: 10.6, dir: "NW", pose: "stand" }], can: [{ x: 1.15, y: 9.55, dir: "NW", pose: "stand" }],
-  bin: [{ x: 1.8, y: 11.25, dir: "NW", pose: "stand" }], counter: [{ x: 1.2, y: 7.95, dir: "SE", pose: "stand", lean: 1 }, { x: 1.2, y: 9.15, dir: "SE", pose: "stand", lean: 1 }],
-  dine: DINE, sofa: [{ x: 6.05, y: 7.45 }, { x: 6.05, y: 8.3 }, { x: 6.05, y: 9.15 }].map(s => ({ ...s, dir: "SE", pose: "sit" })),
-  sofa2: [{ x: 7.0, y: 10.25 }, { x: 7.95, y: 10.25 }].map(s => ({ ...s, dir: "NE", pose: "sit" })),
-  nap: [{ x: 7.25, y: 10.25, dir: "NE", pose: "lie", z: .38, lieAng: Math.atan2(TH / 2, TW / 2) }],
-  books: [{ x: 5.95, y: 6.85, dir: "NE", pose: "stand" }], coolerA: [{ x: 9.05, y: 5.95, dir: "SE", pose: "stand" }],
-  coolerB: [{ x: 9.8, y: 5.92, dir: "NW", pose: "stand" }],
+  coffee: [{ x: 1.15, y: 6.35 + SY, dir: "NW", pose: "stand" }], coffeeQ: [{ x: 1.75, y: 6.9 + SY, dir: "NW", pose: "stand" }],
+  sink: [{ x: 1.15, y: 7.4 + SY, dir: "NW", pose: "stand" }], micro: [{ x: 1.15, y: 8.65 + SY, dir: "NW", pose: "stand" }],
+  fridge: [{ x: 1.45, y: 10.6 + SY, dir: "NW", pose: "stand" }], can: [{ x: 1.15, y: 9.55 + SY, dir: "NW", pose: "stand" }],
+  bin: [{ x: 1.8, y: 11.25 + SY, dir: "NW", pose: "stand" }], counter: [{ x: 1.2, y: 7.95 + SY, dir: "SE", pose: "stand", lean: 1 }, { x: 1.2, y: 9.15 + SY, dir: "SE", pose: "stand", lean: 1 }],
+  dine: DINE, sofa: [{ x: 6.05, y: 7.45 + SY }, { x: 6.05, y: 8.3 + SY }, { x: 6.05, y: 9.15 + SY }].map(s => ({ ...s, dir: "SE", pose: "sit" })),
+  sofa2: [{ x: 7.0, y: 10.25 + SY }, { x: 7.95, y: 10.25 + SY }].map(s => ({ ...s, dir: "NE", pose: "sit" })),
+  nap: [{ x: 7.25, y: 10.25 + SY, dir: "NE", pose: "lie", z: .38, lieAng: Math.atan2(TH / 2, TW / 2) }],
+  books: [{ x: 5.95, y: 6.85 + SY, dir: "NE", pose: "stand" }], coolerA: [{ x: 9.05, y: 5.95 + SY, dir: "SE", pose: "stand" }],
+  coolerB: [{ x: 9.8, y: 5.92 + SY, dir: "NW", pose: "stand" }],
   window: [{ x: 9.85, y: .4, dir: "NE", pose: "stand" }, { x: .45, y: 5.3, dir: "NW", pose: "stand" }, { x: 13.1, y: .4, dir: "NE", pose: "stand" }],
   whiteboard: [{ x: 3.9, y: .38, dir: "NE", pose: "stand" }], pong: PONG,
   patioA: PATIO[0], patioB: PATIO[1], lounger: LOUNGERS,
-  rail: [{ x: 20.62, y: 1.9, dir: "SE" }, { x: 20.62, y: 3.6, dir: "SE" }, { x: 18.5, y: 11.15, dir: "SW" }, { x: 16.1, y: 11.15, dir: "SW" }, { x: 15.2, y: .4, dir: "NE" }].map(s => ({ ...s, pose: "stand", lean: 1 })),
+  rail: [{ x: X - .38, y: 1.9, dir: "SE" }, { x: X - .38, y: 3.6, dir: "SE" }, { x: X - .9, y: Y - .35, dir: "SW" }, { x: X - 1.7, y: Y - .35, dir: "SW" }, { x: WALL + 1.2, y: .4, dir: "NE" }].map(s => ({ ...s, pose: "stand", lean: 1 })),
   smoke: SMOKE, plant: PLANTS.filter(p => p.slot).map(p => ({ ...p.slot, plant: p })),
 };
 for (const [g, list] of Object.entries(SLOTS)) list.forEach((s, i) => { s.group = g; s.id = g + i; s.by = null; });
@@ -668,7 +739,7 @@ const releaseAll = p => { for (const s of p.claims) if (s.by === p) s.by = null;
 function loiter(p, near) {                                  // any free floor cell away from people and fixed spots
   const cx = near ? near.x : p.x, cy = near ? near.y : p.y;
   for (let tries = 0; tries < 60; tries++) {
-    const x = clamp(cx + rnd(-3, 3), .4, 13.6), y = clamp(cy + rnd(-3, 3), .4, Y - .4);
+    const x = clamp(cx + rnd(-3, 3), .4, WALL - .4), y = clamp(cy + rnd(-3, 3), .4, Y - .4);
     if (!walkable(x, y)) continue;
     if ([...people.values()].some(q => q !== p && Math.hypot(q.x - x, q.y - y) < .9)) continue;
     if (Object.values(SLOTS).some(l => l.some(s => Math.hypot(s.x - x, s.y - y) < .6))) continue;
@@ -853,7 +924,7 @@ function* rally(p, r, slot, side) {
 function rallyStep() {
   const r = OBJ.rally; if (!r) return;
   if (r.dead || r.ready < 2) { OBJ.ball = null; if (r.dead) OBJ.rally = null; return; }
-  const A = [10.15, 10.35, .95], B = [12.25, 10.35, .95];
+  const A = [10.15, 10.35 + SY, .95], B = [12.25, 10.35 + SY, .95];
   if (T < r.pause) { OBJ.ball = null; return; }
   let u = (T - r.t0) / r.dur;
   if (u >= 1) {
@@ -998,11 +1069,11 @@ function* ceoWork(p, slot) {
 }
 function placeWork(p) {
   stop(p); const m = p.mode;
-  if (m === "ceo") { const s = claim(p, "ceo", 0) || claim(p, "board") || claim(p, "review"); start(p, ceoWork(p, s || loiter(p))); return; }
+  if (m === "ceo") { const s = claim(p, "ceo", 0) || claim(p, "board") || claim(p, "review"); start(p, s && s.desk ? deskWork(p, s) : ceoWork(p, s || loiter(p))); return; }
   if (m === "review") { const s = claim(p, "review") || claim(p, "board"); start(p, reviewWork(p, s || loiter(p))); return; }
   if (m === "call") { const s = claim(p, "booth") || claim(p, "desk", p.deskIdx) || claim(p, "board"); start(p, callWork(p, s || loiter(p))); return; }
-  const s = claim(p, "desk", p.deskIdx) || claim(p, "board") || claim(p, "review");
-  if (s && s.desk) p.deskIdx = s.desk.i;
+  const s = (p.name === pmOfficeOf && claim(p, "pmoffice")) || claim(p, "desk", p.deskIdx) || claim(p, "board") || claim(p, "review");
+  if (s && s.desk && !s.desk.office) p.deskIdx = s.desk.i;
   start(p, deskWork(p, s || loiter(p)));
 }
 
@@ -1026,9 +1097,11 @@ function want(a) {
   if (a.current) return { mode: "call", key: "call#" + a.current.id, card: "↩ " + short(a.current.text, 34) };
   return { mode: "idle", key: "idle", card: null };
 }
-let events = [], first = true, lastBoard = null;
+let events = [], first = true, lastBoard = null, pmOfficeOf = null;
 function update(b) {
   lastBoard = b;
+  const pms = {}; for (const pr of b.products || []) if (pr.pm && pr.status !== "removed") pms[pr.pm] = (pms[pr.pm] || 0) + 1;
+  pmOfficeOf = Object.keys(pms).sort((a, c) => pms[c] - pms[a])[0] || null;      // the PM of the most products gets the office
   const seen = new Set();
   for (const a of b.agents || []) {
     seen.add(a.name);
@@ -1041,6 +1114,7 @@ function update(b) {
       people.set(a.name, p);
     }
     p.a = a; p.card = w.card; p.flag = w.flag;
+    const tk = a.task || a.focus?.task; p.since = w.mode === "idle" ? a.free_since : tk?.since || tk?.touched || null;
     if (p.key === w.key) continue;
     if (!isNew && !first) {
       const n = a.name, was = p.key || "";
@@ -1189,27 +1263,30 @@ function drawBase(g) {
   for (const zt of TOWER_ROWS) line(g, [P(0, Y, zt + .18), P(X, Y, zt + .18), P(X, 0, zt + .18)], "rgba(255,255,255,.55)", 1);
   box(g, -.05, -.05, -.32, X + .1, Y + .1, .32, C.slab);
   // floors, by room
-  const zone = (x, y) => x >= 14 ? "deck" : y < 5.6 ? (x < 9.6 ? "carpet" : y < 4.6 ? "board" : "review") : x < 5.1 ? "tile" : x < 9.6 ? "plank" : "review";
+  const zone = ZONE;
   for (let y = 0; y < Y - .01; y += .5) for (let x = 0; x < X - .01; x += .5) {
     const z = zone(x + .25, y + .25), i = Math.round(x * 2), j = Math.round(y * 2), alt = (i + j) % 2;
     const c = z === "carpet" ? (alt ? C.carpet : C.carpet2) : z === "board" ? (alt ? C.board : C.board2) : z === "tile" ? (alt ? C.tile : C.tile2)
       : z === "review" ? (alt ? C.review : C.review2) : z === "plank" ? shade(C.plank, ((hash(i * 7 + j * 3) % 7) - 3) * .012) : shade(C.deck, ((hash(i * 5 + j) % 7) - 3) * .015);
     poly(g, [P(x, y), P(x + .5, y), P(x + .5, y + .5), P(x, y + .5)], c);
   }
-  for (let y = 5.6; y < Y; y += .25) line(g, [P(5.1, y), P(9.6, y)], "rgba(90,60,30,.12)", .6);           // lounge planks
-  for (let x = 14; x < X; x += .25) line(g, [P(x, 0), P(x, Y)], "rgba(60,35,15,.22)", .7);              // deck boards
-  for (let y = .5; y < Y; y += 1.5) for (let x = 14; x < X; x += .25) if ((hash(x * 40 + y) % 3) === 0) line(g, [P(x, y), P(x + .25, y)], "rgba(60,35,15,.2)", .6);
+  for (let y = 5.6 + SY; y < Y; y += .25) line(g, [P(5.1, y), P(9.6, y)], "rgba(90,60,30,.12)", .6);      // lounge planks
+  for (let y = 0; y < OFFICE.end; y += .25) line(g, [P(OFFICE.x, y), P(WALL, y)], "rgba(90,60,30,.12)", .6);   // office floors
+  for (let x = WALL; x < X; x += .25) line(g, [P(x, 0), P(x, Y)], "rgba(60,35,15,.22)", .7);              // deck boards
+  for (let y = .5; y < Y; y += 1.5) for (let x = WALL; x < X; x += .25) if ((hash(x * 40 + y) % 3) === 0) line(g, [P(x, y), P(x + .25, y)], "rgba(60,35,15,.2)", .6);
   // rugs
-  poly(g, [P(6.45, 7.3), P(8.75, 7.3), P(8.75, 9.75), P(6.45, 9.75)], C.rugEdge); poly(g, [P(6.6, 7.45), P(8.6, 7.45), P(8.6, 9.6), P(6.6, 9.6)], C.rug);
-  for (let k = 0; k < 3; k++) poly(g, [P(6.9 + k * .02, 7.75 + k * .4), P(8.3, 7.75 + k * .4), P(8.3, 7.85 + k * .4), P(6.9 + k * .02, 7.85 + k * .4)], "rgba(200,120,80,.25)");
+  { const P2 = (x, y, z) => P(x, y + SY, z);
+    poly(g, [P2(6.45, 7.3), P2(8.75, 7.3), P2(8.75, 9.75), P2(6.45, 9.75)], C.rugEdge); poly(g, [P2(6.6, 7.45), P2(8.6, 7.45), P2(8.6, 9.6), P2(6.6, 9.6)], C.rug);
+    for (let k = 0; k < 3; k++) poly(g, [P2(6.9 + k * .02, 7.75 + k * .4), P2(8.3, 7.75 + k * .4), P2(8.3, 7.85 + k * .4), P2(6.9 + k * .02, 7.85 + k * .4)], "rgba(200,120,80,.25)"); }
+  for (const oy of [0, OFFICE.split]) { poly(g, [P(15.6, oy + .6), P(18.5, oy + .6), P(18.5, oy + 3.0), P(15.6, oy + 3.0)], C.rugEdge); poly(g, [P(15.75, oy + .75), P(18.35, oy + .75), P(18.35, oy + 2.85), P(15.75, oy + 2.85)], oy ? "#cfd8e3" : "#e3d5c7"); }
   poly(g, [P(9.85, 1.0), P(13.55, 1.0), P(13.55, 3.15), P(9.85, 3.15)], "rgba(141,108,171,.16)");
-  for (const by of [6.9, 8.2]) poly(g, [P(12.8, by), P(13.85, by), P(13.85, by + 1.1), P(12.8, by + 1.1)], "#cfd5dc");
+  for (const { y: by } of BOOTHS) poly(g, [P(12.8, by), P(13.85, by), P(13.85, by + 1.1), P(12.8, by + 1.1)], "#cfd5dc");
   // contact shadows: soft, under everything that stands on the floor
   g.save(); if ("filter" in g) g.filter = `blur(${Math.max(1, 3 * cam.s)}px)`;
   for (const [x, y, w, d, a] of SHADOWS) poly(g, [P(x - .05, y - .02), P(x + w + .12, y - .02), P(x + w + .12, y + d + .12), P(x - .05, y + d + .12)], `rgba(30,35,45,${a})`);
   g.restore();
   // back walls: windows with mullions on the city, the whiteboard, the boardroom screen, kitchen cabinets, a clock
-  box(g, -.22, -.22, 0, 14.22, .22, 2.75, C.wall, { hl: false }); box(g, -.22, 0, 0, .22, Y, 2.75, C.wall, { hl: false });
+  box(g, -.22, -.22, 0, WALL + .22, .22, 2.75, C.wall, { hl: false }); box(g, -.22, 0, 0, .22, Y, 2.75, C.wall, { hl: false });
   const winY = (x0, x1) => { poly(g, [P(x0, 0, .55), P(x1, 0, .55), P(x1, 0, 2.4), P(x0, 0, 2.4)], C.winFrame);
     const gl = [P(x0 + .05, 0, .6), P(x1 - .05, 0, .6), P(x1 - .05, 0, 2.35), P(x0 + .05, 0, 2.35)], [, ya] = gl[3], [, yb] = gl[0];
     const gr = g.createLinearGradient(0, ya, 0, yb); gr.addColorStop(0, "#b7dcf3"); gr.addColorStop(1, "#e3f2fb"); poly(g, gl, gr);
@@ -1220,20 +1297,21 @@ function drawBase(g) {
     gr.addColorStop(0, "#acd3ec"); gr.addColorStop(1, "#d9edf8"); poly(g, gl, gr);
     for (let y = y0 + .5; y < y1 - .1; y += .5) line(g, [P(0, y, .6), P(0, y, 2.35)], C.winFrame, 1.2);
     line(g, [P(0, y0, 1.55), P(0, y1, 1.55)], C.winFrame, 1); };
-  winY(.3, 3.0); winY(4.8, 9.4); winY(9.75, 10.45); winY(12.95, 13.9); winX(.3, 5.3);
+  winY(.3, 3.0); winY(4.8, 9.4); winY(9.75, 10.45); winY(12.95, 13.9); winY(14.6, 18.6); winX(.3, 5.3); winX(5.6, 10.3);
   poly(g, [P(3.15, 0, .85), P(4.65, 0, .85), P(4.65, 0, 2.0), P(3.15, 0, 2.0)], "#9aa3ab");
   poly(g, [P(3.2, 0, .9), P(4.6, 0, .9), P(4.6, 0, 1.95), P(3.2, 0, 1.95)], "#fbfcfd");
   poly(g, [P(3.15, .02, .82), P(4.65, .02, .82), P(4.65, .1, .85), P(3.15, .1, .85)], "#9aa3ab");
   poly(g, [P(10.55, 0, .95), P(12.85, 0, .95), P(12.85, 0, 1.98), P(10.55, 0, 1.98)], "#1c2027");
-  for (let y = 5.95; y < 9.9; y += 1.0) { box(g, 0, y, 1.55, .32, .98, .72, C.white, { hl: false });
+  for (let y = 5.95 + SY; y < 9.9 + SY; y += 1.0) { box(g, 0, y, 1.55, .32, .98, .72, C.white, { hl: false });
     const s = onR(0, y, 1.55, .32, .98, .72); line(g, [s(.5, .05), s(.5, .95)], "rgba(0,0,0,.12)", .7); line(g, [s(.45, .2), s(.45, .35)], "#8c959e", 1.2); line(g, [s(.55, .2), s(.55, .35)], "#8c959e", 1.2); }
-  for (let y = 5.95; y < 9.9; y += .2) line(g, [P(0, y, .92), P(0, y, 1.55)], "rgba(0,0,0,.06)", .6);
-  const [cx, cy] = P(0, 10.68, 2.38); g.fillStyle = "#fff"; g.strokeStyle = "#3b414a"; g.lineWidth = 1.4; g.beginPath(); g.ellipse(cx, cy, 6, 7.5, -.45, 0, 7); g.fill(); g.stroke();
+  for (let y = 5.95 + SY; y < 9.9 + SY; y += .2) line(g, [P(0, y, .92), P(0, y, 1.55)], "rgba(0,0,0,.06)", .6);
+  const [cx, cy] = P(0, 10.68 + SY, 2.38); g.fillStyle = "#fff"; g.strokeStyle = "#3b414a"; g.lineWidth = 1.4; g.beginPath(); g.ellipse(cx, cy, 6, 7.5, -.45, 0, 7); g.fill(); g.stroke();
   // room names on small wall plaques
   const plaque = (t, x, y, z, onX) => { g.save(); const [px, py] = P(x, y, z); g.translate(px, py); g.transform(1, onX ? -.5 : .5, 0, 1, 0, 0);
     g.font = "700 6.5px system-ui,sans-serif"; const w = g.measureText(t).width + 8; g.fillStyle = "rgba(40,46,56,.78)"; g.beginPath(); g.roundRect(0, -8, w, 10, 2); g.fill();
     g.fillStyle = "#fff"; g.fillText(t, 4, 0); g.restore(); };
-  plaque("BOARDROOM", 13.95, 0, 2.62, false); plaque("PRODUCT FLOOR", 5.6, 0, 2.62, false); plaque("KITCHEN", 0, 5.65, 2.62, true);
+  plaque("BOARDROOM", 13.95, 0, 2.62, false); plaque("PRODUCT FLOOR", 5.6, 0, 2.62, false); plaque("KITCHEN", 0, 5.65 + SY, 2.62, true);
+  plaque("CEO", 18.6, 0, 2.62, false); plaque("PM", OFFICE.x, OFFICE.split + .3, 2.62, true);
 }
 function drawWalls(g) {
   for (const s of OBJ.board.strokes) line(g, s.pts.map(([u, v]) => P(3.25 + u * 1.3, .01, 1.9 - v * .95)), s.col, .8);
@@ -1411,6 +1489,8 @@ function drawLabels(g) {
   g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = "source-over";
   const R3 = window.Office3D, ls = (R3 ? 1.1 : clamp(cam.s / DPR * .75, 1, 1.25)) * DPR, fs = 11.5 * ls, fs2 = 10.5 * ls, pad = 5 * ls, rad = 5 * ls;
   const tone = p => p.flag ? 0 : p.mode === "ceo" ? 1 : p.mode !== "idle" ? 2 : 3;
+  const now = lastBoard?.now || Date.now() / 1000;
+  const dur = s => { const m = Math.floor((now - s) / 60); return m < 1 ? "just now" : m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 1440)}d ${Math.floor(m % 1440 / 60)}h`; };
   // where a person's head and feet are on screen (canvas px), and the head's radius: the 3D view supplies p.scr
   const anc = p => R3 ? p.scr : p.handW && { head: toScreen(p.handW.head), foot: toScreen(P(p.x, p.y, 0)), r: BODY.head * p.look.scale * cam.s };
   const eyed = R3 && people.get(R3.gazed);                     // 3D eye tracking: whoever is being looked at gets a label whatever the mode, first in line, ringed
@@ -1422,11 +1502,12 @@ function drawLabels(g) {
   for (const p of list) {
     const a = anc(p), [hx, hy] = a.head, top = hy - a.r - 2 * ls;
     if (hx < 0 || hx > W || hy < 0 || hy > H) continue;          // zoomed past them: no label pinned to the edge
-    const t = tone(p), line2 = t === 1 || t === 2 ? p.card : null, badgeOnly = labelMode === "working" && t === 0 && p !== eyed;
+    const t = tone(p), clock = p.since ? dur(p.since) : null, line2 = t === 1 || t === 2 ? (clock ? `${p.card} · ${clock}` : p.card) : t === 3 && clock ? `idle · ${clock}` : null, badgeOnly = labelMode === "working" && t === 0 && p !== eyed;
     g.font = LABEL_FONT(fs); const w1 = g.measureText(p.name).width; g.font = LABEL_FONT(fs2, 500); const w2 = line2 ? g.measureText(line2).width : 0;
     const w = badgeOnly ? 0 : Math.max(w1, w2) + pad * 2, h = badgeOnly ? 0 : line2 ? fs + fs2 + pad * 1.6 : fs + pad * 1.2, badge = p.flag ? 16 * ls : 0;
     const ay = top - badge - 4 * ls;
-    const cands = [[0, 0], [w * .55, -2 * ls], [-w * .55, -2 * ls], [0, -h - 3 * ls], [w * .6, -h - 3 * ls], [-w * .6, -h - 3 * ls], [w * .75, h * .6], [-w * .75, h * .6]];
+    const cands = [[0, 0], [w * .75, h * .6], [-w * .75, h * .6]];
+    for (let k = 0; k < 4; k++) for (const dx of [0, .55, -.55, 1.05, -1.05]) cands.push([w * dx, -(h + 3 * ls) * k - (dx ? 2 * ls : 0)]);
     let rect = null;
     for (const [dx, dy] of cands) { const r = [hx - w / 2 + dx, ay - h + dy, w, h]; if (r[0] < 2 || r[0] + w > W - 2 || r[1] < 2) continue; if (!collide(r)) { rect = r; break; } }
     if (!rect) { if (t === 3 && p !== eyed) continue; rect = [clamp(hx - w / 2, 2, W - w - 2), Math.max(2, ay - h), w, h]; }
@@ -1589,7 +1670,7 @@ function mount() {
   requestAnimationFrame(frame);
 }
 window.Office = { update, mount,
-  sim: { X, Y, C, SOLIDS, DESKS, BOARD, BOOTHS, LIGHTS, OBJ, SLOTS, PARTS, people, shade, hash, get T() { return T; } },   // read-only, for office3d.js
+  sim: { X, Y, C, SOLIDS, DESKS, BOARD, BOOTHS, LIGHTS, OBJ, SLOTS, PARTS, people, shade, hash, WALL, SY, EX, DOOR, OFFICE, POOL, ZONE, get T() { return T; } },   // read-only, for office3d.js
   debug: { people, SLOTS, OBJ, get T() { return T; }, get cache() { return cache; },
   force(name, k) { const p = people.get(name); if (!p || p.mode !== "idle") return; stop(p); p.activity = k; start(p, IDLE[k][2](p)); } } };
 mount();
