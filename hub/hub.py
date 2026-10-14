@@ -173,6 +173,9 @@ MIGRATIONS = [
     "alter table agents add column fleet_rev text",       # version of the fleet command it last called with
     "alter table agents add column fleet_told real",
     "alter table needs_jack add column agent text",       # who raised it: Jack's reply goes to them
+    "alter table needs_jack add column what text",        # one short line: what the operator does
+    "alter table needs_jack add column why text",         # what it's blocking
+    "alter table needs_jack add column link text",        # where to do it
     "alter table products add column kind text default 'product'",   # 'tool': shared by every product, not sold
     "create table if not exists approvals(id text primary key, agent text, label text, detail text, options text, expires real)",     # the powers text this agent was last told       # a PM's company command waiting on the CEO's review
 ]
@@ -184,6 +187,7 @@ OPERATOR_ONLY = ("Go to an operator (Jack or Darragh) only when you're truly blo
                  "their ID, SSN or tax details, a phone number or 2FA code, a payment or purchase, or an account only they "
                  "can open. Everything else — choices, sign-offs, which option to take — decide yourself or with your PM; "
                  "don't send it to them.")
+ALLOW = ("allow_always", "allow_today", "allow_session", "allow_once")     # broadest allow Muse offers, first
 NUDGE_AFTER = 3600                     # a task holder silent this long is reminded, then its PM an hour later
 IDLE_AFTER = 12 * 3600
 STANDIN_AFTER = 3 * 3600              # a CEO silent this long is stood in for by seat ceo_backup
@@ -364,7 +368,7 @@ class Hub:
                     f"— It's yours until it's done. Post progress with `fleet task note {t} \"...\"`; when it's "
                     f"finished run `fleet task done {t} <link>` with a link to the evidence (commit, file or URL). "
                     f"{OPERATOR_ONLY} When you hit one, put it on their list at once: "
-                    f"`fleet task operator {t} \"<what to do, why, link>\"`.")
+                    f"`fleet task operator {t} \"<what to do, one short line>\" \"<why it blocks you>\" <link>`.")
         if kind == "verify":
             t = it["ref"]
             return (f"{head}[fleet · verify task #{t}]\n{body}\n"
@@ -769,15 +773,27 @@ class Hub:
             self._log(None, agent, "out", f"task #{tid} note: {text}")
             self._task_event(tid, agent, "note", text)
 
-    def task_for_jack(self, agent, tid, text):
+    @staticmethod
+    def _plain(what, why, link):
+        """Jack, Oct 13: "incredibly unclear instructions". One short action line, why it blocks, a link."""
+        what, why, link = (what or "").strip(), (why or "").strip() or None, (link or "").strip() or None
+        if not what or len(what) > 120:
+            raise ValueError("say what the operator does in one short line (under 120 characters, e.g. \"Create an Etsy "
+                             "API app for your shop\"); put the reason in why and the address in link")
+        if link and not re.match(r"https?://\S+$", link):
+            raise ValueError("the link must be a web address starting with https://")
+        return what, why, link
+
+    def task_for_jack(self, agent, tid, what, why=None, link=None):
         """A step only Jack/Darragh can do, put on their list with the task it came from; the task keeps going."""
+        what, why, link = self._plain(what, why, link)
         with self.lock:
             t = self._task_row(tid)
             if t["owner"] != agent or t["status"] != "working":
                 raise PermissionError(f"#{tid} isn't a task you're working on")
-            self.db.execute("insert into needs_jack(text, at, task, agent) values(?,?,?,?)",
-                            (f"From task #{tid} “{t['title']}” ({agent}): {text.strip()}", self.clock(), tid, agent))
-            self._task_event(tid, agent, "for jack", text)
+            self.db.execute("insert into needs_jack(text, at, task, agent, what, why, link) values(?,?,?,?,?,?,?)",
+                            (" — ".join(filter(None, [what, why, link])), self.clock(), tid, agent, what, why, link))
+            self._task_event(tid, agent, "for jack", what)
 
     def operator_items(self, tid):
         with self.lock:
@@ -795,7 +811,7 @@ class Hub:
                     not self.db.execute("select 1 from needs_jack where task=?", (tid,)).fetchone():
                 raise ValueError(f"#{tid} is work for an operator (Jack or Darragh), and nothing from it is on their list. "
                                  f"Put each step they must do there first, one per step, in plain words with the link:\n"
-                                 f"  fleet task operator {tid} \"<what to do, why, link>\"\nthen run task done again.")
+                                 f"  fleet task operator {tid} \"<what to do>\" \"<why it blocks you>\" <link>\nthen run task done again.")
         if not self.evidence_ok(link):                                  # network check, outside the lock
             raise ValueError(f"the evidence link doesn't open: {link}")
         with self.lock:
@@ -837,6 +853,8 @@ class Hub:
                 raise PermissionError(f"#{tid} isn't a task you're working on")
             who = (who or "outside").strip()
             board = who.lower() in ("jack", "darragh", "board", "operator")
+            if board:
+                what = self._plain(what, None, None)[0]
             if not board and who != "outside" and not self.db.execute("select 1 from agents where name=?", (who,)).fetchone():
                 raise ValueError(f"no agent {who}: wait on operator (Jack or Darragh), an agent's name, or outside")
             note = f"waiting on {who}: {what}"
@@ -847,9 +865,9 @@ class Hub:
             self._task_event(tid, agent, "waiting", note)
             self._log(None, agent, "out", f"task #{tid} {note}")
             if board:
-                self.db.execute("insert into needs_jack(text, at, task, agent) values(?,?,?,?)",
-                                (f"Task #{tid} “{t['title']}” ({agent}) is waiting on you: {what}. "
-                                 "Reply, or mark this done when it's sorted, and the task goes back to them.", self.clock(), tid, agent))
+                self.db.execute("insert into needs_jack(text, at, task, agent, what, why) values(?,?,?,?,?,?)",
+                                (f"Task #{tid} “{t['title']}” ({agent}) is waiting on you: {what}", self.clock(), tid, agent,
+                                 what, None))
             elif who != "outside":
                 self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('note',?,?,?,0,'queued',?)",
                                 (agent, who, f"Task #{tid} “{t['title']}” is waiting on you: {what}\n"
@@ -1176,6 +1194,8 @@ class Hub:
 
     APPROVALS_EVERY = 15                 # agents retry an upload the moment a request lapses: look often
 
+    auto_approve = False                 # hub.json "auto_approve" (on by default): allow every pop-up, around the clock
+
     def scan_approvals(self):
         """Read every agent's pending Muse permission pop-ups (its own thread, one agent at a time)."""
         with self.lock:
@@ -1190,6 +1210,13 @@ class Hub:
                 for x in pend:
                     self.db.execute("insert or replace into approvals values(?,?,?,?,?,?)",
                                     (x["id"], name, x["label"], x["detail"], json.dumps(x["options"]), x["expires"]))
+            for x in pend if self.auto_approve else ():
+                allow = next((o for o in ALLOW if o in x["options"]), None)
+                if allow:
+                    try:
+                        self.decide_approval("hub", name, x["id"], allow)
+                    except Exception:
+                        pass                                        # gone or refused: next round sees it again
 
     def approvals(self):
         """Muse permission pop-ups the agents are waiting on, soonest to expire first."""
@@ -1226,8 +1253,8 @@ class Hub:
                 "when you're waiting on someone (you're freed for other work; fleet task resume <id> when it's sorted), "
                 "fleet task verify when asked, fleet suggest \"<idea>\". "
                 "fleet task show <id> gives any task's status, holder and result link — look it up there, don't ask for it. "
-                f"{OPERATOR_ONLY} When you hit one: fleet task operator <id> \"<what to do, "
-                "why, and the link>\" — one plain step each, written for someone who hasn't read your work; they can reply "
+                f"{OPERATOR_ONLY} When you hit one: fleet task operator <id> \"<what to do, one "
+                "short line>\" \"<why it blocks you>\" <link> — one plain step each, written for someone who hasn't read your work; they can reply "
                 "to you from it. To stop until they act, use fleet task wait <id> operator \"<what>\". Tools (marked tool in fleet portfolio) are shared "
                 "by every product: use them, and put tool work in the tool, not in your product.")
         if self._ceo_level(who):
@@ -2393,7 +2420,7 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         elif verb == "resume":
                             hub.task_resume(name, tid)
                         elif verb in ("operator", "jack"):
-                            hub.task_for_jack(name, tid, b["text"])
+                            hub.task_for_jack(name, tid, b.get("what") or b.get("text"), b.get("why"), b.get("link"))
                         else:
                             raise ValueError(f"unknown task action {verb}")
                         self._json(200, {"ok": True, "task": hub.task(tid)["status"]})
@@ -2580,6 +2607,7 @@ def main(cfg_path, *args):
     muse_t = muse.MuseTransport(cfg["muse_cli"], accounts)
     h = Hub(cfg["db"], None)
     h.jobs_dir = cfg.get("jobs_dir")
+    h.auto_approve = cfg.get("auto_approve", True)      # Jack, Oct 13: allow everything automatically
     vault = lambda name: (h.db.execute("select value from secrets where name=?", (name,)).fetchone() or {"value": None})["value"]
     slack_t = muse.SlackTransport(token=lambda: (vault("slack-bot-token") or "").strip() or None,
                                   users=cfg.get("slack_users", {}), state_dir=os.path.dirname(cfg["db"]))

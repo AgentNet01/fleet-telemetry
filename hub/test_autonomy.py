@@ -273,6 +273,22 @@ def approvals():
     print("approvals OK")
 
 
+def auto_approve():
+    """Jack, Oct 13: auto-approve lived in the Muse wall on his Mac, so nothing was allowed while it slept.
+    The hub allows every pop-up itself, around the clock, with the broadest allow Muse offers, and logs it."""
+    h, muse, clock = new_hub("Boboe 3", "Neo")
+    h.auto_approve = True
+    muse.pending["Boboe 3"] = [{"id": "a1", "label": "Shell command", "detail": "endpoint cas-server.xethub.hf.co:443",
+                                "options": ["allow_once", "allow_always", "deny"], "expires": clock() + 600}]
+    muse.pending["Neo"] = [{"id": "a2", "label": "Upload a file and create a public link", "detail": "",
+                            "options": ["allow_once", "deny"], "expires": clock() + 600}]
+    h.scan_approvals()
+    assert sorted(muse.decided) == [("Boboe 3", "a1", "allow_always"), ("Neo", "a2", "allow_once")], muse.decided
+    assert h.board()["approvals"] == [], "auto_approve: nothing left waiting"
+    assert any(c["by"] == "hub" and "Shell command" in c["line"] for c in h.changes(5)), "auto_approve: logged as the hub's"
+    print("auto_approve OK")
+
+
 def paused():
     """Jack, Oct 13: a paused product is kept, but nobody takes its tasks and no new ones can be added."""
     h, muse, clock = new_hub("Ada", "Bo")
@@ -441,4 +457,4 @@ def chain():
 
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain}[sys.argv[1]]()
+     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain}[sys.argv[1]]()

@@ -62,6 +62,15 @@ button.row{cursor:pointer}button.row:hover{background:var(--panel2)}
 .njrow{display:flex;gap:10px;align-items:flex-start}
 .njrow .t{flex:1;min-width:0;word-break:break-word;font-size:14px}
 .njrow .when{color:var(--faint);font-size:12px;white-space:nowrap}
+.njreply[hidden]{display:none}
+.njwhat{font-weight:600;font-size:15px;line-height:1.35}
+.njwhy{color:var(--dim);margin-top:3px}
+.njmeta{color:var(--faint);font-size:12px;margin-top:6px}
+.njact{display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end}
+.njact a.btn{text-decoration:none}
+@media (max-width:640px){.njrow{flex-wrap:wrap}.njrow .t{flex-basis:100%}.njact{justify-content:flex-start}}
+.njbanner{display:block;margin:0 0 14px;padding:12px 16px;border:1px solid var(--warn);border-radius:10px;color:var(--fg);font-weight:600;text-decoration:none}
+.njbanner:hover{background:var(--panel2)}
 .njreply{display:flex;gap:8px;margin-top:8px;align-items:flex-end}.njreply textarea{flex:1;font:inherit;font-size:14px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
 .njrow details summary{color:var(--faint);font-size:12px;cursor:pointer;margin-top:4px}
 .njrow pre{white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:8px;margin:6px 0 0;overflow:auto}
@@ -250,6 +259,7 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
   <div class="hero"><div class="lbl">Revenue · made so far</div><div class="big" id="money">$0.00</div><div class="chips" id="revchips"></div></div>
   <div class="tabs" id="tabs" role="tablist">
     <button class="tab" role="tab" data-tab="overview" aria-selected="true">Overview</button>
+    <button class="tab" role="tab" data-tab="needs">Needs you <span id="njtab"></span></button>
     <button class="tab" role="tab" data-tab="activity">Activity</button>
     <button class="tab" role="tab" data-tab="portfolio">Portfolio</button>
     <button class="tab" role="tab" data-tab="org">Org</button>
@@ -260,14 +270,10 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
   <section id="overview">
     <div id="apwrap" hidden>
       <h2>Waiting for your OK <span id="apn"></span></h2>
-      <div class="hint">Agents are paused on these Muse permission pop-ups until someone decides; each expires after an hour.</div>
+      <div class="hint">Muse permission pop-ups. The hub allows each one by itself within seconds; Deny here to stop one first.</div>
       <div class="card nj" id="ap"></div>
     </div>
-    <div id="njwrap">
-      <h2>Needs an operator <span id="njn"></span></h2>
-      <div class="hint">Agents are blocked on these until Jack or Darragh act — ID and tax details, phone numbers, payments, accounts in your name. Reply, or mark done when handled.</div>
-      <div class="card nj" id="nj"></div>
-    </div>
+    <a href="#needs" class="njbanner" id="njlink" hidden></a>
     <div class="office" id="office">
       <canvas id="officecv" role="img" aria-label="The office. Each agent is in the room that matches what it is doing: desks for work, the review table for checking, the booths for replies; a red badge means not answering. The same agents are behind the List button."></canvas>
       <div class="ohud" id="ohud"></div>
@@ -304,6 +310,11 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
       </aside>
     </div>
   </section>
+  <section id="needs" hidden>
+    <h2>Needs you <span id="njn"></span></h2>
+    <div class="hint">Only Jack or Darragh can do these: ID and tax details, phone numbers, payments, accounts in your name. Agents are blocked until it's done. Reply to answer the agent; Done when it's handled.</div>
+    <div class="card nj" id="nj"></div>
+  </section>
   <section id="portfolio" hidden>
     <h2>Portfolio <button class="btn sm" id="addprod">+ Product</button></h2>
     <div class="hint">A product is a small business. Open one to see its projects (phases) and tasks (the work). The CEO and PMs create tasks — you can too.</div>
@@ -322,7 +333,7 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
   </section>
   <section id="org" hidden>
     <h2>Org</h2>
-    <div class="hint">Every seat is interchangeable: an agent, Jack or Darragh can hold it. Anything sent to a board member lands in Needs an operator with their name on it. Products aren't fixed to people: each task brings its product's context with it.</div>
+    <div class="hint">Every seat is interchangeable: an agent, Jack or Darragh can hold it. Anything sent to a board member lands in Needs you with their name on it. Products aren't fixed to people: each task brings its product's context with it.</div>
     <div id="orgbody"></div>
   </section>
   <section id="suggestions" hidden>
@@ -428,19 +439,24 @@ async function load(){
   document.querySelectorAll("[data-ap]").forEach(el=>el.onclick=async()=>{ const [agent,id,decision]=el.dataset.ap.split("|");
     el.disabled=true; try{ await jpost("api/jack/approve",{agent,id,decision}); toast(decision==="deny"?"Denied":"Allowed"); load(); }catch(e){ el.disabled=false; toast(e.message); }});
 
-  const nj=b.needs_jack||[];
-  $("njwrap").hidden = !nj.length;
-  $("njn").innerHTML = nj.length?`<span style="color:var(--warn)">(${nj.length})</span>`:"";
-  $("nj").innerHTML = nj.length ? nj.map(n=>{
-    const [head,...rest]=String(n.text).split("\n"); const more=rest.join("\n").trim();
-    return `<div class="row njrow"><div class="t">${rich(head)}
+  const nj=(b.needs_jack||[]).map(n=>({...n, paused:!!(n.task&&findTask(n.task)&&findTask(n.task).t.waiting_on)}))
+    .sort((a,c)=>(c.paused-a.paused)||(c.at-a.at));       // what's holding a task up first, then newest
+  const cnt=nj.length?`<span style="color:var(--warn)">(${nj.length})</span>`:"";
+  $("njn").innerHTML=cnt; $("njtab").innerHTML=cnt;
+  $("njlink").hidden=!nj.length; $("njlink").textContent=`${nj.length} thing${nj.length>1?"s":""} need${nj.length>1?"":"s"} you →`;
+  // a reply being written survives the 10-second refresh
+  if(!$("nj").querySelector(".njreply:not([hidden])")) $("nj").innerHTML = nj.length ? nj.map(n=>{
+    const [head,...rest]=String(n.what||n.text).split("\n"); const more=n.what?"":rest.join("\n").trim(), f=n.task&&findTask(n.task);
+    return `<div class="row njrow"><div class="t">
+      <div class="njwhat">${rich(head)}</div>${n.why?`<div class="njwhy">${rich(n.why)}</div>`:""}
       ${more?`<details><summary>details</summary><pre>${rich(more)}</pre></details>`:""}
+      <div class="njmeta">${esc(n.agent||"Hub")}${n.task?` · <a href="#" data-ref="${n.task}">task #${n.task}</a>${f?` ${esc(f.t.title)}`:""}`:""} · ${ago(n.at)}${n.paused?` · <b style="color:var(--warn)">its task is paused until this is done</b>`:""}</div>
       ${n.agent?`<form class="njreply" data-reply="${n.id}" hidden><textarea name="text" rows="2" required aria-label="Reply to ${esc(n.agent)}" placeholder="Your answer goes to ${esc(n.agent)}"></textarea><button class="btn sm primary" type="submit">Send</button></form>`:""}</div>
-      <div class="when">${ago(n.at)}</div>${n.agent?`<button class="btn sm" data-replyopen="${n.id}">Reply</button>`:""}<button class="btn sm" data-dismiss="${n.id}" title="${n.task?"Done: the task goes back to its agent":"Dismiss"}">${n.task?"Done":"Dismiss"}</button></div>`;}).join("")
+      <div class="njact">${n.link?`<a class="btn sm primary" href="${esc(docUrl(n.link))}" target="_blank" rel="noopener">Open ↗</a>`:""}${n.agent?`<button class="btn sm" data-replyopen="${n.id}">Reply</button>`:""}<button class="btn sm" data-dismiss="${n.id}" title="${n.task?"Done: the task goes back to its agent":"Dismiss"}">${n.task?"Done":"Dismiss"}</button></div></div>`;}).join("")
     : `<div class="row empty">Nothing needs you right now.</div>`;
   document.querySelectorAll("[data-replyopen]").forEach(el=>el.onclick=()=>{ const f=document.querySelector(`[data-reply="${el.dataset.replyopen}"]`); f.hidden=!f.hidden; if(!f.hidden) f.text.focus(); });
   document.querySelectorAll("[data-reply]").forEach(f=>f.onsubmit=async e=>{ e.preventDefault(); const b=f.querySelector("button"); b.disabled=true;
-    try{ await jpost("api/jack/reply",{id:+f.dataset.reply,text:f.text.value}); toast("Sent — it's off your list"); load(); }catch(err){ b.disabled=false; toast(err.message); }});
+    try{ await jpost("api/jack/reply",{id:+f.dataset.reply,text:f.text.value}); toast("Sent — it's off your list"); f.hidden=true; load(); }catch(err){ b.disabled=false; toast(err.message); }});
   document.querySelectorAll("[data-dismiss]").forEach(el=>el.onclick=async()=>{
     el.disabled=true; try{ await jpost("api/jack/dismiss",{id:+el.dataset.dismiss}); toast("Dismissed"); load(); }catch(e){ el.disabled=false; toast(e.message); }});
 
@@ -890,7 +906,7 @@ async function loadOlder(){
 $("feed").addEventListener("scroll",e=>{ const f=e.target; if(f.scrollHeight-f.scrollTop-f.clientHeight<200) loadOlder(); });
 $("customrange").onsubmit=e=>{ e.preventDefault(); const f=$("rng_from").value, t=$("rng_to").value; if(!f) return toast("Pick a start time");
   act.since=new Date(f).getTime()/1000; act.until=t?new Date(t).getTime()/1000:null; resetOlder(); renderActivity(); };
-function showOnly(id){ if(id!=="detail") shownFor=null; document.querySelector(".hero").hidden = id==="detail"; ["overview","activity","portfolio","product","org","suggestions","council","vault","detail"].forEach(s=>$(s).hidden=s!==id); }
+function showOnly(id){ if(id!=="detail") shownFor=null; document.querySelector(".hero").hidden = id==="detail"; ["overview","needs","activity","portfolio","product","org","suggestions","council","vault","detail"].forEach(s=>$(s).hidden=s!==id); }
 function selectTab(name){ tab=name; openAgent=null; openProduct=null;
   document.querySelectorAll(".tab").forEach(t=>t.setAttribute("aria-selected", t.dataset.tab===name));
   showOnly(name); if(name==="activity") renderActivity(); if(name==="council") renderCouncil(); if(name==="vault") renderVault();
@@ -899,6 +915,7 @@ document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>selectTab(t.dataset.t
 document.querySelectorAll("[data-back]").forEach(b=>b.onclick=()=>selectTab(b.dataset.back));
 function paintTheme(){ const light=document.documentElement.dataset.theme==="light", b=$("theme");
   b.textContent=light?"☾ Dark":"☀ Light"; b.setAttribute("aria-label",light?"Switch to dark mode":"Switch to light mode"); }
+$("njlink").onclick=e=>{ e.preventDefault(); selectTab("needs"); };
 $("theme").onclick=()=>{ const t=document.documentElement.dataset.theme==="light"?"dark":"light";
   document.documentElement.dataset.theme=t; try{ localStorage.setItem("hub-theme",t); }catch(e){} paintTheme(); };
 paintTheme();

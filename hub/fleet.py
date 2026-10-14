@@ -18,9 +18,11 @@
     fleet task wait <id> <who> "<what you need>"   waiting on operator, an agent, or outside: the task
                                      is parked for you and you take other work meanwhile
     fleet task resume <id>           the wait is over: the task comes back to you
-    fleet task operator <id> "<what to do, why, link>"   only when you're blocked on a real person (Jack or
-                                     Darragh): their ID, SSN/tax, a phone number or 2FA, a payment, an account only
-                                     they can open. One step each; the task keeps going. Choices you decide yourself.
+    fleet task operator <id> "<what to do>" "<why it blocks you>" [<link>]   only when you're blocked on a real
+                                     person (Jack or Darragh): their ID, SSN/tax, a phone number or 2FA, a payment, an
+                                     account only they can open. What = one short line ("Create an Etsy API app for your
+                                     shop"); why = what it blocks; link = where to do it. One step each; the task keeps
+                                     going. Choices you decide yourself.
     fleet task release <id>          put a task back up for grabs (CEO / the product's PM only)
     fleet suggest "<text>"           suggest a change to your PM and the CEO
 
@@ -259,8 +261,11 @@ def main(args):
     elif cmd == "task" and len(args) >= 3 and args[1] in ("note", "done", "verify", "release", "wait", "resume", "operator", "jack"):
         verb, tid = args[1], int(args[2])
         body = {"task": tid}
-        if verb in ("note", "operator", "jack") and len(args) == 4:
+        if verb == "note" and len(args) == 4:
             body["text"] = args[3]
+        elif verb in ("operator", "jack") and 4 <= len(args) <= 6:
+            link = next((x for x in args[4:] if x.startswith(("http://", "https://"))), None)
+            body.update(what=args[3], why=next((x for x in args[4:] if x != link), None), link=link)
         elif verb == "done" and len(args) == 4:
             body["link"] = args[3]
         elif verb == "wait" and len(args) == 5:

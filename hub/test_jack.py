@@ -5,6 +5,7 @@
     python3 test_jack.py tools    # a product can be a tool: shared by every product, listed apart
     python3 test_jack.py doc      # the doc viewer only fetches Muse files and can't be broken out of
     python3 test_jack.py show     # any agent looks up any task's result link itself instead of asking the CEO
+    python3 test_jack.py plain    # each item is one short action, why it blocks, and a link — rambling is refused
     python3 test_jack.py ui       # in the browser: Jack opens a #reference, replies from his list, sees Tools apart
 """
 import sys
@@ -107,6 +108,33 @@ def doc():
     print("doc OK")
 
 
+def plain():
+    """Jack, Oct 13: "these are incredibly unclear instructions" — each item says what to do in one line."""
+    h, muse, clock = new_hub("Boboe 6")
+    pj = h.add_project(h.add_product("Shop", brief="etsy"), "launch")
+    tid = h.add_task(pj, "Automate order updates", "engineer", "spec", owner="Boboe 6")
+    h.tick(); h.tick()
+    h.task_for_jack("Boboe 6", tid, "Create an Etsy API app for your shop",
+                    "Agents can't send tracking numbers or buyer messages through Etsy until it exists",
+                    "https://www.etsy.com/developers/register")
+    n = [x for x in h.needs_jack() if x["task"] == tid][0]
+    assert (n["what"], n["why"], n["link"]) == ("Create an Etsy API app for your shop",
+        "Agents can't send tracking numbers or buyer messages through Etsy until it exists",
+        "https://www.etsy.com/developers/register"), n
+    try:
+        h.task_for_jack("Boboe 6", tid, "Log into the Printful and PrintKK seller dashboards and report the production times "
+                        "and US transit times for our products (Printful: art prints, mugs, tumblers; PrintKK: ornaments)")
+        raise AssertionError("plain: a rambling action line is refused")
+    except ValueError as e:
+        assert "one short line" in str(e), e
+    try:
+        h.task_for_jack("Boboe 6", tid, "Open Printful", "needed", "printful.com")
+        raise AssertionError("plain: a link must be a web address")
+    except ValueError:
+        pass
+    print("plain OK")
+
+
 def show():
     """Oct 13: Neo asked dot (the CEO, over Slack) for #188's evidence link; nothing let it look the link up."""
     import os, subprocess, tempfile, threading
@@ -145,7 +173,11 @@ def ui():
     with sync_playwright() as pw:
         page = pw.chromium.launch().new_page(http_credentials={"username": "jack", "password": "pw"})
         page.goto(f"http://127.0.0.1:{srv.server_address[1]}/")
+        page.get_by_role("link", name="1 thing needs you").click()          # Overview points to the page
+        expect(page.get_by_role("tab", name="Needs you")).to_have_attribute("aria-selected", "true")
         row = page.locator(".njrow", has_text="is physical work in scope")
+        expect(row.get_by_role("textbox")).to_be_hidden()                   # the reply box opens on Reply, not before
+        expect(row).to_contain_text("brutus")
         expect(row.get_by_role("link", name="https://muse.ai/files/1/2/x/scope.md")).to_have_attribute(
             "href", "doc?u=https%3A%2F%2Fmuse.ai%2Ffiles%2F1%2F2%2Fx%2Fscope.md")
         row.get_by_role("link", name=f"#{tid}").click()
@@ -162,4 +194,4 @@ def ui():
     print("ui OK")
 
 
-{"steps": steps, "reply": reply, "tools": tools, "doc": doc, "show": show, "ui": ui}[sys.argv[1]]()
+{"steps": steps, "reply": reply, "tools": tools, "doc": doc, "show": show, "plain": plain, "ui": ui}[sys.argv[1]]()

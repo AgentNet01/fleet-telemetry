@@ -120,7 +120,7 @@ def dashboard():
     assert get(port, "/")[0] == 401, "dashboard needs the password"
     assert get(port, "/", "nope")[0] == 401
     code, page = get(port, "/", PASSWORD)
-    assert code == 200 and "Needs an operator" in page, "page loads with a Needs an operator section"
+    assert code == 200 and "Needs you" in page, "page loads with a Needs you section"
     for section in ("Revenue", "Portfolio", "Vault", "Council"):
         assert section in page, f"dashboard is missing the {section} section"
     board = json.loads(get(port, "/api/board", PASSWORD)[1])
