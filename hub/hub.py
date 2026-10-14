@@ -682,7 +682,9 @@ class Hub:
     def _idle(self, product=None, role=None, pin=None):
         """An active, un-parked agent with nothing in flight and nothing queued, optionally in a given brain.
         A pinned task skips team routing: only the named agent counts."""
-        for a in self.db.execute(f"select * from agents where kind in {WORKERS} and state='active' order by name").fetchall():
+        # not joined yet (no token): its Muse login is on the hub, but it can't run fleet commands, so work would bounce
+        for a in self.db.execute(f"select * from agents where kind in {WORKERS} and state='active' "
+                                 "and token_hash is not null order by name").fetchall():
             if self._open_tasks(a["name"]):
                 continue                             # only holding a task makes an agent busy; a pending question doesn't
             if pin and a["name"] != pin:
@@ -975,7 +977,7 @@ class Hub:
         when that set of agents changes or another 12 h pass. Idle agents themselves are never messaged."""
         now, ceo = self.clock(), self._chair()
         idle = [a for a in self.db.execute(f"select * from agents where kind in {WORKERS} and state='active' "
-                                           "and free_since is not null order by name").fetchall()
+                                           "and token_hash is not null and free_since is not null order by name").fetchall()
                 if a["name"] != ceo and now - a["free_since"] > IDLE_AFTER]
         if len(idle) <= CEO_IDLE_COUNT:
             return

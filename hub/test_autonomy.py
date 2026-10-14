@@ -442,6 +442,15 @@ def switch_edit():
     print("switch_edit OK")
 
 
+def unjoined():
+    """Oct 14 live: Boboe 13's login was on the hub but it hadn't joined; it was handed a verify and a switch, and
+    refused both (no fleet CLI on its machine). Work waits for an agent that has joined."""
+    h, muse, clock = new_hub("Ada")
+    h.db.execute("insert or ignore into agents(name, kind) values('Boboe 13', 'muse')")
+    assert list(h._idle()) == ["Ada"], list(h._idle())
+    print("unjoined OK")
+
+
 def chain():
     """Oct 13 live: each product was one chain (scan → concept → designs → package); with only the current step
     takeable, most agents sat free and no planning ran because the chain's later steps counted as queued."""
@@ -457,4 +466,4 @@ def chain():
 
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain}[sys.argv[1]]()
+     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain, "unjoined": unjoined}[sys.argv[1]]()
