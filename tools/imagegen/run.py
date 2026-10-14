@@ -191,6 +191,9 @@ def main() -> int:
                     help="Replace a CPU-only torch with the CUDA wheel, then generate")
     ap.add_argument("--sdxl", action="store_true",
                     help="Use the SDXL pipeline (for SDXL-class models, e.g. Lykon/dreamshaper-xl-1-0)")
+    ap.add_argument("--upscale", action="store_true",
+                    help="4x upscale the output with Real-ESRGAN (tiled, task #537); "
+                         "saves a second -x4.png next to the original")
     ap.add_argument("--out", default=".", help="Output directory (default: current dir). "
                       "Under the hub runner, paths outside the job's output dir are "
                       "contained to it so files stay retrievable (task #333)")
@@ -278,6 +281,23 @@ def main() -> int:
     size = os.path.getsize(out_path)
     print(f"wrote {out_path}  seed={seed} steps={args.steps} size={args.size} "
           f"device={device} secs={elapsed:.1f} bytes={size}")
+    if args.upscale:
+        # Task #537: 4x Real-ESRGAN upscale (vendored, tiled for 8GB VRAM).
+        # Weights download on first use; runs on the generation device.
+        # The hub runner's cwd is the job out dir, so anchor the import
+        # to this file's directory.
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from upscaler import upscale_image
+        u0 = time.time()
+        up, vram_mb = upscale_image(image, device=device)
+        u_elapsed = time.time() - u0
+        up_name = name.replace(".png", "-x4.png")
+        up_path = os.path.join(out_dir, up_name)
+        up.save(up_path)
+        up_size = os.path.getsize(up_path)
+        uw, uh = up.size
+        print(f"upscaled {up_path}  {uw}x{uh} device={device} "
+              f"upscale_secs={u_elapsed:.1f} vram_mb={vram_mb:.0f} bytes={up_size}")
     return 0
 
 
