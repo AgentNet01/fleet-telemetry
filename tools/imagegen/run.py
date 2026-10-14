@@ -86,13 +86,13 @@ def ensure_cuda_torch():
     """`--cuda-torch`: replace a CPU-only torch with the CUDA wheel, once.
 
     The hub's imagegen was running on CPU because its torch was the CPU-only
-    wheel (the bootstrap no-ops when torch is merely *present*). Default
-    PyPI ships CUDA torch, so a force-reinstall fixes it — but the index is
-    pinned explicitly to https://pypi.org/simple: the hub's pip config
-    (pip.conf / PIP_INDEX_URL) points at the CPU wheel index, and a plain
-    `pip install torch` reinstalled the CPU wheel (job 1791959699900:
-    reinstall ran, result still torch 2.14.1+cpu, cuda_available=False).
-    The explicit --index-url overrides that config. Guarded by
+    wheel (the bootstrap no-ops when torch is merely *present*). PyPI's
+    torch is CPU-only, so a reinstall from PyPI (plain or explicit index)
+    just reinstalls the CPU wheel — jobs 1791959699900 and 1791976447507
+    proved that. The CUDA wheels live on PyTorch's own index, so the
+    reinstall uses --index-url https://download.pytorch.org/whl/cu126
+    (verified to host torch-2.14.1+cu126-cp313-win_amd64, matching the
+    hub's Python 3.13). Guarded by
     IMAGEGEN_CUDA_TORCH_DONE so the re-exec below runs the check once.
     """
     if "--cuda-torch" not in sys.argv or os.environ.get("IMAGEGEN_CUDA_TORCH_DONE") == "1":
@@ -107,7 +107,7 @@ def ensure_cuda_torch():
           f"PIP_INDEX_URL={os.environ.get('PIP_INDEX_URL')}", file=sys.stderr)
     for attempt in (False, True):
         cmd = [sys.executable, "-m", "pip", "install", "--user", "--force-reinstall",
-               "--index-url", "https://pypi.org/simple", "torch"]
+               "--index-url", "https://download.pytorch.org/whl/cu126", "torch"]
         if attempt:
             cmd.append("--break-system-packages")
         if subprocess.run(cmd).returncode == 0:
