@@ -209,9 +209,11 @@ def main() -> int:
         pipe.enable_attention_slicing()
     if args.sdxl:
         # SDXL weights (~7 GB fp16) are tight on 8 GB VRAM; slicing keeps
-        # 1024px generation inside memory at a small speed cost.
+        # 1024px generation inside memory at a small speed cost. VAE slicing
+        # lives on the VAE object in this diffusers version, not the pipeline.
         pipe.enable_attention_slicing()
-        pipe.enable_vae_slicing()
+        if hasattr(pipe.vae, "enable_slicing"):
+            pipe.vae.enable_slicing()
 
     seed = args.seed if args.seed is not None else int.from_bytes(os.urandom(4), "big")
     generator = torch.Generator(device=device).manual_seed(seed)
