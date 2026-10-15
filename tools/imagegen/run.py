@@ -283,7 +283,10 @@ def main() -> int:
     if device == "cuda":
         # Peak VRAM incl. weights + activations (task #1096: load test needs
         # per-job VRAM; max_memory_allocated is a cheap query, no timing effect).
+        # Total VRAM identifies the card the job actually ran on (#1096 found
+        # a 10737 MiB peak, over the 8 GB the #1050 check reported).
         vram = f" vram_mb={torch.cuda.max_memory_allocated() / 1048576:.0f}"
+        vram += f" vram_total_mb={torch.cuda.get_device_properties(0).total_memory / 1048576:.0f}"
     print(f"wrote {out_path}  seed={seed} steps={args.steps} size={args.size} "
           f"device={device} secs={elapsed:.1f} bytes={size}{vram}")
     if args.upscale:
