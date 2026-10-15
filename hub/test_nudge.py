@@ -13,6 +13,8 @@ from test_hub import Clock, FakeMuse
 
 H = 3600
 
+hub.TASK_CAP = 10 ** 9        # these cases hold a task silently for hours on purpose; the cap is test_autonomy overdue
+
 
 def world(workers=("Ada",)):
     clock, muse = Clock(), FakeMuse()

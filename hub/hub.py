@@ -213,6 +213,7 @@ OPERATOR_ONLY = ("Go to an operator (Jack or Darragh) only when you're truly blo
                  "don't send it to them. Prices are yours to set; never below cost after maker, shipping and Etsy fees. "
                  "Facts you can look up, read in a file or ask a maker's support for are yours too.")
 ALLOW = ("allow_always", "allow_today", "allow_session", "allow_once")     # broadest allow Muse offers, first
+TASK_CAP = 2 * 3600                     # Jack, Oct 15: tasks held 5h+ on "still blocked" notes; past this it goes back to its PM
 NUDGE_AFTER = 3600                     # a task holder silent this long is reminded, then its PM an hour later
 IDLE_AFTER = 12 * 3600
 STANDIN_AFTER = 3 * 3600              # a CEO silent this long is stood in for by seat ceo_backup
@@ -477,6 +478,7 @@ class Hub:
             self._assign_verifiers()
             self._track_free()
             self._nudge()
+            self._overdue()
             self._ceo_idle()
             self._watch_chair()
             self._watch_powers()
@@ -1114,6 +1116,26 @@ class Hub:
                     self._set("agents", a["name"], free_since=None)
             elif a["free_since"] is None:
                 self._set("agents", a["name"], free_since=self.clock())
+
+    def _overdue(self):
+        """A task held past TASK_CAP isn't going to finish this sitting (it waits on money, days of data, a listing that's
+        down...). It's parked for its PM, who splits, re-scopes or drops it; the holder is freed for other work."""
+        now = self.clock()
+        for t in self.db.execute("select * from tasks where status='working' and owner is not null").fetchall():
+            since = self.db.execute("select max(at) from task_events where task=? and what='assigned'", (t["id"],)).fetchone()[0]
+            if not since or now - since < TASK_CAP:
+                continue
+            pm = self.db.execute("select pm from products where name=?", (self._task_product(t["id"]),)).fetchone()
+            boss = (pm["pm"] if pm and pm["pm"] != t["owner"] else None) or self._chair()
+            last = (t["progress_note"] or "no progress posted").strip()[:300]
+            what = (f"it ran {int((now - since) // 3600)}h without finishing, so the hub parked it and freed {t['owner']}. "
+                    f"Last note: {last} — Decide: split it into tasks that can finish in one sitting, wait it on what it really "
+                    f"needs (money from Jack: `fleet task operator`), or drop it (`fleet task set {t['id']} status cancelled`). "
+                    f"To give it back as is: fleet task resume {t['id']}")
+            to = boss if boss and boss != t["owner"] else "outside"
+            self._note(t["owner"], f"#{t['id']} “{t['title']}” is parked: {int((now - since) // 3600)}h without finishing",
+                       f"The hub handed it to {to} to split, re-scope or drop. Stop work on it; your next task comes from the hub.")
+            self.task_wait(t["owner"], t["id"], to, what)
 
     def _nudge(self):
         """A holder with no progress for an hour gets a nudge, worded differently each time; the clock

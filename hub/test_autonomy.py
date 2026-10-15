@@ -113,6 +113,7 @@ def truth():
 
 
 def planning():
+    hub.TASK_CAP = 10 ** 9        # its tasks sit held for hours by design; the cap is tested in overdue
     h, muse, clock = new_hub("Pat", "Ada", "Bo", "Cy")
     pid = h.add_product("Gifts", brief="personalized pet portraits on Etsy", metric="first sale")
     prj = h.add_project(pid, "launch")
@@ -347,6 +348,34 @@ def pause_board_only():
     print("pause_board_only OK")
 
 
+def overdue():
+    """Jack, Oct 15: Boboe 6 held "Hats Etsy Ads test launch" 5h35m and Boboe 8 a "7-day monitoring log" 5h, each posting
+    "still blocked" notes, so no nudge ever fired. A task held past TASK_CAP is parked for its PM and its holder is freed."""
+    h, muse, clock = new_hub("Ada", "Bo", "Pam")
+    pid = h.add_product("Hats", brief="hats")
+    h.db.execute("update products set pm='Pam' where id=?", (pid,))
+    pa = h.add_project(pid, "launch")
+    ads = h.add_task(pa, "Hats Etsy Ads test launch", "marketer", "campaign live", owner="Ada")
+    h.tick(); h.tick()
+    assert h.task(ads)["status"] == "working", h.task(ads)
+    for _ in range(int(hub.TASK_CAP // 1800) - 1):       # busy-looking: a note every half hour
+        clock.go(1800)
+        h.task_note("Ada", ads, "still blocked on ad budget")
+        h.tick()
+    assert h.task(ads)["status"] == "working", "overdue: not parked before the cap"
+    clock.go(1800)
+    h.task_note("Ada", ads, "still blocked on ad budget")
+    h.tick(); h.tick()
+    t = h.task(ads)
+    assert t["status"] == "blocked" and t["owner"] is None and t["waiting_on"] == "Pam", f"overdue: parked for the PM: {t}"
+    assert any(f"#{ads}" in s and "Stop work on it" in s for s in muse.sent.get("Ada", [])), "overdue: the holder knows to stop"
+    told = [s for s in muse.sent.get("Pam", []) if f"#{ads}" in s]
+    assert told and "still blocked on ad budget" in told[-1] and "split" in told[-1], f"overdue: the PM hears why and what to do: {told}"
+    clock.go(4 * 3600); h.tick(); h.tick()
+    assert sum(f"#{ads}" in s and "Hats Etsy Ads" in s for s in muse.sent.get("Pam", [])) == 1, "overdue: told once"
+    print("overdue OK")
+
+
 def wait():
     """Jack, Oct 13: Boboe 4 sat on #5 for hours "awaiting Gate 1 / Darragh's release", nudged hourly, taking nothing
     else. An agent waiting on someone parks the task and takes any product's work; the task comes back to it later."""
@@ -466,4 +495,4 @@ def chain():
 
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain, "unjoined": unjoined}[sys.argv[1]]()
+     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "overdue": overdue, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain, "unjoined": unjoined}[sys.argv[1]]()
