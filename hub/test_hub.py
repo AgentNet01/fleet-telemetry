@@ -169,5 +169,59 @@ def council_queue():
     print("council_queue OK")
 
 
+def digest():
+    """Jack, Oct 14: Pericles had ~30 FYIs queued behind one open request, each then costing it a turn of its own.
+    Waiting FYIs go as one message; a real request still goes first and alone; nothing is lost or sent twice."""
+    h, muse, clock = new_hub()
+    note = lambda text: h._note("Boboe 3", "FYI", text)
+    h.ask("Boboe 7", "Boboe 3", "approve the banner ads?")
+    h.tick()
+    with h.lock:
+        note("note-a"); note("note-b"); note("note-c")
+    h.tick()
+    assert len(muse.sent["Boboe 3"]) == 1, "digest: nothing goes while a request waits for its answer"
+
+    answer(h, muse, clock, "Boboe 3", "approved")
+    h.tick()
+    got = muse.sent["Boboe 3"][1:]
+    assert len(got) == 1 and all(n in got[0] for n in ("note-a", "note-b", "note-c")), f"digest: one message for all three: {got}"
+    assert got[0].count("No reply needed") == 1, "digest: one 'no reply needed', not one per FYI"
+    left = h.db.execute("select count(*) from items where too='Boboe 3' and kind='note' and status='queued'").fetchone()[0]
+    assert left == 0, "digest: every FYI in it is marked delivered"
+
+    with h.lock:
+        note("note-d")
+    h.ask("Boboe 7", "Boboe 3", "pick a banner font")
+    h.tick()
+    # Jack, Oct 15: 15 FYIs sat 100 min behind Pericles' stream of requests; the whole queue goes with whatever he gets next
+    msg = muse.sent["Boboe 3"][-1]
+    assert msg.index("pick a banner font") < msg.index("note-d"), f"digest: the request leads, its waiting FYIs ride along: {msg}"
+    answer(h, muse, clock, "Boboe 3", "serif")
+    h.tick()
+    assert sum("note-d" in t for t in muse.sent["Boboe 3"]) == 1, "digest: the FYI isn't sent again"
+    assert h.db.execute("select reply from items where text like '%pick a banner font%'").fetchone()[0] == "serif", \
+        "digest: the request's answer still goes back to it"
+
+    before = len(muse.sent["Boboe 3"])
+    with h.lock:
+        for i in range(30):
+            note(f"bulk-{i:02d} " + "x" * 1500)
+    for _ in range(5):
+        h.tick()
+    sent = muse.sent["Boboe 3"][before:]
+    assert len(sent) >= 2 and all(len(s) <= hub.DIGEST_CHARS for s in sent), \
+        f"digest: split to stay under muse-cli's limit: {[len(s) for s in sent]}"
+    seen = [f"bulk-{i:02d}" for i in range(30) for s in sent if f"bulk-{i:02d}" in s]
+    assert seen == [f"bulk-{i:02d}" for i in range(30)], "digest: every FYI arrives exactly once, in order"
+
+    with h.lock:
+        note("huge " + "y" * (hub.DIGEST_CHARS + 500))
+        note("after-huge")
+    h.tick(); h.tick()
+    assert "huge" in muse.sent["Boboe 3"][-2] and "after-huge" in muse.sent["Boboe 3"][-1], \
+        "digest: an FYI too big to share a message still goes, on its own"
+    print("digest OK")
+
+
 if __name__ == "__main__":
-    {"timing": timing, "council_queue": council_queue}.get(sys.argv[1] if len(sys.argv) > 1 else "", routing)()
+    {"timing": timing, "council_queue": council_queue, "digest": digest}.get(sys.argv[1] if len(sys.argv) > 1 else "", routing)()

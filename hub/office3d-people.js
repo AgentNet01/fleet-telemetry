@@ -57,9 +57,34 @@ function buildRig(L, shade) {
     P(m => { m.box(-.06, -.06, -SH + .07, .12, .12, SH - .07, L.pants); m.box(-.065, -.065, -SH, .13, .23, .07, "#1c1f25"); }, knee);
     rig.hip.push(hip); rig.knee.push(knee);
   }
-  // a square on the floor under them: red when not answering, blue for hover and for "something just changed"
-  rig.ring = piece(m => { for (const [x, y, w, d] of [[-.5, -.5, 1, .07], [-.5, .43, 1, .07], [-.5, -.43, .07, .86], [.43, -.43, .07, .86]]) m.box(x, y, 0, w, d, .012, "#fff"); },
-    new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }), false);
+  rig.ring = floorRing();
+  return rig;
+}
+// a square on the floor under them: red when not answering, blue for hover and for "something just changed"
+const floorRing = () => piece(m => { for (const [x, y, w, d] of [[-.5, -.5, 1, .07], [-.5, .43, 1, .07], [-.5, -.43, .07, .86], [.43, -.43, .07, .86]]) m.box(x, y, 0, w, d, .012, "#fff"); },
+  new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }), false);
+
+// the office cat (dot, Jack Oct 14): a ginger cube cat facing +y, posed only by where the sim walks it
+function buildCat(shade) {
+  const rig = { k: 1, boxes: 0, yaw: null, cat: true };
+  const P = (fn, parent, x = 0, y = 0, z = 0) => { const m = piece(fn); rig.boxes += m.userData.boxes; parent.add(at(m, x, y, z)); return m; };
+  const fur = "#e39a4c", dark = shade(fur, -.22), cream = "#f3ebdd";
+  const root = rig.root = new THREE.Group(), body = rig.body = joint(root, 0, 0, 0);
+  P(m => {
+    m.box(-.085, -.16, .1, .17, .32, .13, fur); m.box(-.06, .02, .1, .12, .12, .015, cream);          // body, pale belly
+    for (const x of [-.09, .09]) m.box(x - .01, -.12, .14, .02, .2, .02, dark);                     // tabby stripes
+    for (const [x, y] of [[-.075, .1], [.035, .1], [-.075, -.15], [.035, -.15]]) m.box(x, y, 0, .04, .04, .1, fur);   // legs
+  }, body);
+  const head = rig.head = joint(body, 0, .16, .19);
+  P(m => {
+    m.box(-.075, -.05, 0, .15, .12, .11, fur); m.box(-.04, .07, 0, .08, .015, .045, cream);          // head, muzzle
+    m.box(-.07, -.03, .11, .04, .035, .05, dark); m.box(.03, -.03, .11, .04, .035, .05, dark);       // ears
+    m.box(-.05, .07, .055, .025, .004, .025, "#3a5a2a"); m.box(.025, .07, .055, .025, .004, .025, "#3a5a2a");   // green eyes
+    m.box(-.01, .086, .035, .02, .004, .014, "#d9777b");                                              // nose
+  }, head);
+  rig.tail = joint(body, 0, -.16, .2);
+  P(m => m.box(-.017, -.017, 0, .034, .034, .2, dark), rig.tail);
+  rig.ring = floorRing();
   return rig;
 }
 
@@ -95,7 +120,7 @@ export class People {
     for (const [name, r] of this.rigs) if (people.get(name) !== r.p) this.drop(name);
     for (const p of people.values()) {
       let r = this.rigs.get(p.name);
-      if (!r) { r = buildRig(p.look, shade); r.p = p; this.rigs.set(p.name, r); this.scene.add(r.root, r.ring); }
+      if (!r) { r = p.cat ? buildCat(shade) : buildRig(p.look, shade); r.p = p; this.rigs.set(p.name, r); this.scene.add(r.root, r.ring); }
       const po = p.pose, k = r.k, lie = po.lie || 0, group = (p.slot && p.slot.group) || "";
       // facing: the sim's four directions when still; the way they are actually going when they walk
       let want = YAW[p.dir] ?? 0;
@@ -104,6 +129,14 @@ export class People {
       r.px = p.x; r.py = p.y;
       q.setFromAxisAngle(UP, r.yaw); r.root.quaternion.copy(q).slerp(LIE, lie);
       at(r.root, p.x, p.y, (p.z || 0) + lie * .1);
+      if (r.cat) {                                          // no joints to pose: the tail swishes, and it curls up to nap
+        r.root.quaternion.copy(q);
+        r.tail.rotation.z = Math.sin(T * 2.2 + p.seed) * (p.path.length ? .2 : .45);
+        r.body.scale.y = p.curled ? .55 : 1; r.head.rotation.x = p.curled ? .5 : 0;
+        r.ring.visible = p === hover;
+        if (r.ring.visible) { at(r.ring, p.x, p.y, .03); r.ring.scale.setScalar(.45); r.ring.material.color.copy(BLUE); r.ring.material.opacity = .95; }
+        continue;
+      }
       const seat = /^(sofa|nap)/.test(group) ? .375 : .5, atTable = /^(desk|board|ceo|review|dine|patio)/.test(group);
       const hipH = lerp(TH + SH, (seat + .05) / k, po.sit) + (po.bob || 0) * PX;
       r.body.position.set(0, lerp(hipH, 0, lie), atTable ? po.sit * .14 / k : 0);      // at a table they sit forward, so their hands reach it

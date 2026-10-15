@@ -136,6 +136,7 @@ export function start(wrap, overlay, sim) {
     look(btn, eyes) { lookBtn = btn; eyesBtn = eyes; look.state === "off" || look.state.startsWith("error") ? look.on() : look.off(); },
     eyes() { if (look.state === "tracking" && !wrap.querySelector(".ocal")) look.calibrate(wrap).then(paintBtn); },
     get gazed() { return gazed; },
+    screen: (x, y, z) => toScreen(v.set(x, z, y), overlay.width, overlay.height),   // a sim point → overlay canvas px, for things that aren't people (the shrine's count)
     stop() {
       look.stop(); removeEventListener("keydown", onKey); removeEventListener("keyup", onKey); removeEventListener("blur", leave);
       wrap.removeEventListener("pointerenter", enter); wrap.removeEventListener("pointerleave", leave); overlay.removeEventListener("contextmenu", noMenu);

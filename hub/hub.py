@@ -35,6 +35,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FLEET_REPO = "https://github.com/AgentNet01/fleet-telemetry.git"   # public: every agent can clone it, no GitHub login
 
 
+def _listing_id(link):
+    m = re.search(r"etsy\.com/listing/(\d+)", link or "")
+    return m and m.group(1)
+
+
 def fleet_rev():
     """The version fleet.py reports (sha256 of the file): agents on another one are behind the hub."""
     with open(os.path.join(HERE, "fleet.py"), "rb") as f:
@@ -177,16 +182,34 @@ MIGRATIONS = [
     "alter table needs_jack add column why text",         # what it's blocking
     "alter table needs_jack add column link text",        # where to do it
     "alter table needs_jack add column triage text",      # the PM who merges this ask into Jack's list; null = on his list
+    "alter table needs_jack add column answer text",      # what Jack replied, shown to whoever screens the next ask
     "alter table products add column kind text default 'product'",   # 'tool': shared by every product, not sold
+    "alter table products add column link text",          # where Jack sees it live: the Etsy listing
+    "alter table products add column listing_state text", # that listing's state on Etsy (active|inactive|removed...), read every 10 min
     "create table if not exists approvals(id text primary key, agent text, label text, detail text, options text, expires real)",     # the powers text this agent was last told       # a PM's company command waiting on the CEO's review
 ]
 WORKERS = ("muse", "poll")            # kinds that take tasks; 'slack' (dot) and 'jack' (the board) don't
 PUSH = ("muse", "slack")              # kinds the hub sends to; 'poll' agents fetch with `fleet inbox`
 ONE_SHOT = ("note", "task", "verify", "nudge", "plan")
+# Waiting FYIs go to an agent as one message (Jack, Oct 14: ~30 queued for one PM, a turn each). muse-cli takes the
+# text as a Windows command-line argument (~32k chars) and sends one frame (<= 64 KB), so a digest stays well under.
+DIGEST_CHARS = 20000
+SCREEN_WAIT = 30 * 60               # an ask the CEO hasn't sorted by then goes to Jack as it is
 # Jack, Oct 13: "I don't want the agents coming to us unless they're literally blocked"
 OPERATOR_ONLY = ("Go to an operator (Jack or Darragh) only when you're truly blocked on something that needs a real person: "
-                 "their ID, SSN or tax details, a phone number or 2FA code, a payment or purchase, or an account only they "
-                 "can open. Everything else — choices, sign-offs, which option to take — decide yourself or with your PM; "
+                 "payment info (a card on an account, a payment or purchase), or ID or tax details a service legally "
+                 "requires. Sign up for accounts yourself with your own fleet email (Jack, Oct 15: \"they have email access, "
+                 "they should only need me for payment\"). Jack and Darragh never make, engrave, pack or ship anything themselves (Oct 15, the paddles): "
+                 "every product needs a maker that produces and ships it, or it isn't a product. "
+                 "Listing photos (Jack, Oct 15): realistic renders of the finished product as a buyer gets it (the maker's/"
+                 "Printify's mockups, or photoreal generated images of the real item in use, e.g. a real pet's portrait framed "
+                 "on a wall) — no text-panel or template slides, no coloured frames, no cartoon or placeholder art; never stamp 'SAMPLE', 'MOCKUP' or 'AI-generated' on an image and never leave a placeholder like "
+                 "'PHOTO HERE'. Any AI disclosure Etsy requires goes in the description, never on the photos. "
+                 "Personalization instructions are plain sentences a first-time buyer understands, separated by commas, with one "
+                 "example — no abbreviations (req, opt, ≤) and no | separators. "
+                 "Spending money (ads, samples, purchases) needs Jack; posting doesn't — posting listings on "
+                 "Etsy (yourself or through Printify) is your job, never ask him to publish. "
+                 "Everything else — choices, sign-offs, which option to take — decide yourself or with your PM; "
                  "don't send it to them. Prices are yours to set; never below cost after maker, shipping and Etsy fees. "
                  "Facts you can look up, read in a file or ask a maker's support for are yours too.")
 ALLOW = ("allow_always", "allow_today", "allow_session", "allow_once")     # broadest allow Muse offers, first
@@ -230,6 +253,7 @@ class Hub:
     def __init__(self, db_path, transport, clock=time.time, evidence_ok=None):
         self.db_path, self.transport, self.clock = db_path, transport, clock
         self.evidence_ok = evidence_ok or _evidence_ok
+        self.reporters = set()           # agents that only write reports (reports.py); nobody may message them
         self.db = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self._polling = {}               # agent -> lock held while its chat is being read
@@ -291,9 +315,12 @@ class Hub:
             if not d:
                 continue
             with self.lock:
+                a = self._agent(name)
+                if not a:                                           # renamed or removed since the list was read
+                    continue
                 self._set("agents", name, busy=int(bool(d["busy"])), doing=d.get("line"), doing_at=d.get("line_at", d.get("at")))
                 seen = self.clock() if d["busy"] else d.get("at")
-                if seen and seen > (self._agent(name)["last_act"] or 0):
+                if seen and seen > (a["last_act"] or 0):
                     if self.clock() - seen <= 2 * RESEND:
                         self._acted(name, seen)             # recent: it's acting, so not unresponsive
                     else:
@@ -316,6 +343,8 @@ class Hub:
                     return old["id"]
             if not self._agent(to):
                 raise ValueError(f"unknown agent: {to}")
+            if to in self.reporters:                     # writes reports only (Jack, Oct 14); a message would sit unread
+                raise ValueError(f"{to} only writes reports and takes no messages; ask {self._chair() or 'the CEO'} instead")
             parent = self._inflight(frm)
             depth = parent["depth"] + 1 if parent else 0
             status = "held" if depth > MAX_DEPTH else "queued"
@@ -370,17 +399,28 @@ class Hub:
                     f"— It's yours until it's done. Post progress with `fleet task note {t} \"...\"`; when it's "
                     f"finished run `fleet task done {t} <link>` with a link to the evidence (commit, file or URL). "
                     f"{OPERATOR_ONLY} When you hit one, put it on their list at once: "
-                    f"`fleet task operator {t} \"<what to do, one short line>\" \"<why it blocks you>\" <link>`.")
+                    f"`fleet task operator {t} '<what to do, one short line>' '<why it blocks you>' <link>` (single quotes, so $ amounts survive the shell)."
+                    + self._keys_line(it["too"]) + self._listing_line(t))
         if kind == "verify":
             t = it["ref"]
             return (f"{head}[fleet · verify task #{t}]\n{body}\n"
                     f"— Check it yourself against the definition of done, then run `fleet task verify {t} pass` "
                     f"or `fleet task verify {t} fail \"<reason>\"`. Also fail it if it's blocked on something only an "
-                    f"operator can provide (ID, SSN or tax details, a phone number or 2FA, a payment, an account only they "
-                    f"can open) that isn't on their list yet, or if it put a choice on their list that an agent should have "
+                    f"operator can provide (payment info, or ID/tax details a service legally requires) that isn't on their list yet, or if it put a choice on their list that an agent should have "
                     f"made (`fleet task show {t}` shows the list).")
         if kind == "plan":
             return f"{head}[fleet #{iid} · planner]\n{body}"
+        if kind == "screen":
+            return (f"{head}[fleet #{iid} · for Jack? you decide]\n{body}\n"
+                    f"— You decide what reaches Jack. If an agent can decide it (which supplier, which tool, wording, "
+                    f"order of work), reply ANSWER: <the decision, for the agent>. Only what truly needs Jack (his money "
+                    f"or a spend approval, his card, or ID/tax details a service legally requires) goes to him; signing up for an "
+                    f"account never does, agents sign up with their own fleet email; posting or publishing a "
+                    f"listing never does, tell the agent to post it. Nor do costs, shipping rates, plan or account "
+                    f"status, or a tool/API error: anything an agent can look up, test or debug is the agent's. Reply "
+                    f"JACK: <one plain line telling him what to do, e.g. \"Publish the cups listing\"> <link to the exact "
+                    f"page>. If he already settled it or it's already done (see the list), reply ANSWER with that instead. Unsorted after "
+                    f"{SCREEN_WAIT // 60} min it goes to him as it is.")
         if kind == "question":
             return (f"{head}[fleet #{iid} · the fleet is being asked]\n{body}\n"
                     f"— Reply with your own view in a sentence or two. One answer will be chosen from everyone's.")
@@ -397,12 +437,20 @@ class Hub:
         if direction == "out":
             self._acted(agent)
 
-    def _send(self, it, resent=False):
+    def _send(self, it, resent=False, notes=()):
         text = self._format(it, resent)
+        bare = "\n— No reply needed."
+        parts = [self._format(n) for n in notes]
+        if parts:
+            text += (f"\n\n[also: {len(parts)} update{'s' if len(parts) > 1 else ''} that came in meanwhile, oldest first — no reply needed]\n\n"
+                     + "\n\n".join(p.removesuffix(bare) for p in parts))
         mark = self.transport.deliver(it["too"], text)          # muse-cli I/O — never under the lock
         with self.lock:
             self._set("items", it["id"], status="sent", sent_at=self.clock(), tries=it["tries"] + 1, mark=mark)
             self._log(it["id"], it["too"], "in", text)
+            for n, part in zip(notes, parts):
+                self._set("items", n["id"], status="answered", sent_at=self.clock(), tries=n["tries"] + 1, mark=mark)
+                self._log(n["id"], n["too"], "in", part)
             if it["kind"] in ONE_SHOT:
                 self._set("items", it["id"], status="answered")  # no reply expected; don't hold the slot
 
@@ -416,6 +464,8 @@ class Hub:
             self._add_view(it["council"], it["too"], reply)
         elif kind == "chair":
             self._resolve_council(it["council"], reply)
+        elif kind == "screen":
+            self._screened(it["ref"], reply)
 
     def tick(self):
         now = self.clock()
@@ -434,6 +484,7 @@ class Hub:
             self._watch_jobs()
             self._reviews()
             self._dry()
+            self._screen_timeouts()
             agents = [dict(a) for a in self.db.execute(
                 "select * from agents where kind in ('muse','poll','slack') and state != 'parked' order by name")]
         # Two passes so cross-agent effects (a reply that queues a note for someone else) land in
@@ -554,8 +605,35 @@ class Hub:
                     it = None
             if kind in PUSH:
                 nextitem = self._sub_answer(name, it) if it else self._next(name)
-        if nextitem is not None:
-            self._send(nextitem)
+            # Jack, Oct 15: FYIs waited behind every request (15 for Pericles, 100 min); now they all ride with the next send
+            batch = self._waiting_notes(name) if nextitem is not None and not it else []
+        if nextitem is not None and nextitem["kind"] == "note" and len(batch) > 1:
+            self._send_digest(batch)
+        elif nextitem is not None:
+            self._send(nextitem, notes=[b for b in batch if b["id"] != nextitem["id"]])
+
+    def _waiting_notes(self, name):
+        """The agent's queued FYIs, oldest first, as many as fit in one message (always at least the first)."""
+        out, size = [], 0
+        for r in self.db.execute("select * from items where too=? and kind='note' and status='queued' order by created, id",
+                                 (name,)).fetchall():
+            n = len(self._format(r)) + 2
+            if out and size + n > DIGEST_CHARS - 200:            # room for the digest's own header and footer
+                break
+            out.append(r)
+            size += n
+        return out
+
+    def _send_digest(self, items):
+        bare = "\n— No reply needed."
+        parts = [self._format(it) for it in items]
+        text = (f"[fleet · {len(items)} updates, oldest first]\n\n" + "\n\n".join(p.removesuffix(bare) for p in parts)
+                + "\n\n— No reply needed for any of these.")
+        mark = self.transport.deliver(items[0]["too"], text)     # muse-cli I/O — never under the lock
+        with self.lock:
+            for it, part in zip(items, parts):                   # each FYI keeps its own line in the timeline
+                self._set("items", it["id"], status="answered", sent_at=self.clock(), tries=it["tries"] + 1, mark=mark)
+                self._log(it["id"], it["too"], "in", part)
 
     def _fail_item(self, it, name):
         self._set("items", it["id"], status="failed", closed=self.clock())
@@ -788,6 +866,15 @@ class Hub:
             raise ValueError("the link must be a web address starting with https://")
         return what, why, link
 
+    @staticmethod
+    def _need_link(link):
+        if not link:                                     # Jack, Oct 14: "I need links to stuff"
+            raise ValueError("give the link to the exact page where Jack does it: the sign-up page, the page where he "
+                             "enters a card, the listing to review. Not a notes file.")
+        if re.match(r"https?://(www\.)?muse\.ai/files/", link):   # Jack, Oct 15: "Open" gave him a long confusing markdown file
+            raise ValueError("that's your notes, not where Jack acts: link the sign-up / billing / review page itself, and "
+                             "put in the step exactly what he enters there (which email or login, which plan)")
+
     def task_for_jack(self, agent, tid, what, why=None, link=None):
         """A step only Jack/Darragh can do, put on their list with the task it came from; the task keeps going."""
         what, why, link = self._plain(what, why, link)
@@ -795,20 +882,75 @@ class Hub:
             t = self._task_row(tid)
             if t["owner"] != agent or t["status"] != "working":
                 raise PermissionError(f"#{tid} isn't a task you're working on")
+            self._need_link(link)
             self._ask_jack(tid, agent, " — ".join(filter(None, [what, why, link])), what, why, link)
             self._task_event(tid, agent, "for jack", what)
 
     def _ask_jack(self, tid, agent, text, what, why=None, link=None):
-        """Jack, Oct 14: 30 items from many agents was overwhelming. An ask from a product with a PM goes to that PM,
-        who merges the asks into a few lines on Jack's list and routes his answer back."""
-        p = self.db.execute("select pm from products where name=?", (self._task_product(tid),)).fetchone()
-        pm = p and p["pm"] if p and p["pm"] != agent else None
-        self.db.execute("insert into needs_jack(text, at, task, agent, what, why, link, triage) values(?,?,?,?,?,?,?,?)",
-                        (text, self.clock(), tid, agent, what, why, link, pm))
-        self._note(pm, f"{agent} needs something from Jack (task #{tid})",
-                   f"{what}\nDon't pass it on as is. `fleet jack list` shows every ask waiting for you. Merge the same "
-                   f"asks into one plain line each with `fleet jack add`; skip anything an agent can do itself. "
-                   f"Jack's answer comes to you: send it to the agents who asked, then `fleet jack done <ids>`.")
+        """Jack, Oct 14: the CEO decides what reaches him. It sees the ask first and either answers the agent itself or
+        rewrites it as one plain line for Jack (_screened). Never a jam again (49 sat with one PM): an ask not sorted
+        within SCREEN_WAIT goes to Jack as it is (_screen_timeouts)."""
+        chair = self._chair()
+        if chair == agent:                                  # Jack, Oct 15: the CEO's own asks reached him unchecked
+            chair = next((r["agent"] for r in self.db.execute("select agent from seats where role in ('ceo','ceo_backup')")
+                          if r["agent"] != agent), None)
+        c = self._agent(chair) if chair else None
+        screen = chair if c and chair != agent and c["state"] != "parked" and c["kind"] in PUSH + ("poll",) else None
+        nid = self.db.execute("insert into needs_jack(text, at, task, agent, what, why, link, triage) values(?,?,?,?,?,?,?,?)",
+                              (text, self.clock(), tid, agent, what, why, link, screen)).lastrowid
+        if screen:
+            self.db.execute("insert into items(kind, frm, too, text, depth, status, created, ref) values('screen','hub',?,?,0,'queued',?,?)",
+                            (screen, f"{agent} needs something from Jack (task #{tid}):\n{what}"
+                                     + (f"\nWhy: {why}" if why else "") + (f"\nLink: {link}" if link else "")
+                                     + self._jack_settled(nid), self.clock(), nid))
+
+    def _jack_settled(self, nid):
+        """Jack, Oct 15: asked again for things he'd approved or set up. The screener sees his recent answers."""
+        rows = self.db.execute("select what, text, answer, done from needs_jack where id != ? and (done=1 or triage is null) "
+                               "order by id desc limit 30", (nid,)).fetchall()
+        return ("\nAlready settled or on Jack's list (don't ask him again; ANSWER the agent from it):\n"
+                + "\n".join(f"- {(r['what'] or r['text'].split(chr(10))[0])[:160]} → "
+                             + (f"Jack: {r['answer'][:200]}" if r["answer"] else "done" if r["done"] else "waiting on Jack")
+                             for r in rows)) if rows else ""
+
+    def _screened(self, nid, reply):
+        """The CEO's call on an ask: ANSWER goes back to the agent and never reaches Jack; JACK puts its plain line on
+        his list. Anything else, or an ask already timed out to Jack, leaves his list as it is."""
+        n = self.db.execute("select * from needs_jack where id=? and done=0 and triage is not null", (nid,)).fetchone()
+        if not n:
+            return
+        m = re.match(r"\W*(answer|jack)\s*:\s*(.+)", reply or "", re.I | re.S)
+        if m and m.group(1).lower() == "answer":
+            self._note(n["agent"], f"{n['triage']} answered your ask for Jack (task #{n['task']})", m.group(2).strip())
+            self.resolve_need(nid)
+            return
+        if m:
+            line = m.group(2).strip().split("\n")[0]
+            url = re.search(r"https?://\S+", line)
+            what = re.sub(r"\s+", " ", line.replace(url.group(0), "") if url else line).strip(" -—:")[:200] or n["what"]
+            link = url.group(0).rstrip(".,)") if url and "muse.ai/files/" not in url.group(0) else n["link"]
+            self.db.execute("update needs_jack set what=?, why=null, link=?, text=? where id=?",
+                            (what, link, " — ".join(filter(None, [what, link])), nid))
+        self.db.execute("update needs_jack set triage=null where id=?", (nid,))
+
+    def _screen_timeouts(self):
+        """Unsorted after SCREEN_WAIT: the other seat (CEO or stand-in) gets it once (Jack, Oct 15: a busy CEO let "review the
+        banner images" through as written); unsorted there too, it goes to Jack as it is."""
+        for n in self.db.execute("select * from needs_jack where done=0 and triage is not null").fetchall():
+            tries = self.db.execute("select * from items where kind='screen' and ref=? order by id", (n["id"],)).fetchall()
+            if self.clock() - (tries[-1]["created"] if tries else n["at"]) < SCREEN_WAIT:
+                continue
+            self.db.execute("update items set status='dropped', closed=? where kind='screen' and ref=? and status in ('queued','sent')",
+                            (self.clock(), n["id"]))
+            other = next((r["agent"] for r in self.db.execute("select agent from seats where role in ('ceo','ceo_backup')")
+                          if r["agent"] not in (n["triage"], n["agent"]) and (a := self._agent(r["agent"]))
+                          and a["state"] != "parked" and a["kind"] in PUSH + ("poll",)), None) if len(tries) < 2 else None
+            if other and tries:
+                self.db.execute("update needs_jack set triage=? where id=?", (other, n["id"]))
+                self.db.execute("insert into items(kind, frm, too, text, depth, status, created, ref) values('screen','hub',?,?,0,'queued',?,?)",
+                                (other, tries[-1]["text"], self.clock(), n["id"]))
+            else:
+                self.db.execute("update needs_jack set triage=null where id=?", (n["id"],))
 
     def jack_list(self, who):
         with self.lock:
@@ -820,13 +962,16 @@ class Hub:
             if not (self._ceo_level(who) or self.db.execute("select 1 from products where pm=?", (who,)).fetchone()):
                 raise PermissionError("only a PM or the CEO puts items on Jack's list")
             what, why, link = self._plain(what, why, link)
+            self._need_link(link)
             return self.db.execute("insert into needs_jack(text, at, agent, what, why, link) values(?,?,?,?,?,?)",
                                    (" — ".join(filter(None, [what, why, link])), self.clock(), who, what, why, link)).lastrowid
 
     def jack_done(self, who, ids):
         with self.lock:
             for i in ids:
-                if not self.db.execute("select 1 from needs_jack where id=? and triage=?", (i, who)).fetchone():
+                # the asks routed to this PM, or a line it put on Jack's list itself and has since replaced
+                if not self.db.execute("select 1 from needs_jack where id=? and (triage=? or (agent=? and triage is null))",
+                                       (i, who, who)).fetchone():
                     raise PermissionError(f"item {i} isn't one of the asks waiting on you")
         for i in ids:
             self.resolve_need(i)
@@ -843,17 +988,22 @@ class Hub:
                 raise PermissionError(f"#{tid} isn't a task you're working on")
             # ponytail: a name match, not intent (verifiers catch the rest); a task that names the operators but needs
             # nothing from them files one "nothing to do" step
-            if re.search(r"\b(jack|darragh|operators?)\b", f"{t['title']} {t['done_def']}", re.I) and \
+            # the title, not done_def: a done-when that only says "or the blocker if an operator must act" isn't work for
+            # them (Oct 15: forcing a step there made #826 dump four decisions on Jack's list)
+            if re.search(r"\b(jack|darragh|operators?)\b(?!'s)", t["title"], re.I) and \
                     not self.db.execute("select 1 from needs_jack where task=?", (tid,)).fetchone():
                 raise ValueError(f"#{tid} is work for an operator (Jack or Darragh), and nothing from it is on their list. "
                                  f"Put each step they must do there first, one per step, in plain words with the link:\n"
-                                 f"  fleet task operator {tid} \"<what to do>\" \"<why it blocks you>\" <link>\nthen run task done again.")
+                                 f"  fleet task operator {tid} '<what to do>' '<why it blocks you>' <link>\nthen run task done again.")
         if not self.evidence_ok(link):                                  # network check, outside the lock
             raise ValueError(f"the evidence link doesn't open: {link}")
         with self.lock:
             self._set("tasks", tid, status="verifying", evidence=link, verifier=None, touched=self.clock())
             self._log(None, agent, "out", f"task #{tid} done: {link}")
             self._task_event(tid, agent, "done", link)
+            if re.match(r"https://(www\.)?etsy\.com/listing/\d+", link):   # posted via Printify too, not only fleet etsy post
+                self.db.execute("update products set link=? where coalesce(link,'')='' and id=(select product from projects "
+                                "where id=?)", (link, t["project"]))
             # work often waits on a task without a formal blocker: tell the project's other holders and its PM
             pm = self.db.execute("select p.pm from projects j join products p on j.product=p.id where j.id=?",
                                  (t["project"],)).fetchone()
@@ -888,11 +1038,14 @@ class Hub:
             if t["owner"] != agent or t["status"] != "working":
                 raise PermissionError(f"#{tid} isn't a task you're working on")
             who = (who or "outside").strip()
+            if who.lower() == "pm":                         # Jack, Oct 15: PM decisions sat on 'outside', unheard
+                pm = self.db.execute("select pm from products where name=?", (self._task_product(tid),)).fetchone()
+                who = (pm and pm["pm"]) or "outside"
             board = who.lower() in ("jack", "darragh", "board", "operator")
             if board:
                 what = self._plain(what, None, None)[0]
             if not board and who != "outside" and not self.db.execute("select 1 from agents where name=?", (who,)).fetchone():
-                raise ValueError(f"no agent {who}: wait on operator (Jack or Darragh), an agent's name, or outside")
+                raise ValueError(f"no agent {who}: wait on operator (Jack or Darragh), pm, an agent's name, or outside")
             note = f"waiting on {who}: {what}"
             self._set("tasks", tid, waiting_on=who, waiting_for=what, progress_note=note, touched=self.clock(),
                       status="blocked", owner=None, pin=agent)          # freed now, not at the next tick
@@ -900,7 +1053,8 @@ class Hub:
                             (self.clock(), tid))
             self._task_event(tid, agent, "waiting", note)
             self._log(None, agent, "out", f"task #{tid} {note}")
-            if board:
+            if board and not self.db.execute("select 1 from needs_jack where task=? and agent=? and done=0",
+                                             (tid, agent)).fetchone():   # its operator step is already on the list
                 self._ask_jack(tid, agent, f"Task #{tid} “{t['title']}” ({agent}) is waiting on you: {what}", what)
             elif who != "outside":
                 self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('note',?,?,?,0,'queued',?)",
@@ -1093,6 +1247,8 @@ class Hub:
     def set_pm(self, product, who):
         with self.lock:
             self.db.execute("update products set pm=? where name=? or id=?", (who or None, product, product))
+            # Jack, Oct 15: the old PM's "no work lined up" ask isn't the new PM's; ask the new one at once
+            self.db.execute("delete from dry_notes where product in (select id from products where name=? or id=?)", (product, product))
 
     MANAGE_HELP = ("fleet portfolio | fleet changes | fleet ask \"<agent>\" \"<message>\" | "
                    'fleet product add "<name>" "<brief>" ["<goal>"] | fleet product set "<product>" brief|metric "<value>" | '
@@ -1287,9 +1443,9 @@ class Hub:
                 "when you're waiting on someone (you're freed for other work; fleet task resume <id> when it's sorted), "
                 "fleet task verify when asked, fleet suggest \"<idea>\". "
                 "fleet task show <id> gives any task's status, holder and result link — look it up there, don't ask for it. "
-                f"{OPERATOR_ONLY} When you hit one: fleet task operator <id> \"<what to do, one "
-                "short line>\" \"<why it blocks you>\" <link> — one plain step each, written for someone who hasn't read your work; they can reply "
-                "to you from it. To stop until they act, use fleet task wait <id> operator \"<what>\". Tools (marked tool in fleet portfolio) are shared "
+                f"{OPERATOR_ONLY} When you hit one: fleet task operator <id> '<what to do, one "
+                "short line>' '<why it blocks you>' <link> — one plain step each, written for someone who hasn't read your work; they can reply "
+                "to you from it. To stop until they act, use fleet task wait <id> operator '<what>'. Tools (marked tool in fleet portfolio) are shared "
                 "by every product: use them, and put tool work in the tool, not in your product.")
         if self._ceo_level(who):
             ceo = (self.db.execute("select agent from seats where role='ceo'").fetchone() or {"agent": None})["agent"]
@@ -1326,6 +1482,8 @@ class Hub:
             return
         if self.is_board(by) or self._ceo_level(by):
             return
+        if a[:2] == ["product", "set"] and len(a) == 5 and a[3] == "link" and self.may_manage(by, a[2]):
+            return                                       # a PM points its own product at its listing, no review
         if a[:1] == ["task"] and len(a) >= 3:
             if a[1] == "add":
                 prod = self.db.execute("select p.name from projects j join products p on j.product=p.id where j.id=?",
@@ -1376,10 +1534,12 @@ class Hub:
         verb = a[:2]
         if verb == ["product", "add"] and len(a) in (4, 5):
             return f"product #{self.add_product(a[2], brief=a[3], metric=a[4] if len(a) == 5 else None)} {a[2]} created"
-        if verb == ["product", "set"] and len(a) == 5 and a[3] in ("brief", "metric", "status", "kind"):
+        if verb == ["product", "set"] and len(a) == 5 and a[3] in ("brief", "metric", "status", "kind", "link"):
             p = product(a[2])
             if a[3] == "kind" and a[4] not in ("product", "tool"):
                 raise ValueError("kind is product or tool")
+            if a[3] == "link" and not re.match(r"https?://\S+$", a[4]):
+                raise ValueError("the link must be a web address starting with https://, e.g. the Etsy listing")
             self._set("products", p["id"], **{a[3]: a[4]})
             return f"{p['name']}: {a[3]} set"
         if verb == ["product", "rename"] and len(a) == 4:
@@ -1751,13 +1911,17 @@ class Hub:
                             "on conflict(name) do update set value=excluded.value, scope=excluded.scope, updated=excluded.updated",
                             (name, scope, value, by, self.clock()))
 
+    def secret_scope(self, name, scope):
+        """Change who may read a stored secret, leaving its value alone."""
+        with self.lock:
+            if not self.db.execute("update secrets set scope=?, updated=? where name=?", (scope, self.clock(), name)).rowcount:
+                raise KeyError(name)
+
     def _may_read(self, agent, scope):
-        if scope == "fleet":
-            return True
-        if scope == f"agent:{agent}":
-            return True
+        # a scope may list several readers, "|"-separated (names can hold commas, never "|")
         a = self._agent(agent)
-        return bool(a) and scope == f"product:{a['current_product']}"
+        return any(s == "fleet" or s == f"agent:{agent}" or (bool(a) and s == f"product:{a['current_product']}")
+                   for s in (scope or "").split("|"))
 
     def secret_get(self, name, agent):
         with self.lock:
@@ -1768,6 +1932,23 @@ class Hub:
                 raise PermissionError(f"{agent} may not read {name}")
             self.db.execute("insert into secret_reads(secret, agent, at) values(?,?,?)", (name, agent, self.clock()))
             return r["value"]
+
+    def _listing_line(self, tid):
+        """Jack, Oct 15: agents spent whole tasks finding out by hand that a listing had been taken down."""
+        p = self.db.execute("select link, listing_state from products where name=?", (self._task_product(tid),)).fetchone()
+        if not p or not p["link"]:
+            return ""
+        state = {"active": "LIVE (buyers can see it)", None: "not checked yet"}.get(p["listing_state"],
+                                                                                  f"{p['listing_state'].upper()} (buyers can't see it)")
+        return (f" This product's Etsy listing {p['link']} is {state}, per the hub's Etsy check. "
+                f"Change pictures, copy or on/off yourself: {__import__('etsy').howto(_listing_id(p['link']))}")
+
+    def _keys_line(self, agent):
+        """Jack, Oct 15: an agent said Printify wasn't connected while its key sat in the vault for every agent."""
+        mine = self.secrets_for(agent)
+        tools = [t["name"] for t in self.tools()]           # Oct 15: an agent said "no GPU here" with the hub's one free
+        return ((f" Keys and logins you can read: {', '.join(mine)} — `fleet secret get <name>`." if mine else "")
+                + (f" Tools on the hub's GPU machine: {', '.join(tools)} — `fleet tool run {tools[0]} <args>`." if tools else ""))
 
     def secrets_for(self, agent):
         with self.lock:
@@ -1984,6 +2165,62 @@ class Hub:
                         "files": len(j.get("files", []))})
         return out
 
+    IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif"}
+
+    def images(self, jobs=300, cap=240):
+        """Every picture the newest finished jobs made, newest job first: the dashboard's Images tab (Jack, Oct 14)."""
+        if not self.jobs_dir or not os.path.isdir(self.jobs_dir):
+            return []
+        out = []
+        for jid in sorted((int(f) for f in os.listdir(self.jobs_dir) if f.isdigit()), reverse=True)[:jobs]:
+            j = self.tool_job(jid)
+            if not j or j.get("status") != "done":
+                continue
+            for f in j.get("files", []):
+                if os.path.splitext(f["path"])[1].lower() in self.IMAGE_TYPES:
+                    out.append({"job": jid, "path": f["path"], "by": j.get("by"), "tool": j.get("tool"),
+                                "prompt": " ".join(map(str, j.get("args") or [])), "at": j.get("ended") or j.get("started")})
+            if len(out) >= cap:
+                break
+        return out[:cap]
+
+    def jack_file(self, name, data):
+        """A file Jack pastes into a message. Muse chat can't carry files, so it's kept as a finished job and the
+        agent downloads it with the `fleet tool get` it already has. Returns that command."""
+        import tools_runner
+        if not self.jobs_dir:
+            raise ValueError("files need tools set up on this hub (jobs_dir)")
+        if len(data) > 25_000_000:
+            raise ValueError("that file is over 25 MB")
+        name = re.sub(r"[^\w.-]", "_", os.path.basename(name or "")).lstrip(".") or "file"
+        with self.lock:
+            jid = max(int(self.clock() * 1000), getattr(self, "_last_job", 0) + 1)
+            self._last_job = jid
+        d = os.path.join(self.jobs_dir, str(jid))
+        os.makedirs(os.path.join(d, "out"))
+        with open(os.path.join(d, "out", name), "wb") as f:
+            f.write(data)
+        open(os.path.join(d, "told"), "w").close()            # nobody ran it, so nobody is told it finished
+        tools_runner.write_json(os.path.join(d, "job.json"), {"id": jid, "tool": "jack", "args": [name], "by": "jack"})
+        tools_runner.write_json(os.path.join(d, "status.json"), {"status": "done", "started": self.clock(), "ended": self.clock()})
+        return f"fleet tool get {jid} {name}"
+
+    def listing_picture(self, ref):
+        """(filename, bytes) for a listing picture: a hub job's file "job:<id>/<path>" or a Muse file link, nothing else
+        (the hub fetching any URL an agent names would let agents reach the hub's own network)."""
+        if ref.startswith("job:") and "/" in ref:
+            jid, rel = ref[4:].split("/", 1)
+            p = self.tool_file(int(jid), rel)
+            return os.path.basename(p), open(p, "rb").read()
+        if not doc_source_ok(ref):
+            raise ValueError(f"a picture is job:<id>/<file> or a muse.ai/files link, not {ref[:80]}")
+        import urllib.request
+        with urllib.request.urlopen(ref, timeout=30) as r:
+            raw = r.read(20_000_001)
+        if len(raw) > 20_000_000:
+            raise ValueError(f"{ref[:80]} is over 20 MB")
+        return os.path.basename(urlparse(ref).path) or "image.jpg", raw
+
     def tool_file(self, jid, rel):
         """A file a job made, by its path under the job's out folder; nothing outside it."""
         root = os.path.realpath(os.path.join(self.jobs_dir or "", str(int(jid)), "out"))
@@ -2028,6 +2265,7 @@ class Hub:
             if not text.strip():
                 raise ValueError("the reply is empty")
             head = n["text"].split("\n")[0][:300]
+            self.db.execute("update needs_jack set answer=? where id=?", (text.strip(), nid))
         self.ask(by, n["agent"], f"{by.title()} answered your item on their list:\n“{head}”\n\n{text}")
         self.resolve_need(nid)
         return n["agent"]
@@ -2125,6 +2363,7 @@ class Hub:
                 rev = self.db.execute("select coalesce(sum(amount),0) s from sales where product=?", (p["name"],)).fetchone()["s"]
                 out.append({"id": p["id"], "name": p["name"], "brief": p["brief"], "pm": p["pm"], "metric": p["metric"],
                             "budget": p["budget"], "kill_date": p["kill_date"], "status": p["status"], "kind": p["kind"] or "product",
+                            "link": p["link"], "listing_state": p["listing_state"],
                             "revenue": rev, "projects": projects})
             return out
 
@@ -2348,6 +2587,25 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                 elif u.path == "/api/brain":
                     name = self._agent()
                     name and self._json(200, hub.brain_for(name) or {})
+                elif u.path == "/api/jack/images":
+                    self._jack() and self._json(200, {"images": hub.images()})
+                elif u.path == "/api/jack/image":           # one picture a job made, shown in the browser
+                    if self._jack():
+                        try:
+                            f = hub.tool_file(int(q.get("job", 0)), q.get("path", ""))
+                            kind = hub.IMAGE_TYPES.get(os.path.splitext(f)[1].lower())
+                            if not kind:
+                                raise ValueError("not a picture")
+                            body = open(f, "rb").read()
+                        except (ValueError, OSError) as e:
+                            self._json(404, {"error": str(e)})
+                        else:
+                            self.send_response(200)
+                            self.send_header("Content-Type", kind)
+                            self.send_header("Content-Length", str(len(body)))
+                            self.send_header("Cache-Control", "private, max-age=86400")
+                            self.end_headers()
+                            self.wfile.write(body)
                 elif u.path == "/api/vault":
                     self._jack() and self._json(200, {"reads": hub.secret_reads(), "secrets": hub.secret_names()})
                 elif u.path == "/api/council":
@@ -2479,6 +2737,23 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                     if name:
                         b = self._body()
                         self._json(200, {"job": hub.tool_run(name, b["tool"], b.get("args") or [], b.get("timeout"))})
+                elif u.path in ("/api/etsy/post", "/api/etsy/draft"):   # an agent's Etsy listing, put live (draft: older fleet.py)
+                    name = self._agent()
+                    if name:
+                        import etsy
+                        try:
+                            self._json(200, etsy.post(hub, name, self._body(), hub.listing_picture))
+                        except (ValueError, RuntimeError, OSError) as e:
+                            self._json(400, {"error": str(e)})
+                elif u.path == "/api/etsy/update":         # change a listing: pictures, on/off, copy
+                    name = self._agent()
+                    if name:
+                        import etsy
+                        b = self._body()
+                        try:
+                            self._json(200, etsy.update(hub, name, b.pop("listing_id"), b, hub.listing_picture))
+                        except (ValueError, RuntimeError, OSError, KeyError, PermissionError) as e:
+                            self._json(400, {"error": str(e)})
                 elif u.path == "/api/manage":                # CEO / PM run the company: products, projects, tasks, placement
                     name = self._agent()
                     name and self._json(200, {"result": hub.manage(name, self._body()["line"])})
@@ -2529,6 +2804,14 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         b = self._body()
                         hub.secret_put(b["name"], b["value"], b.get("scope", "fleet"), by="jack")
                         self._json(200, {"ok": True})
+                elif u.path == "/api/jack/secret/scope":
+                    if self._jack():
+                        b = self._body()
+                        try:
+                            hub.secret_scope(b["name"], b["scope"])
+                            self._json(200, {"ok": True})
+                        except KeyError:
+                            self._json(404, {"error": f"no secret called {b['name']!r}"})
                 elif u.path == "/api/jack/etsy/app":
                     if self._jack():
                         import etsy
@@ -2549,6 +2832,13 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         try:
                             hub.deliver_now(hub.reply_need(int(b["id"]), self.who, str(b["text"]).strip()))
                             self._json(200, {"ok": True})
+                        except ValueError as e:
+                            self._json(400, {"error": str(e)})
+                elif u.path == "/api/jack/file":           # a file pasted into a message; the message carries how to get it
+                    if self._jack():
+                        b = self._body()
+                        try:
+                            self._json(200, {"get": hub.jack_file(b.get("name"), base64.b64decode(b.get("data") or ""))})
                         except ValueError as e:
                             self._json(400, {"error": str(e)})
                 elif u.path == "/api/jack/dismiss":
@@ -2617,7 +2907,8 @@ def serve(hub, host, port, password, join_code=None, logins=None):
             except Exception as e:
                 self._json(500, {"error": str(e)})
 
-    return ThreadingHTTPServer((host, port), H)
+    # stdlib queues only 5 waiting connections; the Images tab opens dozens at once and the rest came back 502
+    return type("Server", (ThreadingHTTPServer,), {"request_queue_size": 256, "daemon_threads": True})((host, port), H)
 
 
 def _revenue_fetch(h, cfg):
@@ -2685,7 +2976,7 @@ def main(cfg_path, *args):
     log = open(cfg.get("log", os.path.join(os.path.dirname(cfg["db"]), "hub.log")), "a", buffering=1)
 
     def loop():
-        last_renew = last_rev = 0
+        last_renew = last_rev = last_list = 0
         while True:
             try:
                 if time.time() - last_renew > 86400:
@@ -2694,6 +2985,13 @@ def main(cfg_path, *args):
                 if time.time() - last_rev > 3600:
                     h.pull_revenue(lambda: _revenue_fetch(h, cfg))
                     last_rev = time.time()
+                if time.time() - last_list > 600:
+                    last_list = time.time()
+                    import etsy
+                    try:
+                        etsy.sync_listings(h)
+                    except ValueError:                    # no shop linked
+                        pass
                 h.tick()
             except Exception:
                 log.write(time.strftime("%F %T ") + traceback.format_exc())
@@ -2720,6 +3018,25 @@ def main(cfg_path, *args):
                     log.write(time.strftime("%F %T ") + traceback.format_exc())
                 time.sleep(h.APPROVALS_EVERY)
         threading.Thread(target=approvals, daemon=True).start()
+
+        rep = cfg.get("reports")                    # {"agent": "dot"}: its slack_users channel is the reports channel
+        if rep:
+            import reports
+            h.reporters.add(rep["agent"])
+            note = lambda s: log.write(time.strftime("%F %T ") + s + "\n")
+            who = cfg["slack_users"][rep["agent"]]
+            rp = reports.Reporter(h, reports.make_pdf(os.path.join(os.path.dirname(cfg["db"]), "reports")),
+                                  reports.slack_upload(slack_t.api, lambda: (vault("slack-bot-token") or "").strip(), who["channel"]),
+                                  log=note)
+
+            def reporting():
+                while True:
+                    try:
+                        rp.tick()
+                    except Exception:
+                        note(traceback.format_exc())
+                    time.sleep(60)
+            threading.Thread(target=reporting, daemon=True).start()
     log.write(time.strftime("%F %T ") + f"hub up on {cfg.get('host', '127.0.0.1')}:{cfg['port']}\n")
     serve(h, cfg.get("host", "127.0.0.1"), cfg["port"], cfg["password"], cfg.get("join_code"), cfg.get("logins")).serve_forever()
 

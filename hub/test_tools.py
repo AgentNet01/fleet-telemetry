@@ -23,6 +23,12 @@ open(os.path.join(os.environ["OUT_DIR"], "img", "card.png"), "wb").write(b"PNG" 
 """
 SLOW = "import time\nprint('working', flush=True)\ntime.sleep(60)\n"
 
+def open_page(page, name):
+    """The pages live in the ☰ menu (Jack, Oct 15: the office is the whole page)."""
+    page.locator(".menubtn:visible").first.click()
+    page.get_by_role("tab", name=name).click()
+
+
 
 def world():
     """A hub whose jobs folder is fresh, and a repo with two tools in it."""
@@ -50,6 +56,45 @@ def run():
     told = [s for s in muse.sent.get("Ada", []) if f"job {jid} done" in s]
     assert len(told) == 1, f"run: Ada told once that it finished: {muse.sent.get('Ada')}"
     print("run OK")
+
+
+def images():
+    """Jack, Oct 14: he couldn't see anything the hub's GPU made. The Images tab lists every picture a finished job
+    made, newest first, with who asked and what for; nothing else from the jobs folder."""
+    h, muse, r = world()
+    first = h.tool_run("Ada", "hello", ["sweet", "16"]); r.run_once()
+    second = h.tool_run("Ada", "hello", ["21st", "birthday"]); r.run_once()
+    open(os.path.join(h.jobs_dir, str(second), "out", "notes.txt"), "w").write("not a picture")
+    got = h.images()
+    assert [(g["job"], g["path"]) for g in got] == [(second, "img/card.png"), (first, "img/card.png")], \
+        f"images: each job's pictures, newest job first, no other files: {got}"
+    assert got[0]["by"] == "Ada" and "21st birthday" in got[0]["prompt"], f"images: who asked and what for: {got[0]}"
+
+    import base64, threading, urllib.error, urllib.request
+    srv = hub.serve(h, "127.0.0.1", 0, "pw")
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    def get(path, auth=True):
+        req = urllib.request.Request(base + path, headers={"Authorization": "Basic " + base64.b64encode(b"jack:pw").decode()} if auth else {})
+        try:
+            r = urllib.request.urlopen(req, timeout=10)
+            return r.status, r.headers.get("Content-Type"), r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, None, b""
+    code, kind, body = get(f"/api/jack/image?job={second}&path=img/card.png")
+    assert (code, kind, body) == (200, "image/png", b"PNG" * 10), f"images: Jack opens a picture in the browser: {code} {kind}"
+    assert get(f"/api/jack/image?job={second}&path=../job.json")[0] == 404, "images: nothing outside the job's pictures"
+    assert get(f"/api/jack/image?job={second}&path=notes.txt")[0] == 404, "images: only pictures"
+    assert get(f"/api/jack/image?job={second}&path=img/card.png", auth=False)[0] == 401, "images: only Jack"
+    srv.shutdown()
+
+    # Jack, Oct 14: pasting a picture into a reply. Muse chat carries text only, so the agent downloads it.
+    cmd = h.jack_file("../Screen Shot.png", b"PNG!")
+    jid, name = cmd.split()[3:]
+    assert cmd.startswith("fleet tool get ") and name == "Screen_Shot.png", f"files: a safe name in the job's folder: {cmd}"
+    assert open(h.tool_file(int(jid), name), "rb").read() == b"PNG!", "files: the agent gets back what Jack pasted"
+    assert not h._watch_jobs() and (int(jid), name) in [(g["job"], g["path"]) for g in h.images()], "files: shows with the pictures"
+    print("images OK")
 
 
 def guards():
@@ -122,7 +167,7 @@ def ui():
     with sync_playwright() as pw:
         page = pw.chromium.launch().new_page(http_credentials={"username": "jack", "password": "pw"})
         page.goto(f"http://127.0.0.1:{srv.server_address[1]}/")
-        page.get_by_role("tab", name="Portfolio").click()
+        open_page(page, "Portfolio")
         machine = page.locator("#hubjobs")
         expect(machine).to_contain_text("Makes a birthday card")
         expect(machine.locator(".row", has_text=f"#{done}")).to_contain_text("hello")
@@ -132,4 +177,4 @@ def ui():
     print("ui OK")
 
 
-{"run": run, "guards": guards, "cli": cli, "ui": ui}[sys.argv[1]]()
+{"run": run, "images": images, "guards": guards, "cli": cli, "ui": ui}[sys.argv[1]]()

@@ -15,17 +15,18 @@
     fleet task done <id> <link>      finish a task; the link is the evidence (commit, file, URL)
     fleet task verify <id> pass      approve a task you were asked to verify
     fleet task verify <id> fail "<reason>"   send it back to its holder with the reason
-    fleet task wait <id> <who> "<what you need>"   waiting on operator, an agent, or outside: the task
+    fleet task wait <id> <who> "<what you need>"   waiting on operator, pm (your product's PM decides), an agent, or outside: the task
                                      is parked for you and you take other work meanwhile
     fleet task resume <id>           the wait is over: the task comes back to you
-    fleet task operator <id> "<what to do>" "<why it blocks you>" [<link>]   only when you're blocked on a real
-                                     person (Jack or Darragh): their ID, SSN/tax, a phone number or 2FA, a payment, an
-                                     account only they can open. What = one short line ("Create an Etsy API app for your
+    fleet task operator <id> '<what to do>' '<why it blocks you>' <link: the sign-up / card / review page>   only when you're blocked on a real
+                                     person (Jack or Darragh): payment info (a card, a purchase) or ID/tax a service
+                                     legally requires. Sign up for accounts yourself with your fleet email. What = one short line ("Create an Etsy API app for your
                                      shop"); why = what it blocks; link = where to do it. One step each; the task keeps
                                      going. Choices you decide yourself.
     fleet jack list                  PM: the asks for Jack waiting on you, and your items on his list
-    fleet jack add "<what Jack does>" ["<why>"] [<link>]   PM: one merged, plain line on Jack's list
-    fleet jack done <id> [<id>...]   PM: Jack's answer is passed on to whoever asked; close their asks
+    fleet jack add "<what Jack does>" "<why>" <link>   PM: one merged, plain line on Jack's list; the link is the exact
+                                     page where he does it (billing page, listing). Replacing a line? jack done <old id>
+    fleet jack done <id> [<id>...]   PM: take a line you put on Jack's list off it (replaced or no longer needed)
     fleet task release <id>          put a task back up for grabs (CEO / the product's PM only)
     fleet suggest "<text>"           suggest a change to your PM and the CEO
 
@@ -38,12 +39,25 @@
     fleet tool job <job>             a job's status, log and files
     fleet tool get <job> <file> [<dest>]   download a file a job made
 
+  Etsy: posting is your job. The hub puts your listing LIVE in the linked shop and sets the product's link.
+    fleet etsy post <listing.json>  {"title", "description", "price": 24.99, "tags": [up to 13], "category": "magnets"
+                                     (a word or Etsy taxonomy id), "kind": "physical"|"download", "product": "<product>",
+                                     "images": ["job:<job>/<file>" or "https://muse.ai/files/...", up to 10, first = hero],
+                                     "files": [same kinds of link; required for "download": what the buyer gets]}
+                                     Any other Etsy listing field passes through (materials, shipping_profile_id, ...).
+                                     Printify products: publish them with the Printify API (PRINTIFY_API_KEY in the vault).
+    fleet etsy update <listing id> <changes.json>   change a listing through the shop's API link, no browser sign-in:
+                                     {"images": [...] replaces every picture (first = hero), "state": "active"|"inactive",
+                                     "title", "description", "tags", ...}. Its PM, the CEO, or whoever has a task on that
+                                     product may change it; the product's task messages show whether it's live.
+
   Running the company. The CEO can do all of this; a product's PM can manage that product's tasks.
   Parking agents is for Jack and Darragh. Every change is logged and shown on the dashboard.
     fleet portfolio                  every product, project, open task, and who is where
     fleet changes                    the latest changes and who made them
     fleet product add "<name>" "<brief>" ["<goal>"]
     fleet product set "<product>" brief|metric "<value>"   (status: Jack/Darragh only)
+    fleet product set "<product>" link <url>   PM: where Jack sees it live, e.g. the Etsy listing
     fleet product set "<product>" kind tool|product   a tool is shared by every product (fulfillment, image generation)
     fleet product rename "<product>" "<new name>"
     fleet product remove "<product>"    (Jack/Darragh only) cancels its open tasks, frees its agents (undo: status active)
@@ -102,13 +116,13 @@ def route():
     return base, urllib.request.build_opener()
 
 
-def call(method, path, body=None):
+def call(method, path, body=None, timeout=15):
     base, op = route()
     req = urllib.request.Request(base + path, method=method,
                                  data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Authorization": "Bearer " + conf("token", "FLEET_TOKEN"),
                                           "Content-Type": "application/json", "X-Fleet-Rev": REV})
-    with op.open(req, timeout=15) as r:
+    with op.open(req, timeout=timeout) as r:
         return json.loads(r.read())
 
 
@@ -325,6 +339,12 @@ def main(args):
         with op.open(req, timeout=300) as r, open(dest, "wb") as f:
             shutil.copyfileobj(r, f)
         print(f"Saved {dest}")
+    elif cmd == "etsy" and len(args) == 4 and args[1] == "update":
+        r = call("POST", "/api/etsy/update", dict(json.load(open(args[3])), listing_id=args[2]), timeout=300)
+        print(f"Updated {', '.join(r['changed']) or 'nothing'}: {r['live']}")
+    elif cmd == "etsy" and len(args) == 3 and args[1] in ("post", "draft"):
+        r = call("POST", "/api/etsy/post", json.load(open(args[2])), timeout=300)
+        print(f"Live on Etsy: {r['live']}\nEdit: {r['edit']}")
     elif cmd == "suggest" and len(args) == 2:
         r = call("POST", "/api/suggest", {"text": args[1]})
         print(f"Suggestion #{r['id']} sent to your PM and the CEO.")

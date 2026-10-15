@@ -15,6 +15,12 @@ import sys
 import hub
 from test_autonomy import new_hub
 
+def open_page(page, name):
+    """The pages live in the ☰ menu (Jack, Oct 15: the office is the whole page)."""
+    page.locator(".menubtn:visible").first.click()
+    page.get_by_role("tab", name=name).click()
+
+
 
 def steps():
     """Jack, Oct 13: #59 "What Jack must set up for physical orders" went to Done and he never saw what to do."""
@@ -27,7 +33,7 @@ def steps():
         raise AssertionError("steps: a task for Jack finished with nothing on his list")
     except ValueError as e:
         assert "fleet task operator" in str(e), e
-    h.task_for_jack("Neo", tid, "Open a Printful account at https://printful.com — needed before any order ships")
+    h.task_for_jack("Neo", tid, "Open a Printful account — needed before any order ships", None, "https://www.printful.com/auth/register")
     need = [n for n in h.needs_jack() if n["task"] == tid]
     assert need and "Printful" in need[0]["text"] and need[0]["agent"] == "Neo", h.needs_jack()
     assert h.task(tid)["status"] == "working", "steps: filing a step doesn't park the task"
@@ -36,14 +42,29 @@ def steps():
     assert [n for n in h.needs_jack() if n["task"] == tid], "steps: Jack's step stays on his list after done"
 
     handout = [s for s in muse.sent.get("Neo", []) if "fleet task operator" in s]
-    assert handout and "phone number" in handout[0] and "decide yourself" in handout[0] and "approval" not in handout[0], \
+    assert handout and "Sign up for accounts yourself" in handout[0] and "account only they" not in handout[0] \
+        and "decide yourself" in handout[0] and "approval" not in handout[0], \
         "steps: only real blockers go to the operators; choices stay with the agents"
+    assert "AI-generated" in handout[0] and "PHOTO HERE" in handout[0] and "template" in handout[0], "steps: Jack, Oct 15: listing photos carry no AI/sample labels or placeholders"
+    assert "Personalization instructions" in handout[0], "steps: Jack, Oct 15: personalization boxes are written for a layman"
+    assert "never make" in handout[0], "steps: Jack, Oct 15 (paddles): agents are told the operators never make or ship anything"
     assert any("fleet task operator" in s for s in muse.sent.get("Neo", [])), \
         "steps: handed a task, the agent is told to file operator-only steps as it finds them"
 
     plain = h.add_task(pj, "Packaging research", "optimizer", "doc", owner="Neo")
     h.tick(); h.tick()
     h.task_done("Neo", plain, "https://x/pack.md")          # nothing for Jack: no step needed
+    # Jack, Oct 15: #826's done-when only said "or the exact blocker if it needs an account only an operator can open",
+    # and the forced step made the agent dump four decisions on his list
+    quote = h.add_task(pj, "Run the BookVault quote", "optimizer",
+                       "quote doc; or the exact blocker if the tool requires an account only an operator can open", owner="Neo")
+    h.tick(); h.tick()
+    h.task_done("Neo", quote, "https://x/quote.md")
+    rule = h.add_task(pj, "Redesign listing images per Jack's Oct 15 photo rule", "designer", "image set", owner="Neo")
+    h.tick(); h.tick()
+    h.task_done("Neo", rule, "https://x/images.md")
+    assert h.task(rule)["status"] == "verifying", "steps: a title that cites Jack's rule isn't work for Jack"
+    assert h.task(quote)["status"] == "verifying", "steps: a done-when that only mentions an operator can finish"
     try:
         h.task_for_jack("Neo", plain, "x")
         raise AssertionError("steps: only the holder of a working task files steps for it")
@@ -154,7 +175,7 @@ def show():
     assert "https://muse.ai/files/1/2/x/copy-188.md" in out.stdout and "Pericles" in out.stdout, out.stdout
     ops = h.add_task(pj, "What an operator must set up", "marketer", "steps on the operator list", owner="Pericles")
     h.tick(); h.tick()
-    h.task_for_jack("Pericles", ops, "Open a Printful account at https://printful.com")
+    h.task_for_jack("Pericles", ops, "Open a Printful account", None, "https://www.printful.com/auth/register")
     out = subprocess.run([sys.executable, "fleet.py", "task", "show", str(ops)], env=env, capture_output=True, text=True)
     assert "Open a Printful account" in out.stdout, "show: what's on the operator list for the task: " + out.stdout
     print("show OK")
@@ -193,8 +214,10 @@ def ui():
         page.goto(f"http://127.0.0.1:{srv.server_address[1]}/")
         page.wait_for_timeout(1500)
         assert not errors, f"ui: the page runs without errors (one blanked the office): {errors}"
-        page.get_by_role("link", name="1 thing needs you").click()          # Overview points to the page
-        expect(page.get_by_role("tab", name="Needs you")).to_have_attribute("aria-selected", "true")
+        page.wait_for_function("window.Office3D && Office3D.debug.state().ready", timeout=30000)
+        page.mouse.click(*page.evaluate("(() => { const s = Office.sim.SHRINE; return Office3D.debug.project(s.x + .4, s.y + .4, .4); })()"))   # the shrine points to the page
+        expect(page.locator("#needs")).to_be_visible()
+        expect(page.locator('[data-tab="needs"]')).to_have_attribute("aria-selected", "true")
         row = page.locator(".njrow", has_text="is physical work in scope")
         expect(row.get_by_role("textbox")).to_be_hidden()                   # the reply box opens on Reply, not before
         expect(row).to_contain_text("brutus")
@@ -207,7 +230,7 @@ def ui():
         row.get_by_role("textbox", name="Reply to brutus").fill("Yes, physical products are in scope.")
         row.get_by_role("button", name="Send").click()
         expect(page.locator(".njrow", has_text="is physical work in scope")).to_have_count(0)
-        page.get_by_role("tab", name="Portfolio").click()
+        open_page(page, "Portfolio")
         expect(page.locator("#tools")).to_contain_text("Physical fulfillment")
         expect(page.locator("#products")).not_to_contain_text("Physical fulfillment")
     assert any("physical products are in scope" in s for s in muse.sent.get("brutus", [])), muse.sent.get("brutus")
@@ -215,37 +238,42 @@ def ui():
 
 
 def pm():
-    """Jack, Oct 14: 30 items from many agents, mostly the same few asks — the PM merges them for him."""
+    """Jack, Oct 14: Pericles decides what reaches him. An agent's ask goes to the CEO first, who answers it itself
+    (which print company to use) or rewrites it into a plain line for Jack. One the CEO hasn't decided in SCREEN_WAIT
+    goes to Jack as it is, so nothing gets stuck with the CEO again (49 did)."""
     h, muse, clock = new_hub("Neo", "Bo", "Pam")
+    h.seat("ceo", "Pam")
     pj = h.add_project(h.add_product("Hats", brief="hats", pm="Pam"), "launch")
-    a = h.add_task(pj, "Printify setup", "engineer", "doc", owner="Neo")
-    b = h.add_task(pj, "Hat listing", "designer", "doc", owner="Bo")
+    a = h.add_task(pj, "Print partner runbook", "engineer", "doc", owner="Neo")
+    b = h.add_task(pj, "Hat ads", "marketer", "doc", owner="Bo")
     h.tick(); h.tick()
-    h.task_for_jack("Neo", a, "Create a Printify account")
-    h.task_wait("Bo", b, "jack", "Open Printify and connect it to Etsy")
-    assert not h.needs_jack(), f"pm: raw asks skip Jack's list: {h.needs_jack()}"
-    raw = h.jack_list("Pam")
-    assert len(raw) == 2 and {r["agent"] for r in raw} == {"Neo", "Bo"}, raw
-    for _ in range(3):
-        h.tick()
-    assert any("fleet jack list" in s for s in muse.sent.get("Pam", [])), "pm: the PM is told there's something to merge"
+
+    def ceo_says(text):
+        muse.say("Pam", text); h.tick(); clock.go(61); h.tick(); h.tick()
+
+    h.task_for_jack("Neo", a, "Get PrintKK dashboard access", "test order", "https://printkk.com")
+    assert not h.needs_jack(), f"pm: an agent's ask isn't on Jack's list before the CEO has looked: {h.needs_jack()}"
+    h.tick()
+    assert any("Get PrintKK dashboard access" in m for m in muse.sent.get("Pam", [])), "pm: the CEO is shown the ask"
+    ceo_says("ANSWER: Use Printify, it's set up. Skip PrintKK.")
+    assert any("Use Printify" in m for m in muse.sent.get("Neo", [])), "pm: the CEO's answer goes to the agent"
+    assert not h.needs_jack(), f"pm: an ask the CEO answered never reaches Jack: {h.needs_jack()}"
+
+    h.task_wait("Bo", b, "jack", "Pls approve ads spend 14 for hats per plan #553")
+    h.tick()
+    ceo_says("JACK: Approve $14 of Etsy ads for the hats listing, $1 a day for 2 weeks. https://www.etsy.com/listing/1")
+    mine = h.needs_jack()
+    assert len(mine) == 1 and mine[0]["what"].startswith("Approve $14 of Etsy ads") and mine[0]["agent"] == "Bo", \
+        f"pm: what reaches Jack is the CEO's plain line: {mine}"
+    assert mine[0]["link"] == "https://www.etsy.com/listing/1", f"pm: with the CEO's link: {mine[0]}"
+
+    h.task_for_jack("Neo", a, "Add a card to PrintKK", "orders", "https://printkk.com/billing")
+    h.tick()
+    clock.go(hub.SCREEN_WAIT + 1); h.tick()
+    assert any(n["what"] == "Add a card to PrintKK" for n in h.needs_jack()), "pm: an ask the CEO sat on reaches Jack anyway"
 
     nid = h.jack_add("Pam", "Open a Printify account and connect it to Etsy", "hats can't sell", "https://printify.com")
-    mine = h.needs_jack()
-    assert [n["id"] for n in mine] == [nid] and mine[0]["agent"] == "Pam", mine
-    h.reply_need(nid, "jack", "Done, login is in the vault as printify")
-    for _ in range(3):
-        h.tick()
-    assert any("login is in the vault" in s for s in muse.sent.get("Pam", [])), "pm: Jack's answer goes to the PM"
-
-    try:
-        h.jack_done("Neo", [r["id"] for r in raw])
-        raise AssertionError("pm: only the PM closes the asks it was given")
-    except PermissionError:
-        pass
-    h.jack_done("Pam", [r["id"] for r in raw])
-    assert not h.jack_list("Pam"), "pm: routed asks close"
-    assert h.task(b)["waiting_on"] is None, "pm: a task parked on Jack goes back to its holder"
+    assert nid in [n["id"] for n in h.needs_jack()], "pm: the CEO or a PM can still put its own line on Jack's list"
     try:
         h.jack_add("Neo", "x")
         raise AssertionError("pm: only a PM or the CEO adds to Jack's list")
@@ -254,4 +282,169 @@ def pm():
     print("pm OK")
 
 
-{"pm": pm, "steps": steps, "reply": reply, "tools": tools, "doc": doc, "show": show, "plain": plain, "since": since, "ui": ui}[sys.argv[1]]()
+def repeat():
+    """Jack, Oct 15: he got asked to connect Printify (already linked) and to approve the magnets listing again, and the
+    CEO's own ask ("DO NOT PUBLISH gate on storybooks…") reached him unchecked. Whoever screens an ask now sees what Jack
+    already answered, and the CEO's own asks go to its stand-in."""
+    h, muse, clock = new_hub("Neo", "Bo", "Pam")
+    h.seat("ceo", "Pam"); h.seat("ceo_backup", "Bo")
+    pj = h.add_project(h.add_product("Magnets", brief="magnets", pm="Pam"), "launch")
+    a = h.add_task(pj, "Magnet listing", "designer", "doc", owner="Neo")
+    c = h.add_task(pj, "Launch checklist", "pm", "doc", owner="Pam")
+    h.tick(); h.tick()
+
+    def ceo_says(text):
+        muse.say("Pam", text); h.tick(); clock.go(61); h.tick(); h.tick()
+
+    nid = h.jack_add("Pam", "Publish the magnets listing on Etsy", None, "https://www.etsy.com/listing/9")
+    h.reply_need(nid, "jack", "Approved, publish it.")
+    h.tick()
+    ceo_says("Thanks.")
+    h.resolve_need(h.jack_add("Pam", "Connect Printify to the Etsy shop", None, "https://printify.com"))
+    h.task_for_jack("Neo", a, "Approve publishing the magnets listing", "can't go live", "https://www.etsy.com/listing/9")
+    h.tick()
+    shown = [m for m in muse.sent.get("Pam", []) if "Approve publishing the magnets listing" in m]
+    assert shown and "Approved, publish it." in shown[-1] and "Connect Printify to the Etsy shop" in shown[-1], \
+        f"repeat: the CEO sees what Jack already answered: {shown}"
+
+    h.task_wait("Pam", c, "jack", "DO NOT PUBLISH gate on storybooks — checklist not actionable until publish is authorized")
+    h.tick()
+    assert not [n for n in h.needs_jack() if n["task"] == c], f"repeat: the CEO's own ask isn't on Jack's list unchecked: {h.needs_jack()}"
+    assert any("DO NOT PUBLISH gate" in m for m in muse.sent.get("Bo", [])), "repeat: the CEO's stand-in checks it"
+    print("repeat OK")
+
+
+def pmwait():
+    """Jack, Oct 15: five listing tasks sat on "PM decision needed" waiting on 'outside', so the PM never heard.
+    Waiting on "pm" reaches the product's PM; the screener is told posting is the agents' job, only spending is Jack's."""
+    h, muse, clock = new_hub("Neo", "Pam")
+    pj = h.add_project(h.add_product("Keychains", brief="k", pm="Pam"), "launch")
+    t = h.add_task(pj, "Keychain listing assembly", "designer", "doc", owner="Neo")
+    h.tick(); h.tick()
+    h.task_wait("Neo", t, "pm", "pick the keychain price: A 9.99, B 4.99 or C 6.99")
+    for _ in range(3):
+        h.tick()
+    assert h.task(t)["waiting_on"] == "Pam", h.task(t)
+    assert any("pick the keychain price" in m for m in muse.sent.get("Pam", [])), "pmwait: the PM is told"
+    assert "posting" in hub.OPERATOR_ONLY.lower() and "spend" in hub.OPERATOR_ONLY.lower(), hub.OPERATOR_ONLY
+    print("pmwait OK")
+
+
+def busy_ceo():
+    """Jack, Oct 15: Pericles was busy in the Etsy dashboard, so "review the banner images" sat 30 min unscreened and
+    reached Jack as written. A busy CEO's ask goes to the stand-in first; only if it sits there too does Jack get it."""
+    h, muse, clock = new_hub("Neo", "Bo", "Pam")
+    h.seat("ceo", "Pam"); h.seat("ceo_backup", "Bo")
+    pj = h.add_project(h.add_product("Banners", brief="b", pm="Pam"), "launch")
+    t = h.add_task(pj, "Banner images", "designer", "images", owner="Neo")
+    h.tick(); h.tick()
+    muse.say("Pam", "on it"); h.tick()
+    h.task_for_jack("Neo", t, "Review the banner images and approve them", "listing", "https://www.etsy.com/listing/1")
+    h.tick()
+    clock.go(hub.SCREEN_WAIT + 1); h.tick(); h.tick()
+    assert not h.needs_jack(), f"busy_ceo: one unsorted wait isn't enough to reach Jack: {h.needs_jack()}"
+    assert any("Review the banner images" in m and "you decide" in m for m in muse.sent.get("Bo", [])), "busy_ceo: the stand-in screens it"
+    clock.go(hub.SCREEN_WAIT + 1); h.tick(); h.tick()
+    assert [n["what"] for n in h.needs_jack()] == ["Review the banner images and approve them"], "busy_ceo: unsorted twice, Jack gets it"
+    print("busy_ceo OK")
+
+
+def actionable():
+    """Jack, Oct 15: "I click on open and it just opens this really long confusing markdown file ... I don't know what
+    email to create this BookVault account with." An item for him links to the page where he acts, not the agent's notes."""
+    h, muse, clock = new_hub("Dash")
+    pj = h.add_project(h.add_product("Books", brief="b"), "launch")
+    t = h.add_task(pj, "Book proofs", "engineer", "doc", owner="Dash")
+    h.tick(); h.tick()
+    try:
+        h.task_for_jack("Dash", t, "Set up the BookVault account", "orders need it", "https://muse.ai/files/1/2/x/bookvault-steps.md")
+        raise AssertionError("actionable: a notes file isn't where Jack acts")
+    except ValueError as e:
+        assert "notes" in str(e) and "email" in str(e), e
+    h.task_for_jack("Dash", t, "Add a card to BookVault (sign in with pericleswilliams106@gmail.com)", "orders need it",
+                    "https://bookvault.app/billing")
+    print("actionable OK")
+
+
+def keys():
+    """Jack, Oct 15: Neo told Jack "Printify isn't connected, I can't read the key" while PRINTIFY_API_KEY sat in the
+    vault for every agent. Each task tells its holder which keys it can read."""
+    h, muse, clock = new_hub("Neo")
+    h.secret_put("PRINTIFY_API_KEY", "k", "fleet", by="jack")
+    h.secret_put("darraghs-bank", "k", "agent:Darragh", by="jack")
+    h.jobs_dir = __import__("tempfile").mkdtemp()
+    open(h.jobs_dir + "/tools.json", "w").write('[{"name": "imagegen", "about": "local image generation"}]')
+    pj = h.add_project(h.add_product("Cups", brief="c"), "launch")
+    h.add_task(pj, "Price the cups", "optimizer", "doc", owner="Neo")
+    h.tick(); h.tick()
+    task = [m for m in muse.sent.get("Neo", []) if "Price the cups" in m]
+    assert "fleet tool run imagegen" in task[-1], f"keys: the hub's GPU tools are named too: {task}"
+    assert task and "PRINTIFY_API_KEY" in task[-1] and "fleet secret get" in task[-1] and "darraghs-bank" not in task[-1], f"keys: {task}"
+    print("keys OK")
+
+
+def newpm():
+    """Jack, Oct 15: nine products got new PMs while the fleet sat idle, but the "no work lined up" asks stayed with
+    the old PM, so the new ones weren't asked to plan for hours. A new PM is asked at once."""
+    h, muse, clock = new_hub("Neo", "Bo", "Pam")
+    h.add_project(h.add_product("Hats", brief="hats", pm="Pam"), "launch")
+    h.tick(); h.tick()
+    assert any("Hats has no work lined up" in m for m in muse.sent.get("Pam", [])), "newpm: the old PM was asked first"
+    h.set_pm("Hats", "Bo")
+    h.tick(); h.tick()
+    assert any("Hats has no work lined up" in m for m in muse.sent.get("Bo", [])), f"newpm: the new PM is asked: {muse.sent.get('Bo')}"
+    print("newpm OK")
+
+
+def listed():
+    """Jack, Oct 15: listings posted through Printify (not `fleet etsy post`) never set the product's link, so the
+    dashboard showed pet portraits as not live. A task finished with an Etsy listing as its evidence sets it."""
+    h, muse, clock = new_hub("Neo")
+    pj = h.add_project(h.add_product("Pets", brief="p"), "launch")
+    t = h.add_task(pj, "Publish the pet listing", "engineer", "live", owner="Neo")
+    h.tick(); h.tick()
+    h.evidence_ok = lambda link: True
+    h.task_done("Neo", t, "https://www.etsy.com/listing/4595880794/custom-pet-portrait-from-photo")
+    assert [p["link"] for p in h.portfolio() if p["name"] == "Pets"] == ["https://www.etsy.com/listing/4595880794/custom-pet-portrait-from-photo"], h.portfolio()
+    print("listed OK")
+
+
+def tidy():
+    """Jack, Oct 14: a newer line that replaces an older one must take its place, one ask per task, and a link to
+    every product's listing so he can see what he's approving ad spend for."""
+    h, muse, clock = new_hub("Neo", "Pam")
+    pj = h.add_project(h.add_product("Hats", brief="hats", pm="Pam"), "launch")
+    old = h.jack_add("Pam", "Open Printify, PrintKK accounts; add card", "no accounts", "https://printify.com")
+    new = h.jack_add("Pam", "Add a card to Printify", "agents opened it", "https://printify.com/app/billing")
+    h.jack_done("Pam", [old])
+    assert [n["id"] for n in h.needs_jack()] == [new], f"tidy: the replaced line leaves Jack's list: {h.needs_jack()}"
+
+    t = h.add_task(pj, "Imagegen fix", "engineer", "doc", owner="Neo")
+    h.tick(); h.tick()
+    try:
+        h.task_for_jack("Neo", t, "Add a card to PrintKK", "orders can't ship")
+        raise AssertionError("tidy: an agent's step for Jack without the sign-up or payment page is refused")
+    except ValueError:
+        pass
+    h.task_for_jack("Neo", t, "Clear the model cache on the hub", "tool broken", "https://example.com/steps")
+    h.task_wait("Neo", t, "jack", "Clear the model cache on the hub")
+    asks = [r for r in h.needs_jack() if r["task"] == t]
+    assert len(asks) == 1, f"tidy: waiting on Jack for a step already asked doesn't ask twice: {asks}"
+
+    try:
+        h.jack_add("Pam", "Approve the hats ad test")
+        raise AssertionError("tidy: a line on Jack's list without a link is refused")
+    except ValueError:
+        pass
+
+    h.manage("Pam", 'product set Hats link https://www.etsy.com/listing/123')
+    assert [p["link"] for p in h.portfolio() if p["name"] == "Hats"] == ["https://www.etsy.com/listing/123"], "tidy: product shows its listing"
+    try:
+        h.manage("Pam", 'product set Hats link etsy.com/listing/123')
+        raise AssertionError("tidy: a product link must be a web address")
+    except ValueError:
+        pass
+    print("tidy OK")
+
+
+{"busy_ceo": busy_ceo, "actionable": actionable, "listed": listed, "newpm": newpm, "keys": keys, "pmwait": pmwait, "repeat": repeat, "tidy": tidy, "pm": pm, "steps": steps, "reply": reply, "tools": tools, "doc": doc, "show": show, "plain": plain, "since": since, "ui": ui}[sys.argv[1]]()

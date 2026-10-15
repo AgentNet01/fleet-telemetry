@@ -8,7 +8,7 @@
 (function(){ let t=null; try{ t=localStorage.getItem("hub-theme"); }catch(e){}
   if(t!=="light"&&t!=="dark") t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";
   document.documentElement.dataset.theme=t; })();</script>
-<title>Fleet Hub</title>
+<title>Foundlings HQ</title>
 <style>
 :root{
   --bg:#0b0d12; --panel:#141821; --panel2:#1b2029; --panel3:#222835; --line:#2a303d;
@@ -42,9 +42,24 @@ h1 .live{width:7px;height:7px;border-radius:50%;background:var(--ok)}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--dim)}
 .chip b{color:var(--fg);font-variant-numeric:tabular-nums}
-.tabs{position:sticky;top:0;z-index:5;display:flex;gap:4px;margin-bottom:6px;padding:6px 0;background:var(--bg);overflow-x:auto;-webkit-overflow-scrolling:touch}
-.tab{flex:0 0 auto;background:none;border:0;color:var(--dim);font:inherit;font-size:13px;font-weight:600;padding:8px 13px;border-radius:9px;cursor:pointer;white-space:nowrap}
-.tab[aria-selected=true]{background:var(--panel);color:var(--fg);border:1px solid var(--line)}
+/* Jack, Oct 15: the office is the page; the pages live in a menu from the ☰ beside "Foundlings HQ" */
+.menubtn{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:10px;width:38px;height:38px;font-size:18px;line-height:1;cursor:pointer;flex:0 0 auto}
+.top{align-items:center}.top h1{margin-right:auto}
+.drawer{position:fixed;left:0;top:0;bottom:0;z-index:30;width:min(300px,86vw);background:var(--bg);border-right:1px solid var(--line);box-shadow:4px 0 24px rgba(0,0,0,.18);
+  padding:16px 14px;display:flex;flex-direction:column;gap:12px;overflow-y:auto;transform:translateX(-102%);transition:transform .2s ease;visibility:hidden}
+.drawer.open{transform:none;visibility:visible}
+.dhead{display:flex;align-items:center;gap:10px}.dhead b{font-size:13px;letter-spacing:.08em;text-transform:uppercase;margin-right:auto}
+.scrim{position:fixed;inset:0;z-index:29;background:rgba(13,17,23,.32)}.scrim[hidden]{display:none}
+@media(prefers-reduced-motion:reduce){.drawer{transition:none}}
+.tabs{display:flex;flex-direction:column;gap:2px}
+.tab{background:none;border:1px solid transparent;color:var(--dim);font:inherit;font-size:14px;font-weight:600;padding:9px 12px;border-radius:9px;cursor:pointer;text-align:left}
+.tab:hover{background:var(--panel2)}
+.tab[aria-selected=true]{background:var(--panel);color:var(--fg);border-color:var(--line)}
+.drawer .hero{margin:0}
+main:has(#overview:not([hidden]) #office:not([hidden])){max-width:none;padding:0}
+main:has(#overview:not([hidden]) #office:not([hidden]))>.top{display:none}
+#overview:not([hidden]) #office:not([hidden]){position:fixed;inset:0;height:auto!important;min-height:0;margin:0;border:0;border-radius:0}
+.omenu{position:absolute;left:12px;top:12px;z-index:2;background:rgba(255,255,255,.92);color:#1f2933;border:0;box-shadow:0 2px 12px rgba(0,0,0,.14)}
 h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:18px 2px 4px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .hint{color:var(--faint);font-size:12px;margin:0 2px 8px;line-height:1.4}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:13px;overflow:hidden}
@@ -69,8 +84,6 @@ button.row{cursor:pointer}button.row:hover{background:var(--panel2)}
 .njact{display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end}
 .njact a.btn{text-decoration:none}
 @media (max-width:640px){.njrow{flex-wrap:wrap}.njrow .t{flex-basis:100%}.njact{justify-content:flex-start}}
-.njbanner{display:block;margin:0 0 14px;padding:12px 16px;border:1px solid var(--warn);border-radius:10px;color:var(--fg);font-weight:600;text-decoration:none}
-.njbanner:hover{background:var(--panel2)}
 .njreply{display:flex;gap:8px;margin-top:8px;align-items:flex-end}.njreply textarea{flex:1;font:inherit;font-size:14px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg)}
 .njrow details summary{color:var(--faint);font-size:12px;cursor:pointer;margin-top:4px}
 .njrow pre{white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:8px;margin:6px 0 0;overflow:auto}
@@ -78,7 +91,9 @@ button.row{cursor:pointer}button.row:hover{background:var(--panel2)}
 .btn:hover{border-color:var(--accent)} .btn.sm{padding:4px 10px;font-size:12px}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)} .btn.primary:hover{filter:brightness(1.08)}
 .btn:disabled{opacity:.5;cursor:default}
-.prodcard{padding:16px;margin-bottom:12px;cursor:pointer}.prodcard:hover{border-color:var(--accent)}
+.prodcard{padding:12px 14px;cursor:pointer;text-align:left;min-width:0;display:flex;flex-direction:column;justify-content:flex-start}.prodcard:hover{border-color:var(--accent)}
+#products,#tools{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.prodcard .brief{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .phead{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
 .pname{font-weight:650;font-size:16px}.prev{color:var(--money);font-variant-numeric:tabular-nums;font-weight:600}
 .brief{color:var(--dim);font-size:13px;margin:4px 0 0}
@@ -193,6 +208,11 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
 .form{display:grid;gap:8px;padding:14px}.form .r2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .teamrow{display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:12px;align-items:center}.teamrow .sub{color:var(--faint);font-size:12px}
 @media (max-width:600px){.teamrow{grid-template-columns:1fr}}
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}
+.gimg{display:block;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;text-decoration:none;color:inherit}
+.gimg:hover,.gimg:focus-visible{border-color:var(--accent)}
+.gimg img{display:block;width:100%;aspect-ratio:1;object-fit:cover;background:#eee}
+.gcap{display:block;padding:8px 10px;font-size:12px;line-height:1.35;color:var(--dim)}
 .vrow{display:grid;grid-template-columns:1fr auto;gap:10px;font-size:14px}.vrow .sc{color:var(--dim);font-size:12px;margin-left:4px}
 .sct{display:inline-block;font-size:11px;color:var(--dim);background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:1px 8px;margin-left:6px}
 .back{background:none;border:0;color:var(--accent);font:inherit;padding:0;margin-bottom:12px;cursor:pointer}
@@ -220,7 +240,7 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
 .office{position:relative;overflow:hidden;border-radius:14px;border:1px solid var(--line);background:#cfe8f6;margin-top:10px;height:70vh;min-height:320px}
 .office:fullscreen{border:0;border-radius:0;width:100vw;height:100vh;margin:0}
 .office canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
-.ohud{position:absolute;left:12px;top:12px;display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;background:rgba(255,255,255,.92);color:#1f2933;
+.ohud{position:absolute;left:58px;top:12px;display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;background:rgba(255,255,255,.92);color:#1f2933;
   border-radius:11px;padding:8px 14px;font-size:13px;font-weight:500;box-shadow:0 2px 12px rgba(0,0,0,.14);font-variant-numeric:tabular-nums;max-width:calc(100% - 180px)}
 .ohud b{font-size:12px;letter-spacing:.08em;text-transform:uppercase}.o-w{color:#1a7f37}.o-i{color:#57606a}.o-d{color:#cf222e;font-weight:600}
 .o-ph{color:#57606a;border-left:1px solid #d0d7de;padding-left:12px}
@@ -249,15 +269,18 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
 @media(max-width:820px){.ohud{font-size:12px;max-width:calc(100% - 24px)}.obtns{top:auto;bottom:12px}.oticker{display:none}.ocube{bottom:128px}.ohome{bottom:64px}}
 .roster{margin-top:10px}
 main:has(#overview:not([hidden])>#office:not([hidden])){padding-bottom:14px}   /* the office fills the window: nothing below it to scroll to */
-@media(max-width:820px){.ohud{position:static;border-radius:0;box-shadow:none}}
+@media(max-width:820px){.ohud{position:static;border-radius:0;box-shadow:none;padding-left:62px;min-height:62px}}
 textarea[name=soul]{field-sizing:content;min-height:84px}
 </style>
 </head>
 <body>
 <main>
-  <div class="top"><h1><span class="live"></span>Fleet Hub</h1><span class="topr"><span class="fresh" id="fresh">Loading…</span><button class="btn sm" id="theme" type="button"></button></span></div>
+  <div class="top"><button class="menubtn" type="button" aria-label="Menu" aria-controls="drawer" aria-expanded="false">☰</button><h1><span class="live"></span>Foundlings HQ</h1><span class="topr"><span class="fresh" id="fresh">Loading…</span></span></div>
+  <div class="scrim" id="scrim" hidden></div>
+  <nav class="drawer" id="drawer" aria-label="Pages">
+  <div class="dhead"><b>Foundlings HQ</b><button class="btn sm" id="theme" type="button"></button></div>
   <div class="hero"><div class="lbl">Revenue · made so far</div><div class="big" id="money">$0.00</div><div class="chips" id="revchips"></div></div>
-  <div class="tabs" id="tabs" role="tablist">
+  <div class="tabs" id="tabs" role="tablist" aria-orientation="vertical">
     <button class="tab" role="tab" data-tab="overview" aria-selected="true">Overview</button>
     <button class="tab" role="tab" data-tab="needs">Needs you <span id="njtab"></span></button>
     <button class="tab" role="tab" data-tab="activity">Activity</button>
@@ -265,19 +288,16 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <button class="tab" role="tab" data-tab="org">Org</button>
     <button class="tab" role="tab" data-tab="suggestions">Suggestions <span id="sugn"></span></button>
     <button class="tab" role="tab" data-tab="council">Council</button>
+    <button class="tab" role="tab" data-tab="images">Images</button>
     <button class="tab" role="tab" data-tab="vault">Vault</button>
   </div>
+  </nav>
   <section id="overview">
-    <div id="apwrap" hidden>
-      <h2>Waiting for your OK <span id="apn"></span></h2>
-      <div class="hint">Muse permission pop-ups. The hub allows each one by itself within seconds; Deny here to stop one first.</div>
-      <div class="card nj" id="ap"></div>
-    </div>
-    <a href="#needs" class="njbanner" id="njlink" hidden></a>
     <div class="office" id="office">
+      <button class="menubtn omenu" type="button" aria-label="Menu" aria-controls="drawer" aria-expanded="false">☰</button>
       <canvas id="officecv" role="img" aria-label="The office. Each agent is in the room that matches what it is doing: desks for work, the review table for checking, the booths for replies; a red badge means not answering. The same agents are behind the List button."></canvas>
       <div class="ohud" id="ohud"></div>
-      <div class="obtns"><span class="ozoom"><button class="ofs" id="ozout" type="button" title="Zoom out" aria-label="Zoom out">−</button><button class="ofs" id="ozfit" type="button" title="Fit the building (or double-click it)" aria-label="Fit">Fit</button><button class="ofs" id="ozin" type="button" title="Zoom in — or pinch, ⌘-scroll; drag to move" aria-label="Zoom in">+</button></span><button class="ofs" id="olab" type="button" title="Choose which labels show above people">Labels: all</button><button class="ofs" id="olist" type="button" title="Show the agents as a plain list instead of the office">☰ List</button><button class="ofs" id="ohead" type="button" hidden aria-pressed="false" title="Use the webcam: move your head and the view shifts, like looking through a window, and lean in to zoom. The video never leaves this browser.">◉ Look around</button><button class="ofs" id="oeyes" type="button" hidden aria-pressed="false" title="Show the label of whoever you are looking at. Click to calibrate: look at nine dots and click each. The ± is how far the reading typically misses.">◎ Calibrate eyes</button><button class="ofs" id="o3d" type="button" title="Switch between the flat office and the 3D one. In 3D: drag to turn, shift-drag or a two-finger sideways swipe to slide, scroll to zoom, WASD to walk, and the cube in the corner for set views.">3D</button><button class="ofs" id="ofs" type="button">⛶ Full screen</button></div>
+      <div class="obtns"><span class="ozoom"><button class="ofs" id="ozout" type="button" title="Zoom out" aria-label="Zoom out">−</button><button class="ofs" id="ozfit" type="button" title="Fit the building (or double-click it)" aria-label="Fit">Fit</button><button class="ofs" id="ozin" type="button" title="Zoom in — or pinch, ⌘-scroll; drag to move" aria-label="Zoom in">+</button></span><button class="ofs" id="olab" type="button" title="Choose which labels show above people">Labels: all</button><button class="ofs" id="olist" type="button" title="Show the agents as a plain list instead of the office">▤ List</button><button class="ofs" id="ohead" type="button" hidden aria-pressed="false" title="Use the webcam: move your head and the view shifts, like looking through a window, and lean in to zoom. The video never leaves this browser.">◉ Look around</button><button class="ofs" id="oeyes" type="button" hidden aria-pressed="false" title="Show the label of whoever you are looking at. Click to calibrate: look at nine dots and click each. The ± is how far the reading typically misses.">◎ Calibrate eyes</button><button class="ofs" id="ofs" type="button">⛶ Full screen</button></div>
       <div class="oticker" id="oticker" aria-live="polite"></div>
       <div class="otip" id="otip" hidden></div>
     </div>
@@ -311,8 +331,13 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     </div>
   </section>
   <section id="needs" hidden>
+    <div id="apwrap" hidden>
+      <h2>Waiting for your OK <span id="apn"></span></h2>
+      <div class="hint">Muse permission pop-ups. The hub allows each one by itself within seconds; Deny here to stop one first.</div>
+      <div class="card nj" id="ap"></div>
+    </div>
     <h2>Needs you <span id="njn"></span></h2>
-    <div class="hint">Only Jack or Darragh can do these: ID and tax details, phone numbers, payments, accounts in your name. Agents are blocked until it's done. Reply to answer the agent; Done when it's handled.</div>
+    <div class="hint">Only Jack or Darragh can do these: payment info, and ID or tax details a service legally requires. Agents sign up for accounts themselves. Agents are blocked until it's done. Reply to answer the agent; Done when it's handled.</div>
     <div class="card nj" id="nj"></div>
   </section>
   <section id="portfolio" hidden>
@@ -349,6 +374,11 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
       <div class="r2"><select id="ask_chair"></select><button class="btn primary" type="submit">Ask the fleet</button></div>
     </form></div>
     <div id="councils" style="margin-top:12px"></div>
+  </section>
+  <section id="images" hidden>
+    <h2>Images</h2>
+    <div class="hint">Every picture made on the hub machine's graphics card, newest first. Click one to open it full size. (Pictures agents made in Muse are in their listing packages.)</div>
+    <div id="gallery" class="gallery"></div>
   </section>
   <section id="vault" hidden>
     <h2>Etsy shops</h2>
@@ -404,6 +434,21 @@ function toast(m){ const t=$("toast"); t.textContent=m; t.classList.add("show");
 async function jget(p){ const r=await fetch(p,{cache:"no-store"}); return r.ok?r.json():null; }
 async function jpost(p,body){ const r=await fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   if(!r.ok) throw new Error((await r.json().catch(()=>({}))).error || ("HTTP "+r.status)); return r.json(); }
+// a file pasted into a message to an agent: Muse chat can't carry it, so the hub keeps it and the text says how to download it
+document.addEventListener("paste", async e=>{
+  const ta=e.target, files=[...(e.clipboardData?.files||[])];
+  if(ta.tagName!=="TEXTAREA" || !ta.closest(".njreply,#composer,#askform") || !files.length) return;
+  e.preventDefault();
+  for(const f of files){
+    toast(`Attaching ${f.name}…`);
+    try{
+      const data=await new Promise((ok,no)=>{ const r=new FileReader(); r.onload=()=>ok(r.result.split(",")[1]); r.onerror=no; r.readAsDataURL(f); });
+      const {get}=await jpost("api/jack/file",{name:f.name,data});
+      ta.setRangeText(`\n[Attached ${f.name}. Download it: ${get}]\n`, ta.selectionStart, ta.selectionEnd, "end");
+      toast(`Attached ${f.name}`);
+    }catch(err){ toast(`Couldn't attach ${f.name}: ${err.message}`); }
+  }
+});
 
 // ---- status: prefer the agent's real machine report, fall back to the bus ----
 function stateOf(a){ if(["unresponsive","login","parked"].includes(a.state)) return a.state;
@@ -443,7 +488,6 @@ async function load(){
     .sort((a,c)=>(c.paused-a.paused)||(c.at-a.at));       // what's holding a task up first, then newest
   const cnt=nj.length?`<span style="color:var(--warn)">(${nj.length})</span>`:"";
   $("njn").innerHTML=cnt; $("njtab").innerHTML=cnt;
-  $("njlink").hidden=!nj.length; $("njlink").textContent=`${nj.length} thing${nj.length>1?"s":""} need${nj.length>1?"":"s"} you →`;
   // a reply being written survives the 10-second refresh
   if(!$("nj").querySelector(".njreply:not([hidden])")) $("nj").innerHTML = nj.length ? nj.map(n=>{
     const [head,...rest]=String(n.what||n.text).split("\n"); const more=n.what?"":rest.join("\n").trim(), f=n.task&&findTask(n.task);
@@ -535,7 +579,8 @@ function renderProduct(pid, quiet){
   $("productbody").innerHTML=`<h2>${esc(p.name)} <span class="sct">${money(p.revenue)}</span>
       <button class="btn sm" id="addproj">+ Project</button></h2>
     <div class="brief" style="margin:0 2px 6px">${esc(p.brief||"")}${p.metric?` · goal: ${esc(p.metric)}`:""}</div>
-    <div class="pmeta" style="margin:0 2px 10px"><span class="chip">PM <b>${esc(p.pm||"none")}</b></span><span class="chip">${esc(p.status||"active")}</span>
+    <div class="pmeta" style="margin:0 2px 10px">${p.link?`<a class="chip" href="${esc(p.link)}" target="_blank" rel="noopener"><b>See the listing ↗</b></a>`:`<span class="chip">no listing link yet</span>`}
+      <span class="chip">PM <b>${esc(p.pm||"none")}</b></span><span class="chip">${esc(p.status||"active")}</span>
       <span class="chip">${(p.projects||[]).reduce((n,pr)=>n+(pr.tasks||[]).filter(t=>!["done","cancelled"].includes(t.status)).length,0)} open tasks</span></div>
     <div id="projform"></div>
     ${(p.projects||[]).map(pr=>`<div class="proj">
@@ -682,6 +727,15 @@ async function renderCouncil(){
 $("askform").onsubmit=async e=>{ e.preventDefault(); const q=$("ask_q").value.trim(); if(!q) return;
   try{ await jpost("api/jack/ask",{question:q,chair:$("ask_chair").value}); $("ask_q").value=""; toast("Asked the fleet"); renderCouncil(); }catch(err){ toast(err.message); }};
 
+// ---- images: what the hub's GPU made ----
+async function renderImages(){
+  const d=await jget("api/jack/images"); if(!d) return;
+  const src=i=>`api/jack/image?job=${i.job}&path=${encodeURIComponent(i.path)}`;
+  $("gallery").innerHTML=(d.images||[]).length?d.images.map(i=>`<a class="gimg" href="${src(i)}" target="_blank" rel="noopener" title="${esc(i.prompt||"")}">
+      <img src="${src(i)}" loading="lazy" alt="${esc((i.prompt||i.path).slice(0,120))}">
+      <span class="gcap"><b>${esc(i.by||"")}</b> · ${i.at?ago(i.at):""}<br>${esc((i.prompt||"").slice(0,90))}</span></a>`).join("")
+    :`<div class="card"><div class="row muted">No pictures yet.</div></div>`;
+}
 // ---- vault ----
 function scopeOptions(){
   const prods=(board&&board.products||[]).map(p=>`<option value="product:${esc(p.name)}">product · ${esc(p.name)}</option>`).join("");
@@ -714,8 +768,21 @@ async function renderVault(){
   renderEtsy();
   $("sk_scope").innerHTML=scopeOptions();
   const d=await jget("api/vault"); if(!d) return;
-  $("secrets").innerHTML=(d.secrets||[]).length?d.secrets.map(s=>`<div class="row vrow"><div>${esc(s.name)}<span class="sc">${esc(s.scope)}</span></div><div class="what">updated ${ago(s.updated)}</div></div>`).join("")
+  // each secret: who can read it now, and a picker (⌘/Ctrl-click for several) to change that without re-entering the value
+  const opts=scopeOptions();
+  $("secrets").innerHTML=(d.secrets||[]).length?d.secrets.map(s=>{
+      const now=(s.scope||"").split("|"), have=new Set([...opts.matchAll(/value="([^"]*)"/g)].map(m=>m[1]));
+      const extra=now.filter(v=>v&&!have.has(esc(v))).map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join("");
+      const sel=(opts+extra).replace(/value="([^"]*)"/g,(m,v)=>now.map(esc).includes(v)?m+" selected":m);
+      return `<div class="row vrow"><div>${esc(s.name)}<span class="sc">${esc(now.join(", "))}</span>
+        <details><summary class="what">Change who can read it</summary><form class="form scopeform" data-name="${esc(s.name)}">
+        <select multiple size="6" aria-label="Who can read ${esc(s.name)}">${sel}</select>
+        <div><button class="btn" type="submit">Save access</button></div></form></details></div>
+        <div class="what">updated ${ago(s.updated)}</div></div>`;}).join("")
     :`<div class="row muted">No secrets stored.</div>`;
+  $("secrets").querySelectorAll(".scopeform").forEach(f=>f.onsubmit=async ev=>{ ev.preventDefault();
+    const scope=[...f.querySelector("select").selectedOptions].map(o=>o.value).join("|"); if(!scope) return toast("Pick at least one, or 'hub only'");
+    try{ await jpost("api/jack/secret/scope",{name:f.dataset.name,scope}); toast("Access updated for "+f.dataset.name); renderVault(); }catch(err){ toast(err.message); }});
   $("reads").innerHTML=(d.reads||[]).length?d.reads.map(r=>`<div class="row vrow"><div><b>${esc(r.agent)}</b> read ${esc(r.secret)}</div><div class="what">${ago(r.at)}</div></div>`).join("")
     :`<div class="row muted">No reads yet.</div>`;
 }
@@ -906,16 +973,21 @@ async function loadOlder(){
 $("feed").addEventListener("scroll",e=>{ const f=e.target; if(f.scrollHeight-f.scrollTop-f.clientHeight<200) loadOlder(); });
 $("customrange").onsubmit=e=>{ e.preventDefault(); const f=$("rng_from").value, t=$("rng_to").value; if(!f) return toast("Pick a start time");
   act.since=new Date(f).getTime()/1000; act.until=t?new Date(t).getTime()/1000:null; resetOlder(); renderActivity(); };
-function showOnly(id){ if(id!=="detail") shownFor=null; document.querySelector(".hero").hidden = id==="detail"; ["overview","needs","activity","portfolio","product","org","suggestions","council","vault","detail"].forEach(s=>$(s).hidden=s!==id); }
-function selectTab(name){ tab=name; openAgent=null; openProduct=null;
+function showOnly(id){ if(id!=="detail") shownFor=null; ["overview","needs","activity","portfolio","product","org","suggestions","council","images","vault","detail"].forEach(s=>$(s).hidden=s!==id); }
+function menu(open){ $("drawer").classList.toggle("open",open); $("scrim").hidden=!open;
+  document.querySelectorAll(".menubtn").forEach(b=>b.setAttribute("aria-expanded",open));
+  if(open) (document.querySelector('.tab[aria-selected="true"]')||document.querySelector(".tab")).focus(); }
+document.querySelectorAll(".menubtn").forEach(b=>b.onclick=()=>menu(!$("drawer").classList.contains("open")));
+$("scrim").onclick=()=>menu(false);
+addEventListener("keydown",e=>{ if(e.key==="Escape"&&$("drawer").classList.contains("open")) menu(false); });
+function selectTab(name){ tab=name; openAgent=null; openProduct=null; menu(false); if(document.fullscreenElement) document.exitFullscreen();
   document.querySelectorAll(".tab").forEach(t=>t.setAttribute("aria-selected", t.dataset.tab===name));
-  showOnly(name); if(name==="activity") renderActivity(); if(name==="council") renderCouncil(); if(name==="vault") renderVault();
+  showOnly(name); if(name==="activity") renderActivity(); if(name==="council") renderCouncil(); if(name==="vault") renderVault(); if(name==="images") renderImages();
   if(name==="org") renderOrg(); if(name==="suggestions") renderSuggestions(); }
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>selectTab(t.dataset.tab));
 document.querySelectorAll("[data-back]").forEach(b=>b.onclick=()=>selectTab(b.dataset.back));
 function paintTheme(){ const light=document.documentElement.dataset.theme==="light", b=$("theme");
   b.textContent=light?"☾ Dark":"☀ Light"; b.setAttribute("aria-label",light?"Switch to dark mode":"Switch to light mode"); }
-$("njlink").onclick=e=>{ e.preventDefault(); selectTab("needs"); };
 $("theme").onclick=()=>{ const t=document.documentElement.dataset.theme==="light"?"dark":"light";
   document.documentElement.dataset.theme=t; try{ localStorage.setItem("hub-theme",t); }catch(e){} paintTheme(); };
 paintTheme();

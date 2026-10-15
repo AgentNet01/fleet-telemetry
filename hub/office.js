@@ -346,7 +346,7 @@ item({ key: 0, fp: [0, 0, 0, 0], z0: 0, z1: 0, dynKey: () => OBJ.ball ? OBJ.ball
 const PLANT_SPOTS = [[9.35, .35, 1.1, { x: 9.35, y: .95, dir: "NE" }], [13.75, .3, 1.2, { x: 13.4, y: .75, dir: "NE" }],
   [9.4, 9.6 + SY, 1.2, { x: 9.4, y: 9.0 + SY, dir: "SW" }], [5.0, 5.35 + SY, 1, { x: 5.0, y: 4.85 + SY, dir: "SW" }],
   [WALL + .4, .35, 1.3, null], [X - .35, .4, 1.3, null], [WALL + .4, Y - .4, 1.15, null],
-  [10.6, 9.8, 1.2, { x: 11.2, y: 9.8, dir: "NW" }], [13.6, 4.3, 1.1, null], [14.6, 8.2, 1.2, { x: 15.2, y: 8.4, dir: "NW" }], [18.5, 15.9, 1.3, null]];
+  [10.6, 9.8, 1.2, { x: 11.2, y: 9.8, dir: "NW" }], [13.6, 4.3, 1.1, null], [14.6, 8.2, 1.2, { x: 15.2, y: 8.4, dir: "NW" }], [15.85, 16.0, 1.3, null]];   // beside the shrine, not in front of it
 const PLANTS = PLANT_SPOTS.map(([x, y, s, w]) => { const p = plantAt(x, y, s); if (w) p.slot = { ...w, pose: "stand" }; return p; });
 
 var PATIO = [], LOUNGERS, SMOKE;
@@ -435,8 +435,32 @@ for (const lx of [20.4, 22.4]) {
   LOUNGERS.push({ x: lx + .65, y: Y - .35, dir: "SE", pose: "lie", z: .28, lieAng: Math.atan2(TH / 2, TW / 2) });
 }
 
+// ── the shrine (Jack, Oct 15): an agent that needs Jack brings a paper here; it glows while anything waits on him.
+// Its back to the open south edge, facing into the office, a gate in front. Anchors for the 3D view's lights live on SHRINE.
+const SHRINE = (() => { const x = 16.6, y = 15.1, RED = "#9b2f2f", RED2 = "#b8382c", GOLD = "#c9a24a", ROOF = "#33262a";
+  solid(x - .1, y - .25, 0, 1.4, 1.5, .08, C.stone, { block: [x - .15, y - .3, 1.5, 1.65] });                // two stone steps
+  solid(x, y - .1, .08, 1.2, 1.3, .08, C.stone);
+  solid(x + .1, y + .05, .16, 1.0, 1.1, .62, RED); solid(x + .05, y, .78, 1.1, 1.2, .06, GOLD);           // lacquered altar, gilt top
+  solid(x + .25, y + .3, .84, .7, .7, .55, "#f3ead8");                                                   // the sanctum, door to the office
+  for (const px of [.2, .92]) for (const py of [.26, .96]) solid(x + px, y + py, .84, .08, .08, .55, RED2);
+  solid(x - .05, y + .12, 1.39, 1.3, 1.05, .07, ROOF); solid(x + .12, y + .26, 1.46, .96, .77, .07, ROOF);  // three-tier roof
+  solid(x + .28, y + .4, 1.53, .64, .49, .06, ROOF); solid(x + .42, y + .52, 1.59, .36, .25, .05, ROOF);
+  for (const [ex, ey] of [[-.08, .09], [1.21, .09], [-.08, 1.12], [1.21, 1.12]]) solid(x + ex, y + ey, 1.44, .12, .12, .05, GOLD);   // upturned eaves
+  solid(x + .56, y + .6, 1.64, .08, .08, .26, GOLD); solid(x + .53, y + .57, 1.9, .14, .14, .1, GOLD);       // finial
+  const lanterns = [x - .42, x + 1.38].map(lx => { solid(lx, y - .55, 0, .26, .26, .08, C.stone, { block: [lx - .02, y - .57, .3, .3] });
+    solid(lx + .08, y - .47, .08, .1, .1, .45, C.stone); solid(lx - .02, y - .57, .66, .3, .3, .05, C.stone); solid(lx + .08, y - .47, .71, .1, .1, .06, C.stone);
+    return [lx + .04, y - .51, .53]; });
+  for (const px of [x - .05, x + 1.15]) { solid(px - .03, y - 1.23, 0, .16, .16, .12, ROOF, { block: [px - .05, y - 1.25, .2, .2] });   // the gate
+    solid(px, y - 1.2, .12, .1, .1, 1.73, RED2); }
+  solid(x - .15, y - 1.19, 1.5, 1.5, .08, .08, RED2); solid(x - .25, y - 1.22, 1.77, 1.7, .14, .08, RED2); solid(x - .35, y - 1.23, 1.85, 1.9, .16, .08, ROOF);
+  return { x, y, door: [x + .43, y + .288, .9], candles: [[x + .12, y + .06], [x + 1.02, y + .06]], papers: [x + .6, y + .15], top: .84,
+    lanterns, halo: [x + .6, y - .7], count: [x + .6, y + .6, 2.25], box: [x - .4, y - 1.25, x + 1.65, y + 1.25, 2.0] };
+})();
+OBJ.shrine = { n: 0, flash: -99 };
+
 // ── slots people can use (fixed spots; idle routines and work both claim them)
 const SLOTS = {
+  shrine: [{ x: SHRINE.x + .6, y: SHRINE.y - .75, dir: "SW", pose: "stand" }],
   desk: DESKS.filter(d => !d.office).map(d => ({ ...d.slot, desk: d })),
   ceo: [{ ...OFFICES.ceo.slot, desk: OFFICES.ceo }, BOARD.back[1], BOARD.back[0], BOARD.back[2], BOARD.head],
   pmoffice: [{ ...OFFICES.pm.slot, desk: OFFICES.pm }],
@@ -513,6 +537,10 @@ const CLIPS = {
   gesture: (t, p, b) => ({ ...b, aR: [44 + 22 * S(t * 2.4), 62 + 20 * S(t * 1.9)], aL: [30, 60], ht: 3 * S(t * 3), mouth: Math.max(0, S(t * 10)) }),
   talk: (t, p, b) => ({ ...b, aR: [36 + 26 * Math.max(0, S(t * 2.6)), 66 + 22 * S(t * 2.1)], ht: 3 * S(t * 4), mouth: Math.max(0, S(t * 11)), hy: .2 }),
   listen: (t, p, b) => ({ ...b, aL: [22, 112], aR: [24, 108], ht: 4 + 4 * Math.max(0, S(t * 1.6)), hy: .2 }),
+  pray: (t, p, b) => { const c = t % 3.2, up = c < 1.6, h = S(t * 8);
+    return up ? { ...b, aL: [176, 8 + 10 * S(t * 6)], aR: [176, 8 + 10 * S(t * 6 + 1)], bob: 1.4 * Math.abs(h), lean: -4, ht: -10, hy: .5 * S(t * 4),
+      lL: [8 * h, -10 * Math.max(0, h)], lR: [-8 * h, -10 * Math.max(0, -h)] }
+      : { ...b, aL: [64, 120], aR: [64, 120], lean: kf(c, [[1.6, 0], [2.1, 28], [2.8, 28], [3.2, 0]]), ht: 14 }; },
   laugh: (t, p, b) => ({ ...b, bob: 1.6 * Math.abs(S(t * 13)), ht: -14, aL: [20, 60], aR: [24, 70], mouth: 1, eyes: 0 }),
   eat: (t, p, b) => { const c = t % 4.2;
     return { ...b, lean: 6, ht: kf(c, [[0, 10], [.9, -2], [1.4, -2], [2.0, 8]]), aL: [30, 74],
@@ -685,7 +713,7 @@ function steamAt(p, side) { p.emit = p.emit || []; p.emit.push(side); }
 
 // ───────────────────────────── the sim: walking, slots, routines ─────────────────────────────
 let T = 0;                                                  // sim seconds
-const people = new Map();
+const people = new Map(), shrineSeen = new Set(), shrineQ = [];   // Jack's list items already walked over; who still has to
 OBJ.leftovers = []; OBJ.board = { strokes: [] }; OBJ.fridge.target = 0; OBJ.micro.target = 0;
 const PARTS = [];                                           // particles (world px)
 const part = o => { if (PARTS.length < 400 && !REDUCED) PARTS.push({ born: T, ...o }); };
@@ -827,7 +855,7 @@ function* withDrink(p) {
 }
 // someone idle close by to talk to while you drink
 function buddyOf(p, r = 2.6) { let best = null, bd = r;
-  for (const q of people.values()) { if (q === p || q.path.length || (q.mode !== "idle")) continue; const d = Math.hypot(q.x - p.x, q.y - p.y); if (d < bd) { bd = d; best = q; } } return best; }
+  for (const q of people.values()) { if (q === p || q.cat || q.path.length || (q.mode !== "idle")) continue; const d = Math.hypot(q.x - p.x, q.y - p.y); if (d < bd) { bd = d; best = q; } } return best; }
 const faceTo = (p, q) => { const dx = q.x - p.x, dy = q.y - p.y; return Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? "SE" : "NW") : (dy > 0 ? "SW" : "NE"); };
 function* dishes(p) {
   const s = claim(p, "sink"); if (!s) { p.hold = {}; return; }
@@ -873,7 +901,7 @@ function* food(p, meal) {
   yield* go(p, b); yield* act(p, "reach", .9); p.hold = {}; release(p, b);
 }
 function partnerFor(p) {
-  const c = [...people.values()].filter(q => q !== p && q.mode === "idle" && !q.conv && !q.rally && (!q.co || q.interruptible) && !q.path.length);
+  const c = [...people.values()].filter(q => q !== p && !q.cat && q.mode === "idle" && !q.conv && !q.rally && (!q.co || q.interruptible) && !q.path.length);
   c.sort((a, b) => Math.hypot(a.x - p.x, a.y - p.y) - Math.hypot(b.x - p.x, b.y - p.y));
   return c[0] || null;
 }
@@ -999,6 +1027,13 @@ function* read(p) {
   yield* go(p, s || loiter(p)); p.interruptible = true; yield* act(p, "read", 60, 150); p.interruptible = false; release(p, s);
   const b2 = claim(p, "books"); yield* go(p, b2 || SLOTS.books[0]); yield* act(p, "reach", 1); p.hold = {}; release(p, b2);
 }
+function* pilgrimage(p) {                                   // a paper for Jack: carry it over, set it down, a little prayer dance
+  const s = claimSlot(p, SLOTS.shrine[0]); if (!s) return;
+  p.hold = { L: "paper" }; yield* go(p, s);
+  yield* act(p, "reach", 1.4); p.hold = {}; OBJ.shrine.placed = T;
+  yield* act(p, "pray", 6.4); OBJ.shrine.flash = T;
+  yield* act(p, "idle", .8); release(p, s);
+}
 function* sunbathe(p) {
   const s = claim(p, "lounger"); if (!s) return;
   yield* go(p, s); p.interruptible = true; yield* act(p, "sunbathe", 60, 160); p.energy = Math.min(1, p.energy + .3);
@@ -1022,7 +1057,17 @@ const IDLE = {
 };
 const SETTLED = ["phone", "gaze", "read", "chat", "smoke", "sun", "whiteboard", "pong", "drink"];
 function* drink(p) { p.hold = { R: "mug" }; p.hotSince = T - 60; yield* withDrink(p); }
+// the office cat: dot writes reports and nothing else (Jack, Oct 14), so on the floor it roams, sits and naps
+const CATS = new Set(["dot"]);
+function* catLife(p) {
+  for (;;) {
+    yield* go(p, loiter(p)); p.seated = false; p.lying = false;
+    yield* act(p, "idle", 4, 12);
+    if (Math.random() < .35) { p.curled = true; yield* act(p, "idle", 30, 90); p.curled = false; }
+  }
+}
 function startIdle(p) {
+  if (p.cat) { p.activity = "cat"; start(p, catLife(p)); return; }
   if (p.teleport) {                                       // first sight of the floor: people mid-break, spread out, not queuing at the fridge
     const k = pick(SETTLED.filter(k => k === "drink" || (IDLE[k][1](p) && IDLE[k][0](p) > 0)));
     p.activity = k === "drink" ? "coffee" : k; p.recent = [p.activity]; start(p, k === "drink" ? drink(p) : IDLE[k][2](p)); return;
@@ -1080,6 +1125,7 @@ function placeWork(p) {
 // ── truth from the hub
 function want(a) {
   const short = (s, n = 40) => { s = String(s || "").replace(/\s+/g, " ").trim(); if (s.length <= n) return s; const cut = s.slice(0, n); return cut.slice(0, cut.lastIndexOf(" ") > n * .6 ? cut.lastIndexOf(" ") : n) + "…"; };
+  if (CATS.has(a.name)) return { mode: "idle", key: "cat", card: null };
   const f = a.focus || {};
   const flag = { unresponsive: "not answering", login: "login expired", parked: "parked" }[a.state] || null;
   if (flag) return { mode: "idle", flag, key: "idle!" + flag, card: null };
@@ -1113,7 +1159,7 @@ function update(b) {
         hunger: rnd(0, .6), energy: rnd(.35, 1), social: rnd(0, .6) };
       people.set(a.name, p);
     }
-    p.a = a; p.card = w.card; p.flag = w.flag;
+    p.a = a; p.card = w.card; p.flag = w.flag; p.cat = CATS.has(a.name);
     const tk = a.task || a.focus?.task; p.since = w.mode === "idle" ? a.free_since : tk?.since || tk?.touched || null;
     if (p.key === w.key) continue;
     if (!isNew && !first) {
@@ -1130,6 +1176,8 @@ function update(b) {
     else placeWork(p);
   }
   for (const [n, p] of people) if (!seen.has(n)) { stop(p); people.delete(n); }
+  const nj = b.needs_jack || []; OBJ.shrine.n = nj.length;
+  for (const n of nj) if (!shrineSeen.has(n.id)) { shrineSeen.add(n.id); if (!first) shrineQ.push(n.agent); }
   first = false;
 }
 
@@ -1157,10 +1205,15 @@ function simStep(dt) {
   if (OBJ.micro.run && Math.random() < dt * 2) part({ kind: "steam", ...wpt(.4, 8.6, 1.32), vx: rnd(-1, 1), vy: -6 });
   OBJ.leftovers = OBJ.leftovers.filter(l => T < l.until);
   rallyStep();
+  if (shrineQ.length && !SLOTS.shrine[0].by) {                // one at a time, so a burst of asks is a queue, not a parade
+    const p = people.get(shrineQ.shift());
+    if (p && !p.cat && !p.flag) { stop(p); p.activity = "shrine"; start(p, pilgrimage(p)); } else OBJ.shrine.flash = T;
+  }
   for (const p of people.values()) {
     p.hunger = Math.min(1, p.hunger + dt / 700); p.social = Math.min(1, p.social + dt / 800);
     p.energy = Math.max(0, p.energy - dt / (p.mode === "idle" ? 1100 : 650));
     if (p.mode === "idle" && !p.co) startIdle(p);
+    else if (!p.co) placeWork(p);                              // back to the desk after a walk to the shrine
     run(p);
     if (p.rally && !OBJ.rally) OBJ.rally = p.rally;
     // walk along the path, easing around corners, keeping a little personal space
@@ -1194,13 +1247,26 @@ function bubble(p, glyph) { if (!p) return; part({ kind: "bubble", follow: p, gl
 let cv, ctx, wrap, hudEl, tipEl, tickEl, DPR = 1, W = 1, H = 1, cam = { s: 1, tx: 0, ty: 0 }, cache = null, hits = [], hover = null, FDT = 0;
 // frame the whole tower with city on both sides and a few floors below, so it reads as one building in a skyline
 const BB = { x0: wx(0, Y) - 150, x1: wx(X, 0) + 150, y0: wy(0, 0, 2.75) - 70, y1: wy(X, Y, -4.5) };
+// Jack, Oct 15: "day when it's day out and night when it's night out in real life". The sun's height here and now: longitude
+// from this computer's standard time zone, latitude 40°N (ponytail: no location prompt; a real latitude moves dusk by minutes)
+function sunAlt(t) {
+  const d = new Date(t * 1000), y = d.getFullYear(), R = Math.PI / 180;
+  const std = Math.max(new Date(y, 0, 1).getTimezoneOffset(), new Date(y, 6, 1).getTimezoneOffset()), lon = -std / 4, lat = 40;
+  const doy = (Date.UTC(y, d.getUTCMonth(), d.getUTCDate()) - Date.UTC(y, 0, 0)) / 864e5, dec = 23.44 * Math.sin(2 * Math.PI * (284 + doy) / 365);
+  const B = 2 * Math.PI * (doy - 81) / 365, eot = 9.87 * Math.sin(2 * B) - 7.53 * Math.cos(B) - 1.5 * Math.sin(B);   // the sun runs early or late by season (minutes)
+  const ha = 15 * ((t / 3600) % 24 + lon / 15 + eot / 60 - 12);
+  return Math.asin(Math.sin(lat * R) * Math.sin(dec * R) + Math.cos(lat * R) * Math.cos(dec * R) * Math.cos(ha * R)) / R;
+}
 function nightness(t = Date.now() / 1000) {
-  const p = HOUR != null ? HOUR : (t % 3600) / 3600, f = .05, s = ease;
-  return p < .5 - f ? 0 : p < .5 ? s((p - (.5 - f)) / f) : p < 1 - f ? 1 : 1 - s((p - (1 - f)) / f);
+  if (HOUR != null) { const p = HOUR, f = .05, s = ease; return p < .5 - f ? 0 : p < .5 ? s((p - (.5 - f)) / f) : p < 1 - f ? 1 : 1 - s((p - (1 - f)) / f); }
+  return ease(clamp(-sunAlt(t) / 6, 0, 1));                      // day from sunrise; full night once the sun is 6° down (civil dusk)
 }
 function phaseText(t = Date.now() / 1000) {
-  const p = HOUR != null ? HOUR : (t % 3600) / 3600, m = Math.max(1, Math.ceil(((p < .5 ? .5 : 1) - p) * 60));
-  return p < .5 ? `☀ Day · dusk in ${m}m` : `☾ Night · dawn in ${m}m`;
+  if (HOUR != null) return HOUR < .5 ? "☀ Day" : "☾ Night";
+  const night = nightness(t) > .5;
+  let u = t; while (u < t + 86400 && (nightness(u) > .5) === night) u += 300;   // the next dusk or dawn, to five minutes
+  const at = new Date(u * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return night ? `☾ Night · dawn ${at}` : `☀ Day · dusk ${at}`;
 }
 function layout() {
   const r = wrap.getBoundingClientRect(); DPR = Math.min(2, window.devicePixelRatio || 1);
@@ -1532,8 +1598,24 @@ function drawLabels(g) {
       g.fillText(p.flag === "login expired" ? "⟳" : p.flag === "parked" ? "P" : "!", cx, cy + .5 * ls); g.textAlign = "start"; g.textBaseline = "alphabetic";
     }
   }
+  drawShrine(g, R3, ls);
 }
 
+const SHRINE_HIT = { shrine: true };
+function drawShrine(g, R3, ls) {                             // the shrine opens Jack's list; a subtle number over it while anything needs him
+  const pt = (x, y, z) => R3 ? R3.screen(x, y, z) : toScreen(P(x, y, z));
+  const [x0, y0, x1, y1, h] = SHRINE.box, box = [x0, x1].flatMap(x => [y0, y1].flatMap(y => [0, h].map(z => pt(x, y, z)))).filter(Boolean);
+  if (box.length === 8) { const xs = box.map(q => q[0]), ys = box.map(q => q[1]);
+    hits.unshift({ p: SHRINE_HIT, r: [Math.min(...xs), Math.min(...ys), Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)] }); }
+  const n = OBJ.shrine.n; if (!n) return;
+  const s = pt(...SHRINE.count); if (!s) return;
+  const [x, y] = s, r = 9 * ls, bob = Math.sin(T * 1.6) * 1.5 * ls;
+  g.fillStyle = "rgba(196,128,20,.88)"; g.beginPath(); g.arc(x, y - r + bob, r, 0, 7); g.fill();
+  g.strokeStyle = "rgba(255,255,255,.85)"; g.lineWidth = 1.2 * ls; g.stroke();
+  g.fillStyle = "#fff"; g.font = LABEL_FONT(11 * ls, 700); g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillText(String(n), x, y - r + bob + .5 * ls); g.textAlign = "start"; g.textBaseline = "alphabetic";
+  hits.push({ p: SHRINE_HIT, r: [x - r * 2, y - r * 3, r * 4, r * 5] });
+}
 // ── frame
 let lastT = performance.now(), hudAt = 0;
 function frame(t) {
@@ -1580,11 +1662,8 @@ function paintHud() {
   if (!lastBoard) return;
   let w = 0, i = 0, d = 0;
   for (const p of people.values()) p.flag ? d++ : p.mode === "idle" ? i++ : p.mode === "ceo" ? 0 : w++;
-  const nj = (lastBoard.needs_jack || []).length + (lastBoard.approvals || []).length;
   hudEl.innerHTML = `<b>Foundlings HQ</b><span class="o-w">● ${w} working</span><span class="o-i">● ${i} on break</span>`
-    + (d ? `<span class="o-d">● ${d} not answering</span>` : "") + (nj ? `<button class="o-nj" type="button">⚑ ${nj} need${nj > 1 ? "" : "s"} you</button>` : "")
-    + `<span class="o-ph">${phaseText()}</span>`;
-  const njb = hudEl.querySelector(".o-nj"); if (njb) njb.onclick = () => { if (document.fullscreenElement) document.exitFullscreen(); if ((lastBoard.approvals || []).length) $("apwrap").scrollIntoView({ behavior: "smooth" }); else selectTab("needs"); };
+    + (d ? `<span class="o-d">● ${d} not answering</span>` : "") + `<span class="o-ph">${phaseText()}</span>`;
   tickEl.innerHTML = events.length ? events.slice(0, 4).map((e, k) => `<div style="opacity:${1 - k * .2}"><time>${stamp(e.at)}</time> ${esc(e.line)}</div>`).join("")
     : `<div class="faint">Moves show up here as they happen.</div>`;
 }
@@ -1595,12 +1674,13 @@ function at(e) {
 }
 const DOING = { coffee: "getting a coffee", lunch: "having lunch", snack: "grabbing a snack", chat: "chatting", pong: "playing ping-pong", nap: "napping on the couch",
   phone: "on their phone", gaze: "taking in the view", smoke: "on a smoke break", stretch: "stretching", water: "watering the plants", whiteboard: "doodling on the whiteboard",
-  read: "reading", sun: "sunbathing" };
+  read: "reading", sun: "sunbathing", shrine: "taking something to your shrine" };
 function showTip(e) {
-  const p = hover; if (!p || !p.a) { tipEl.hidden = true; return; }
-  const a = p.a, seats = seatsOf(a.name), free = a.free_since && p.mode === "idle" ? Math.floor((lastBoard.now - a.free_since) / 3600) : 0;
+  const p = hover; if (!p || !(p.a || p.shrine)) { tipEl.hidden = true; return; }
+  if (p.shrine) { const n = OBJ.shrine.n; tipEl.innerHTML = (n ? `<b>${n} thing${n > 1 ? "s" : ""} need${n > 1 ? "" : "s"} you</b>` : "<b>Nothing needs you</b>") + `<div class="faint">Your shrine · click to open the list</div>`; }
+  else { const a = p.a, seats = seatsOf(a.name), free = a.free_since && p.mode === "idle" ? Math.floor((lastBoard.now - a.free_since) / 3600) : 0;
   tipEl.innerHTML = `<b>${esc(a.name)}</b><div>${esc(label(a))}</div>` + (p.mode === "idle" && p.activity ? `<div class="faint">On a break: ${esc(DOING[p.activity] || p.activity)}${free ? ` · free ${free}h` : ""}</div>` : "")
-    + `<div class="faint">${esc([a.kind === "slack" ? "Slack" : a.team, a.product, ...seats].filter(Boolean).join(" · "))}</div><div class="faint">Click to open</div>`;
+    + `<div class="faint">${esc([a.kind === "slack" ? "Slack" : a.team, a.product, ...seats].filter(Boolean).join(" · "))}</div><div class="faint">Click to open</div>`; }
   tipEl.hidden = false;
   const r = wrap.getBoundingClientRect(), tw = tipEl.offsetWidth, th = tipEl.offsetHeight;
   let x = e.clientX - r.left + 16, y = e.clientY - r.top + 16;
@@ -1616,7 +1696,8 @@ function mount() {
   wrap = $("office"); cv = $("officecv"); ctx = cv.getContext("2d"); hudEl = $("ohud"); tipEl = $("otip"); tickEl = $("oticker");
   cv.addEventListener("mousemove", e => { hover = at(e); cv.style.cursor = hover ? "pointer" : "default"; showTip(e); });
   cv.addEventListener("mouseleave", () => { hover = null; tipEl.hidden = true; });
-  cv.addEventListener("click", e => { if (dragged) return; const p = at(e); if (p) { if (document.fullscreenElement) document.exitFullscreen(); showAgent(p.name); } });
+  cv.addEventListener("click", e => { if (dragged) return; const p = at(e); if (!p) return; if (document.fullscreenElement) document.exitFullscreen();
+    p.shrine ? selectTab("needs") : showAgent(p.name); });
   // zoom: pinch / ⌘-scroll anywhere, plain scroll in full screen (outside it, scroll still scrolls the page); drag to pan
   cv.addEventListener("wheel", e => {
     if (window.Office3D && !e.ctrlKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) { e.preventDefault(); window.Office3D.drag(-e.deltaX, 0, true); return; }   // two fingers sideways slide the 3D camera
@@ -1647,30 +1728,21 @@ function mount() {
   if (document.fullscreenEnabled) fs.onclick = () => document.fullscreenElement ? document.exitFullscreen() : wrap.requestFullscreen();
   else fs.hidden = true;
   document.addEventListener("fullscreenchange", () => { fs.textContent = document.fullscreenElement ? "✕ Exit full screen" : "⛶ Full screen"; fit(); });
-  addEventListener("resize", fit); new ResizeObserver(fit).observe($("njlink")); fit();
+  addEventListener("resize", fit); fit();
   // the plain list instead of the office: one or the other, so the page never needs to scroll
   const showList = on => { if (on && document.fullscreenElement) document.exitFullscreen(); wrap.hidden = on; $("roster").hidden = !on; try { localStorage.officeList = on ? "1" : ""; } catch {} fit(); };
   $("olist").onclick = () => showList(true); $("ooffice").onclick = () => showList(false);
   try { if (localStorage.officeList) showList(true); } catch {}
-  // the 3D view (office3d.js): loaded only when asked for, remembered, and it only ever paints what the sim above decides
-  const b3 = $("o3d"), bh = $("ohead");
-  if (b3) {
-    const set3d = async on => {
-      try { localStorage.office3d = on ? "1" : ""; } catch {}
-      if (on && !window.Office3D) { try { (await import("./office3d.js")).start(wrap, cv, window.Office.sim); } catch (e) { console.error("office 3D", e); on = false; } }
-      else if (!on && window.Office3D) { window.Office3D.stop(); cache = null; }
-      b3.textContent = on ? "2D" : "3D"; bh.hidden = !on; if (!on) $("oeyes").hidden = true;
-    };
-    b3.onclick = () => set3d(!window.Office3D);
-    const be = $("oeyes");
-    bh.onclick = () => window.Office3D && window.Office3D.look(bh, be); be.onclick = () => window.Office3D && window.Office3D.eyes();
-    let saved = ""; try { saved = localStorage.office3d; } catch {}
-    if (Q.get("office") === "3d" || (saved && Q.get("office") !== "2d")) set3d(true);
-  }
+  // the office is the 3D view (office3d.js; Jack, Oct 14: no flat one). It only ever paints what the sim above decides.
+  // ponytail: the flat drawing code stays as the fallback for a browser without WebGL; delete it once that never happens
+  const bh = $("ohead"), be = $("oeyes");
+  bh.onclick = () => window.Office3D && window.Office3D.look(bh, be); be.onclick = () => window.Office3D && window.Office3D.eyes();
+  import("./office3d.js").then(m => { m.start(wrap, cv, window.Office.sim); bh.hidden = false; })
+    .catch(e => console.error("office 3D", e));
   requestAnimationFrame(frame);
 }
 window.Office = { update, mount,
-  sim: { X, Y, C, SOLIDS, DESKS, BOARD, BOOTHS, LIGHTS, OBJ, SLOTS, PARTS, people, shade, hash, WALL, SY, EX, DOOR, OFFICE, POOL, ZONE, get T() { return T; } },   // read-only, for office3d.js
+  sim: { X, Y, C, SOLIDS, DESKS, BOARD, BOOTHS, LIGHTS, OBJ, SLOTS, PARTS, people, shade, hash, WALL, SY, EX, DOOR, OFFICE, POOL, SHRINE, ZONE, get T() { return T; } },   // read-only, for office3d.js
   debug: { people, SLOTS, OBJ, get T() { return T; }, get cache() { return cache; },
   force(name, k) { const p = people.get(name); if (!p || p.mode !== "idle") return; stop(p); p.activity = k; start(p, IDLE[k][2](p)); } } };
 mount();

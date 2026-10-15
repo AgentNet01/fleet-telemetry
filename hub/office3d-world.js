@@ -53,6 +53,22 @@ export function buildWorld(sim) {
   for (const oy of [0, OFFICE.split]) { st.box(15.6, oy + .6, 0, 2.9, 2.4, .02, C.rugEdge); st.box(15.75, oy + .75, 0, 2.6, 2.1, .03, oy ? "#cfd8e3" : "#e3d5c7"); }
   st.box(9.85, 1.0, 0, 3.7, 2.15, .02, "#d5cde6"); st.box(10.0, 1.15, 0, 3.4, 1.85, .025, "#ddd6ec");
   for (const b of BOOTHS) st.box(12.8, b.y, 0, 1.05, 1.1, .02, "#cfd5dc");
+  // ── the shrine: a lit doorway, candles, stone lanterns, the papers left for Jack; it glows while anything waits, flares when one lands
+  { const S = sim.SHRINE, sh = OBJ.shrine, z = S.top;
+    const door = add(glowBox(.34, .012, .34, "#5a4630"), ...S.door);
+    const halo = pool(S.halo[0], S.halo[1], .012, 1.6, "#ffcf7a");
+    const lanterns = S.lanterns.map(([lx, ly, lz]) => add(glowBox(.18, .18, .13, "#6b6259"), lx, ly, lz));
+    const flames = S.candles.map(([cx, cy]) => { st.box(cx, cy, z, .06, .06, .12, "#f4efe3"); return add(glowBox(.025, .025, .045, "#ffb347"), cx + .018, cy + .018, z + .12); });
+    const papers = [...Array(6)].map((_, k) => { const m = add(piece(mm => mm.box(-.07, -.05, 0, .14, .1, .006, "#fdfbf4")), S.papers[0], S.papers[1], z + .006 + k * .008);
+      m.rotation.y = ((hash(k * 17) % 9) - 4) * .07; m.visible = false; return m; });
+    tick((dt, T) => {
+      const on = sh.n > 0, flare = Math.max(0, 1 - (T - sh.flash) / 2.5), fl = .85 + .15 * Math.sin(T * 11) * Math.sin(T * 7.3);
+      const lit = on || flare ? (flare > .2 ? "#fff1c2" : "#ffd27a") : null;
+      door.material.color.set(lit || "#5a4630"); for (const l of lanterns) l.material.color.set(lit || "#6b6259");
+      halo.material.opacity = (on ? .32 + .08 * Math.sin(T * 1.6) : 0) + flare * .6;
+      for (const f of flames) { f.visible = on || flare > 0; f.scale.set(1, fl, 1); }
+      papers.forEach((m, k) => m.visible = k < sh.n);
+    }); }
 
   // ── every box the sim placed, snapped to the voxel grid (both ends, so stacked pieces still meet)
   for (const [x, y, z, w, d, h, c, o] of SOLIDS) {

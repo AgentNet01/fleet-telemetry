@@ -19,6 +19,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SHOTS = os.path.join(HERE, "ui-shots")
 PASSWORD = "ui-pass"
 
+def open_page(page, name):
+    """The pages live in the ☰ menu (Jack, Oct 15: the office is the whole page)."""
+    page.locator(".menubtn:visible").first.click()
+    page.get_by_role("tab", name=name).click()
+
+
 
 def seeded():
     clock = Clock()
@@ -60,30 +66,32 @@ def main():
         page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme="dark", http_credentials={"username": "jack", "password": PASSWORD})
         page.set_default_timeout(4000)
         page.goto(url)
+        page.wait_for_function("window.Office3D && Office3D.debug.state().ready", timeout=60000)   # the 3D office builds first; clicks wait on it
 
-        # Light mode: a toggle top-right, remembered across reloads
+        # Light mode: a toggle in the ☰ menu, remembered across reloads
         bg = lambda: page.evaluate("getComputedStyle(document.body).backgroundColor")
         dark = bg()
-        toggle = page.get_by_role("button", name=re.compile("light mode", re.I))
-        tb, top = toggle.bounding_box(), page.locator(".top").bounding_box()
-        assert tb["x"] + tb["width"] > top["x"] + top["width"] - 60, "the toggle sits top right"
-        toggle.click()
+        page.locator(".menubtn:visible").first.click()
+        page.get_by_role("button", name=re.compile("light mode", re.I)).click()
         assert bg() != dark and sum(map(int, re.findall(r"\d+", bg())[:3])) > 600, f"light background: {bg()}"
         page.reload()
         assert sum(map(int, re.findall(r"\d+", bg())[:3])) > 600, "light mode is remembered"
-        page.locator("[data-agent='Ada']").wait_for()
+        page.wait_for_function("window.Office3D && Office3D.debug.state().ready", timeout=60000)
         shoot(page, "1440-overview-light")
+        page.locator(".menubtn:visible").first.click()
         page.get_by_role("button", name=re.compile("dark mode", re.I)).click()
+        page.keyboard.press("Escape")
         assert bg() == dark
 
-        # Overview: agent cards say product, role, held task and how long they've been free
+        # Overview: agent cards (the office's List) say product, role, held task and how long they've been free
+        page.locator("#olist").click()
         ada = page.locator("[data-agent='Ada']")
         expect(ada).to_contain_text("in Shop")
         expect(ada).to_contain_text("build the budget sheet")
         expect(page.locator("[data-agent='Bea']")).to_contain_text(re.compile(r"free 13h"))
-        page.get_by_role("tab", name="Activity").click()
+        open_page(page, "Activity")
         expect(page.locator("#feed")).to_contain_text('product set "Shop" metric')
-        page.get_by_role("tab", name="Overview").click()
+        open_page(page, "Overview")
         shoot(page, "1440-overview")
 
         # Agent page: the conversation owns the screen; a message goes out, is delivered, and the reply shows up
@@ -126,13 +134,13 @@ def main():
         assert page.evaluate("document.documentElement.scrollWidth") <= 375
         shoot(page, "375-agent")
         page.set_viewport_size({"width": 1440, "height": 900})
-        page.get_by_role("button", name="← All agents").click()
+        page.get_by_role("button", name="← Office").click()
         page.locator("[data-agent='Ada']").click()
         expect(chat.locator(".sys", has_text="what size is the cover?")).to_contain_text("Ada asked Bea")
-        page.get_by_role("button", name="← All agents").click()
+        page.get_by_role("button", name="← Office").click()
 
         # Activity: the whole company's last hour in one place — counts, a feed you can filter, click-through
-        page.get_by_role("tab", name="Activity").click()
+        open_page(page, "Activity")
         feed = page.locator("#feed")
         expect(page.locator("#now")).to_contain_text("Ada")                       # who is working right now
         expect(page.locator("#now")).to_contain_text("build the budget sheet")
@@ -172,10 +180,10 @@ def main():
         expect(feed).to_contain_text("Ada picked up")                            # older items load as you scroll
         feed.locator(".ev", has_text="Bea replied").first.click()
         expect(page.locator("#tl")).to_contain_text("about half done")
-        page.get_by_role("tab", name="Overview").click()
+        open_page(page, "Overview")
 
         # Portfolio: a product with a PM, a project, a task blocked by another
-        page.get_by_role("tab", name="Portfolio").click()
+        open_page(page, "Portfolio")
         page.get_by_role("button", name="+ Product").click()
         page.get_by_label("Product name").fill("Stickers")
         page.get_by_label("PM").select_option("Bea")
@@ -215,7 +223,7 @@ def main():
         expect(dlg).to_contain_text("draw the sticker sheet")                      # what it waits on
         page.keyboard.press("Escape")
         expect(dlg).to_be_hidden()
-        page.get_by_role("tab", name="Portfolio").click()
+        open_page(page, "Portfolio")
         page.locator("[data-product]", has_text="Shop").click()
         working = page.locator(".col", has_text="Working").locator(".tcard", has_text="build the budget sheet")
         assert working.bounding_box()["height"] < 110, "a card is a title and a headline, not the whole record"
@@ -228,7 +236,7 @@ def main():
         shoot(page, "1440-product")
 
         # Org: seats are interchangeable — Jack steps into the CEO seat
-        page.get_by_role("tab", name="Org").click()
+        open_page(page, "Org")
         expect(page.locator("#org")).to_contain_text("Board")
         expect(page.locator("#org")).to_contain_text("darragh")
         page.get_by_label("Team for Bea").select_option("marketer")
@@ -240,13 +248,13 @@ def main():
         shoot(page, "1440-org")
 
         # Suggestions: accept the optimizer's idea
-        page.get_by_role("tab", name="Suggestions").click()
+        open_page(page, "Suggestions")
         row = page.locator(".sug", has_text="bundle the three templates")
         row.get_by_role("button", name="Accept").click()
         expect(row).to_contain_text("accepted")
         shoot(page, "1440-suggestions")
         # Vault: link an Etsy shop — save the app keys, then Connect sends you to Etsy
-        page.get_by_role("tab", name="Vault").click()
+        open_page(page, "Vault")
         page.get_by_label("Etsy keystring").fill("KEY")
         page.get_by_label("Etsy shared secret").fill("SECRET")
         page.get_by_role("button", name="Save app keys").click()
@@ -256,18 +264,18 @@ def main():
             page.get_by_role("button", name="Connect Etsy").click()
         assert "code_challenge" in go.value.url, go.value.url
         page.go_back()
-        page.get_by_role("tab", name="Vault").click()
+        open_page(page, "Vault")
         shoot(page, "1440-vault")
-        page.get_by_role("tab", name="Council").click(); shoot(page, "1440-council")
+        open_page(page, "Council"); shoot(page, "1440-council")
 
         # Phone width: every view usable, no sideways scroll of the page
         page.set_viewport_size({"width": 375, "height": 812})
         for t in ("Overview", "Activity", "Portfolio", "Org", "Suggestions", "Council", "Vault"):
-            page.get_by_role("tab", name=t).click()
+            open_page(page, t)
             wide = page.evaluate("document.documentElement.scrollWidth")
             assert wide <= 375, f"{t} scrolls sideways at 375 px ({wide})"
             shoot(page, "375-" + t.lower())
-        page.get_by_role("tab", name="Portfolio").click()
+        open_page(page, "Portfolio")
         page.locator("[data-product]", has_text="Stickers").click()
         shoot(page, "375-product")
         browser.close()

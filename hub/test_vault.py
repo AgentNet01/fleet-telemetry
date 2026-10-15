@@ -38,6 +38,29 @@ def main():
     assert sorted(r["secret"] for r in reads) == ["etsy-key", "nia-login", "openai"], reads
     assert all(r["agent"] == "Nia" for r in reads), reads
     assert all("value" not in r and "NIA-PW" not in str(r) for r in reads), "the log never holds values"
+    # Jack widens or narrows who can read a secret he already stored, without re-entering it
+    h.add_agent("Max", "muse")
+    h.add_agent("Zed", "muse")
+    h.secret_scope("nia-login", "agent:Nia|agent:Max")
+    assert h.secret_get("nia-login", "Max") == "NIA-PW", "a second agent added to the scope can read it"
+    assert h.secret_get("nia-login", "Nia") == "NIA-PW", "the first agent still can"
+    try:
+        h.secret_get("nia-login", "Zed")
+        assert False, "an agent left out of the scope must be refused"
+    except PermissionError:
+        pass
+    h.secret_scope("nia-login", "hub")
+    try:
+        h.secret_get("nia-login", "Max")
+        assert False, "scope narrowed to hub only: no agent may read it"
+    except PermissionError:
+        pass
+    assert h.db.execute("select value from secrets where name='nia-login'").fetchone()["value"] == "NIA-PW", "changing scope keeps the value"
+    try:
+        h.secret_scope("missing", "fleet")
+        assert False, "changing scope of a secret that isn't there must say so"
+    except KeyError:
+        pass
     print("vault OK")
 
 

@@ -1,6 +1,6 @@
 """The 3D office in a real browser (Playwright, Chromium with software WebGL), used the way Jack uses it.
 
-    python3 test_office3d.py toggle | people | camera | views | fills | head | webcam | lean | steady | eyes | shots
+    python3 test_office3d.py toggle | cat | people | camera | views | fills | shrine | head | webcam | lean | steady | eyes | shots
 """
 import os
 import subprocess
@@ -42,7 +42,7 @@ def face_cam(name, parts, grain=0):
 
 
 class Office:
-    """The Overview with the 3D switch pressed."""
+    """The Overview, which is the 3D office (Jack, Oct 14: the flat one is gone)."""
 
     def __init__(self, pw, query="", args=()):
         self.h, self.srv, url = seeded()
@@ -56,9 +56,6 @@ class Office:
         page.set_default_timeout(5000)
         page.goto(url + query)
         page.locator("[data-agent='Ada']").wait_for(state="attached")
-        self.switch = page.locator("#o3d")
-        assert self.switch.count() == 1, "3D switch missing"
-        self.switch.click()
         try:
             page.wait_for_function("window.Office3D && Office3D.debug.state().ready", timeout=30000)
         except Exception:
@@ -84,16 +81,24 @@ def toggle(pw):
     o = Office(pw)
     page = o.page
     assert page.locator("#office3dcv").is_visible(), "a WebGL canvas fills the office"
+    assert page.locator("#o3d").count() == 0, "no switch back to a flat office"
     colours = o.js("Office3D.debug.sample()")
     assert colours > 12, f"the scene is lit and varied, not blank: {colours} colours"
     hud = page.locator("#ohud").inner_text()
     assert "working" in hud and "on break" in hud, f"the HUD still counts: {hud}"
-    assert o.switch.inner_text().strip() == "2D", "the switch now offers the way back"
-    o.switch.click()
-    page.wait_for_function("!window.Office3D")
-    page.wait_for_timeout(400)
-    assert page.locator("#office3dcv").count() == 0, "the WebGL canvas is gone"
-    assert o.js("!!Office.debug.cache"), "the 2D office is drawing again"
+    assert not o.errors(), o.errors()
+
+
+def cat(pw):
+    """Jack, Oct 14: dot only writes reports now, so in the office it is the office cat."""
+    o = Office(pw)
+    dot = o.js("(() => { const p = Office.debug.people.get('dot'); return { cat: !!p.cat, mode: p.mode, group: p.slot && p.slot.group, hold: Object.keys(p.hold || {}).length, conv: !!p.conv }; })()")
+    assert dot["cat"] and dot["mode"] == "idle" and dot["hold"] == 0 and not dot["conv"], f"dot roams as a cat, holding nothing: {dot}"
+    assert dot["group"] not in ("ceo", "desk", "board", "review"), f"the cat doesn't sit at anyone's desk: {dot}"
+    cat_parts, ada_parts = o.js("Office3D.debug.rig('dot')")["parts"], o.js("Office3D.debug.rig('Ada')")["parts"]
+    assert 8 <= cat_parts < ada_parts, f"a small cube cat, not a person: {cat_parts} cubes vs Ada's {ada_parts}"
+    assert o.js("!!Office3D.debug.head('dot')"), "the cat has a spot for its name label"
+    o.page.locator("#office").screenshot(path=os.path.join(SHOTS, "3d-cat.png"))
     assert not o.errors(), o.errors()
 
 
@@ -167,9 +172,6 @@ def views(pw):
     d = o.state()["cam"]
     assert abs(d["target"][2] - c["target"][2]) > .5 and abs(d["yaw"] - c["yaw"]) < .01 and abs(d["dist"] - c["dist"]) < .01, f"a sideways two-finger swipe slides the camera, nothing else: {c} → {d}"
     o.page.locator("#office").screenshot(path=os.path.join(SHOTS, "3d-cube.png"))
-    o.switch.click()
-    page.wait_for_function("!window.Office3D")
-    assert page.locator(".ocube").count() == 0, "the cube leaves with the 3D view"
     assert not o.errors(), o.errors()
 
 
@@ -189,6 +191,51 @@ def fills(pw):
     page.locator("#ooffice").click()
     assert page.locator("#office").is_visible() and page.locator("#roster").is_hidden(), "and back again"
     assert o.js("document.documentElement.scrollHeight <= innerHeight"), "still nothing to scroll"
+    assert not o.errors(), o.errors()
+
+
+def shrine(pw):
+    """Jack, Oct 15: the whole page is the office under a ☰ menu, and what needs him is a shrine in the corner by the pool:
+    the agent who needs him carries a paper over, sets it down, does a little prayer dance, the shrine lights up, and a
+    small number above it says how many things wait. Clicking the number opens the list."""
+    o = Office(pw, "?officeHour=.2")
+    page = o.page
+    b = page.locator("#office").bounding_box()
+    assert (b["x"], b["y"], b["width"], b["height"]) == (0, 0, 1440, 900), f"the office is the whole window: {b}"
+    assert page.locator(".top").is_hidden() and page.locator("#tabs").is_hidden(), "no header or tab bar over the office"
+    page.locator(".omenu").click()
+    assert page.get_by_role("tab", name="Activity").is_visible(), "☰ opens the pages"
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+    assert page.get_by_role("tab", name="Activity").is_hidden(), "Escape puts the menu away"
+    xy = o.js("(() => { const s = Office.sim.SHRINE; return Office3D.debug.project(s.x + .4, s.y + .4, .4); })()")
+    page.mouse.click(*xy)
+    page.wait_for_timeout(300)
+    assert page.locator("#needs").is_visible(), "clicking the shrine itself opens what needs Jack"
+    page.locator(".top .menubtn").click()
+    page.get_by_role("tab", name="Overview").click()
+    assert o.js("Office.sim.OBJ.shrine.n") == 0 and not o.js("Office.debug.SLOTS.shrine[0].by"), "nothing waits on Jack yet"
+
+    o.h.jack_add("Cy", "Add a card to the Etsy shop", "listing fees", "https://www.etsy.com/your/account/payments")
+    page.wait_for_function("Office.sim.OBJ.shrine.n === 1", timeout=15000)
+    page.wait_for_function("(p => p && p.activity === 'shrine' && p.hold.L === 'paper')(Office.debug.people.get('Cy'))", timeout=10000)
+    o.js("Office3D.debug.view({ target: [17.2, 0.8, 15.0], dist: 7, yaw: 2.6, pitch: 0.45 })")
+    page.wait_for_function("(p => p.clip === 'pray')(Office.debug.people.get('Cy'))", timeout=60000)
+    at = o.js("(() => { const p = Office.debug.people.get('Cy'), s = Office.debug.SLOTS.shrine[0]; return [Math.hypot(p.x - s.x, p.y - s.y), p.dir]; })()")
+    assert at[0] < .1 and at[1] == "SW", f"Cy prays at the shrine, facing it (it faces into the office): {at}"
+    page.wait_for_timeout(1500)
+    page.locator("#office").screenshot(path=os.path.join(SHOTS, "3d-shrine.png"))
+    page.wait_for_function("Office.sim.OBJ.shrine.flash > 0 && Office.debug.people.get('Cy').activity !== 'shrine'", timeout=20000)
+    assert not o.js("Office.debug.SLOTS.shrine[0].by"), "Cy leaves the shrine for the next one"
+
+    xy = o.js("Office3D.debug.project(...Office.sim.SHRINE.count)")
+    page.mouse.click(xy[0], xy[1] - 10)
+    page.wait_for_timeout(300)
+    assert page.locator("#needs").is_visible() and "Add a card to the Etsy shop" in page.locator("#nj").inner_text(), "the number opens what needs Jack"
+    assert page.locator(".top").is_visible(), "the other pages keep a light header with the ☰"
+    page.locator(".top .menubtn").click()
+    page.get_by_role("tab", name="Overview").click()
+    assert page.locator("#office").bounding_box()["height"] == 900, "and back to the office, edge to edge"
     assert not o.errors(), o.errors()
 
 
@@ -334,5 +381,5 @@ def shots(pw):
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "toggle"
     with sync_playwright() as pw:
-        {"toggle": toggle, "people": people, "camera": camera, "views": views, "fills": fills, "lean": lean, "steady": steady, "eyes": eyes, "head": head, "webcam": webcam, "shots": shots}[mode](pw)
+        {"toggle": toggle, "cat": cat, "people": people, "camera": camera, "views": views, "fills": fills, "shrine": shrine, "lean": lean, "steady": steady, "eyes": eyes, "head": head, "webcam": webcam, "shots": shots}[mode](pw)
     print("ok", mode)
