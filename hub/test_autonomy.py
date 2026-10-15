@@ -376,6 +376,24 @@ def overdue():
     print("overdue OK")
 
 
+def ask_up():
+    """Jack, Oct 15: "Can we also not have side chats?" One agent's `fleet ask all` reached ~25 agents and every answer
+    then queued on the CEO as chair. An agent's question for everyone goes to its PM (a PM's to the CEO), once."""
+    h, muse, clock = new_hub("Ada", "Bo", "Cy", "Pam", "Ceo")
+    h.seat("ceo", "Ceo")
+    pid = h.add_product("Hats", brief="hats")
+    h.set_pm("Hats", "Pam")
+    h.place("Ada", pid, "marketer")
+    h.ask_up("Ada", "how do I reactivate the listing?")
+    h.ask_up("Pam", "who owns the ads budget?")
+    h.tick(); h.tick()
+    assert not h.db.execute("select count(*) from councils").fetchone()[0], "ask_up: no fleet-wide council"
+    assert not any("reactivate" in s for n in ("Bo", "Cy", "Ceo") for s in muse.sent.get(n, [])), "ask_up: nobody else is asked"
+    assert any("reactivate" in s for s in muse.sent.get("Pam", [])), f"ask_up: Ada's PM gets it: {muse.sent.get('Pam')}"
+    assert any("ads budget" in s for s in muse.sent.get("Ceo", [])), "ask_up: a PM's question goes to the CEO"
+    print("ask_up OK")
+
+
 def wait():
     """Jack, Oct 13: Boboe 4 sat on #5 for hours "awaiting Gate 1 / Darragh's release", nudged hourly, taking nothing
     else. An agent waiting on someone parks the task and takes any product's work; the task comes back to it later."""
@@ -495,4 +513,4 @@ def chain():
 
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "overdue": overdue, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain, "unjoined": unjoined}[sys.argv[1]]()
+     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "ask_up": ask_up, "overdue": overdue, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain, "unjoined": unjoined}[sys.argv[1]]()

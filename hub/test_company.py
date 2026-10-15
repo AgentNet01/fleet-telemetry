@@ -52,8 +52,33 @@ def tasks():
     print("tasks OK")
 
 
+def resubmit():
+    """Jack, Oct 15: Pericles handed in #874 with the same listing URL twice; each rejection reached him as a queued FYI
+    he hadn't read yet. Handing in the evidence that was just rejected is refused on the spot, with the checker's reason."""
+    h, muse, clock = new_hub()
+    pid = h.add_product("P", brief="b"); prj = h.add_project(pid, "x")
+    for n in ("Ada", "Cy"):
+        h.add_agent(n, "muse"); h.place(n, pid, "engineer")
+    t = h.add_task(prj, "coupon", role="engineer", done_def="coupon verified in the dashboard", owner="Ada")
+    h.tick()
+    h.task_done("Ada", t, "https://www.etsy.com/listing/1")
+    h.task_verify("Cy", t, False, "only the listing page; show the coupon")
+    h.tick()
+    assert h.task(t)["owner"] == "Ada" and h.task(t)["status"] == "working", h.task(t)
+    try:
+        h.task_done("Ada", t, "https://www.etsy.com/listing/1")
+        raise AssertionError("resubmit: the same rejected evidence is refused")
+    except ValueError as e:
+        assert "show the coupon" in str(e), f"resubmit: the refusal carries the checker's reason: {e}"
+    h.task_done("Ada", t, "https://muse.ai/files/1/2/x/coupon.png")
+    assert h.task(t)["status"] == "verifying", "resubmit: new evidence goes through"
+    print("resubmit OK")
+
+
 def lifecycle():
-    """One holder; `fleet task done` closes it; a different agent verifies; nothing is released on a timer."""
+    """One holder; `fleet task done` closes it; a different agent verifies. Silence alone never releases it — only
+    TASK_CAP does (Jack, Oct 15; test_autonomy overdue), switched off here."""
+    hub.TASK_CAP = 10 ** 9
     h, muse, clock = new_hub()
     pid = h.add_product("P", brief="b"); prj = h.add_project(pid, "x")
     for n in ("Ada", "Cy"):
@@ -751,5 +776,5 @@ def links():
 
 
 if __name__ == "__main__":
-    {"council": council, "lifecycle": lifecycle, "poll": poll, "placement": placement, "org": org, "suggest": suggest,
+    {"council": council, "resubmit": resubmit, "lifecycle": lifecycle, "poll": poll, "placement": placement, "org": org, "suggest": suggest,
      "seats": seats, "manage": manage, "loose": loose, "grants": grants, "timeline": timeline, "send_now": send_now, "dry": dry, "activity": activity, "observe": observe, "teams": teams, "pin": pin, "handoff": handoff, "links": links, "switch_between": switch_between, "stuck": stuck}.get(sys.argv[1] if len(sys.argv) > 1 else "", tasks)()

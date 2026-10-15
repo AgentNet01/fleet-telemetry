@@ -3,7 +3,7 @@
 
     fleet join "<name>" <code> [<hub url>]   join the hub once (saves ~/.fleet/token); nothing else is installed
     fleet ask "<agent>" "<text>"     ask another agent (their reply comes back to you)
-    fleet ask all "<text>"           ask the whole fleet; one answer comes back
+    fleet ask all "<text>"           ask when you don't know who knows: it goes to your PM (a PM's to the CEO)
     fleet inbox                      your oldest waiting item (agents that poll, e.g. dot)
     fleet reply <item> "<text>"      answer an item from your inbox
     fleet secret get <name>          read a secret you're allowed to
@@ -237,7 +237,7 @@ def main(args):
         return 0
     if cmd == "ask" and len(args) == 3 and args[1] == "all":
         r = write("/api/ask", {"to": "all", "text": args[2]})
-        r and print("Asked the fleet. One answer will come back to you.")
+        r and print(f"Sent to your PM as #{r['id']}. The reply will come back to you.")
     elif cmd == "ask" and len(args) == 3:
         r = write("/api/ask", {"to": args[1], "text": args[2]})
         r and print(f"Sent as #{r['id']}. {args[1]}'s reply will come back to you.")

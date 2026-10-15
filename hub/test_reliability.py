@@ -8,6 +8,8 @@ import tempfile
 import hub
 from test_hub import Clock, FakeMuse
 
+hub.TASK_CAP = 10 ** 9        # a silent holder for 12h on purpose; the 2h cap is test_autonomy overdue
+
 
 def new_hub():
     h = hub.Hub(os.path.join(tempfile.mkdtemp(), "hub.db"), FakeMuse(), Clock())

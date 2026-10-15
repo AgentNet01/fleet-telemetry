@@ -345,7 +345,17 @@ def busy_ceo():
     assert not h.needs_jack(), f"busy_ceo: one unsorted wait isn't enough to reach Jack: {h.needs_jack()}"
     assert any("Review the banner images" in m and "you decide" in m for m in muse.sent.get("Bo", [])), "busy_ceo: the stand-in screens it"
     clock.go(hub.SCREEN_WAIT + 1); h.tick(); h.tick()
-    assert [n["what"] for n in h.needs_jack()] == ["Review the banner images and approve them"], "busy_ceo: unsorted twice, Jack gets it"
+    # Oct 15: with Pericles swamped, "reactivate the listing", "check the Printful rate" and "connect Outlook" were heading
+    # to Jack unscreened. Unsorted twice, only payment or ID reaches him; anything else goes back to the agent as its own
+    assert not h.needs_jack(), f"busy_ceo: unscreened, an ask that isn't money or ID never reaches Jack: {h.needs_jack()}"
+    assert any("Review the banner images" in m and "yours" in m for m in muse.sent.get("Neo", [])), \
+        f"busy_ceo: the agent is told it's its own call: {muse.sent.get('Neo')}"
+    assert h.task(t)["waiting_on"] is None, "busy_ceo: its task isn't left waiting on Jack"
+    h.task_for_jack("Neo", t, "Approve 14 dollars of Etsy Ads for the banners", "ads cost money", "https://www.etsy.com/your/shops/me/advertising")
+    h.tick()
+    for _ in range(2):
+        clock.go(hub.SCREEN_WAIT + 1); h.tick(); h.tick()
+    assert [n["what"] for n in h.needs_jack()] == ["Approve 14 dollars of Etsy Ads for the banners"], "busy_ceo: money still reaches Jack"
     print("busy_ceo OK")
 
 

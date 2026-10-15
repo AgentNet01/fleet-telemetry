@@ -48,7 +48,8 @@ def http(method, url, headers=None, data=None, files=None):
 
 
 def _vault(h, name):
-    r = h.db.execute("select value from secrets where name=?", (name,)).fetchone()
+    with h.lock:            # Oct 15: read from the listing-sync thread without it -> sqlite "bad parameter or other API misuse"
+        r = h.db.execute("select value from secrets where name=?", (name,)).fetchone()
     return json.loads(r["value"]) if r else None
 
 
@@ -130,7 +131,8 @@ def _fresh(h, app, rec):
 def sales(h):
     """Paid orders from every linked shop, as sales rows. A broken shop records its error and is skipped."""
     app = _vault(h, APP)
-    names = [r["name"] for r in h.db.execute("select name from secrets where name like ?", (SHOP + "%",))]
+    with h.lock:
+        names = [r["name"] for r in h.db.execute("select name from secrets where name like ?", (SHOP + "%",))]
     rows = []
     for name in names:
         rec = _vault(h, name)
@@ -162,7 +164,9 @@ def sales(h):
 def shops(h):
     """What the dashboard shows: no tokens."""
     out = []
-    for r in h.db.execute("select value from secrets where name like ? order by name", (SHOP + "%",)):
+    with h.lock:
+        rows = h.db.execute("select value from secrets where name like ? order by name", (SHOP + "%",)).fetchall()
+    for r in rows:
         rec = json.loads(r["value"])
         out.append({k: rec.get(k) for k in ("shop_id", "shop_name", "product", "connected", "last_sync", "error")})
     return {"app": bool(_vault(h, APP)), "shops": out}
@@ -194,7 +198,8 @@ def _first(app, access, url, key):
 def _shop(h, product=None):
     """(app, secret name, shop record): the product's own shop, else the first linked one."""
     app = _vault(h, APP)
-    names = [r["name"] for r in h.db.execute("select name from secrets where name like ?", (SHOP + "%",))]
+    with h.lock:
+        names = [r["name"] for r in h.db.execute("select name from secrets where name like ?", (SHOP + "%",))]
     if not app or not names:
         raise ValueError("no Etsy shop is linked yet: Jack presses Connect Etsy on the Vault tab")
     name, rec = next(((n, r) for n, r in ((n, _vault(h, n)) for n in names) if product and r.get("product") == product),

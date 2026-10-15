@@ -208,10 +208,19 @@ OPERATOR_ONLY = ("Go to an operator (Jack or Darragh) only when you're truly blo
                  "Personalization instructions are plain sentences a first-time buyer understands, separated by commas, with one "
                  "example — no abbreviations (req, opt, ≤) and no | separators. "
                  "Spending money (ads, samples, purchases) needs Jack; posting doesn't — posting listings on "
-                 "Etsy (yourself or through Printify) is your job, never ask him to publish. "
+                 "Etsy (yourself or through Printify) is your job, never ask him to publish. Nobody needs the Etsy seller "
+                 "sign-in: `fleet etsy post` puts a listing live and `fleet etsy update` changes its pictures, copy or on/off "
+                 "through the shop's API link the hub holds. "
                  "Everything else — choices, sign-offs, which option to take — decide yourself or with your PM; "
                  "don't send it to them. Prices are yours to set; never below cost after maker, shipping and Etsy fees. "
                  "Facts you can look up, read in a file or ask a maker's support for are yours too.")
+# what an unscreened ask must be about to reach Jack: payment, money, or his identity (Jack, Oct 15)
+JACK_WORTHY = re.compile(r"\$|\b(pay|payment|card|credit|debit|bank|billing|invoice|purchase|buy|spend|spending|budget|"
+                         r"dollars?|usd|ads?|advertising|sample order|subscription|charge|tax|ein|ssn|passport|license|"
+                         r"identity|id verification|verify (my|his|your) id|phone number|2fa|in (jack|his)'?s? name)\b", re.I)
+NOT_JACKS = ("It isn't payment or ID, so it's yours (Jack, Oct 15: \"the ONLY thing that needs me is spending money or my "
+             "ID/card/phone\"). Decide it yourself or with your PM, sign up for any account with your own fleet email, and "
+             "make Etsy changes with `fleet etsy update`. If it really does need money or Jack's ID, ask again and say how much or which ID.")
 ALLOW = ("allow_always", "allow_today", "allow_session", "allow_once")     # broadest allow Muse offers, first
 TASK_CAP = 2 * 3600                     # Jack, Oct 15: tasks held 5h+ on "still blocked" notes; past this it goes back to its PM
 NUDGE_AFTER = 3600                     # a task holder silent this long is reminded, then its PM an hour later
@@ -477,8 +486,8 @@ class Hub:
             self._close_councils()
             self._assign_verifiers()
             self._track_free()
+            self._overdue()                 # before _nudge: a task being parked isn't also nudged
             self._nudge()
-            self._overdue()
             self._ceo_idle()
             self._watch_chair()
             self._watch_powers()
@@ -951,8 +960,14 @@ class Hub:
                 self.db.execute("update needs_jack set triage=? where id=?", (other, n["id"]))
                 self.db.execute("insert into items(kind, frm, too, text, depth, status, created, ref) values('screen','hub',?,?,0,'queued',?,?)",
                                 (other, tries[-1]["text"], self.clock(), n["id"]))
-            else:
+            elif JACK_WORTHY.search(" ".join(filter(None, (n["what"], n["why"], n["text"])))):
                 self.db.execute("update needs_jack set triage=null where id=?", (n["id"],))
+            else:                   # Oct 15: unscreened asks reached Jack as written; only payment or ID may
+                self.db.execute("update needs_jack set triage=null, done=1, answer=? where id=?", (NOT_JACKS, n["id"]))
+                self._note(n["agent"], f"Your ask for Jack wasn't sent: “{(n['what'] or n['text'])[:200]}”", NOT_JACKS)
+                t = n["task"] and self.db.execute("select * from tasks where id=?", (n["task"],)).fetchone()
+                if t and t["waiting_on"]:
+                    self._resume(t, "hub")
 
     def jack_list(self, who):
         with self.lock:
@@ -997,6 +1012,13 @@ class Hub:
                 raise ValueError(f"#{tid} is work for an operator (Jack or Darragh), and nothing from it is on their list. "
                                  f"Put each step they must do there first, one per step, in plain words with the link:\n"
                                  f"  fleet task operator {tid} '<what to do>' '<why it blocks you>' <link>\nthen run task done again.")
+            # Oct 15: #874 handed in the same listing URL twice; the rejection sat unread in a queued FYI
+            back = self.db.execute("select d.text link, s.text why from task_events s join task_events d on d.task=s.task "
+                                   "and d.what='done' and d.id<s.id where s.task=? and s.what='sent back' order by s.id desc, d.id desc limit 1",
+                                   (tid,)).fetchone()
+            if back and back["link"].strip() == link.strip():
+                raise ValueError(f"#{tid} was already sent back for this same evidence. The checker said: {back['why']}\n"
+                                 f"Fix that, then hand in a link that shows it (a screenshot saved as a Muse file works).")
         if not self.evidence_ok(link):                                  # network check, outside the lock
             raise ValueError(f"the evidence link doesn't open: {link}")
         with self.lock:
@@ -1134,7 +1156,8 @@ class Hub:
                     f"To give it back as is: fleet task resume {t['id']}")
             to = boss if boss and boss != t["owner"] else "outside"
             self._note(t["owner"], f"#{t['id']} “{t['title']}” is parked: {int((now - since) // 3600)}h without finishing",
-                       f"The hub handed it to {to} to split, re-scope or drop. Stop work on it; your next task comes from the hub.")
+                       (f"The hub handed it to {to} to split, re-scope or drop." if to != "outside" else
+                        "It's back on the board for whoever plans this product.") + " Stop work on it; your next task comes from the hub.")
             self.task_wait(t["owner"], t["id"], to, what)
 
     def _nudge(self):
@@ -1742,6 +1765,17 @@ class Hub:
     def _responders(self):
         return [a["name"] for a in self.db.execute(
             "select name from agents where kind in ('muse','poll') and state='active'").fetchall()]
+
+    def ask_up(self, frm, question, key=None):
+        """An agent's question for everyone (Jack, Oct 15: no side chats; one went to ~25 agents and queued on the CEO):
+        it goes to the agent's PM, or the CEO when it is a PM or has none, as one request whose reply comes back."""
+        with self.lock:
+            a = self._agent(frm)
+            pm = self.db.execute("select pm from products where name=?", (a and a["current_product"],)).fetchone()
+            to = (pm["pm"] if pm and pm["pm"] and pm["pm"] != frm else None) or self._chair()
+        if not to or to == frm:
+            return self.ask_all(frm, question, key=key)
+        return self.ask(frm, to, f"(asked to the whole fleet; it comes to you instead — answer it, or ask the one agent who knows) {question}", key)
 
     def ask_all(self, frm, question, chair=None, key=None):
         with self.lock:
@@ -2701,7 +2735,7 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                     if name:
                         b = self._body()
                         if b["to"] == "all":
-                            self._json(200, {"council": hub.ask_all(name, b["text"], key=b.get("key"))})
+                            self._json(200, {"id": hub.ask_up(name, b["text"], key=b.get("key"))})
                         else:
                             self._json(200, {"id": hub.ask(name, b["to"], b["text"], b.get("key"))})
                 elif u.path == "/api/reply":
