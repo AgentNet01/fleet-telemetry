@@ -279,8 +279,13 @@ def main() -> int:
     if not os.path.isfile(out_path):
         raise RuntimeError(f"image was not written to {out_path}")
     size = os.path.getsize(out_path)
+    vram = ""
+    if device == "cuda":
+        # Peak VRAM incl. weights + activations (task #1096: load test needs
+        # per-job VRAM; max_memory_allocated is a cheap query, no timing effect).
+        vram = f" vram_mb={torch.cuda.max_memory_allocated() / 1048576:.0f}"
     print(f"wrote {out_path}  seed={seed} steps={args.steps} size={args.size} "
-          f"device={device} secs={elapsed:.1f} bytes={size}")
+          f"device={device} secs={elapsed:.1f} bytes={size}{vram}")
     if args.upscale:
         # Task #537: 4x Real-ESRGAN upscale (vendored, tiled for 8GB VRAM).
         # Weights download on first use; runs on the generation device.
