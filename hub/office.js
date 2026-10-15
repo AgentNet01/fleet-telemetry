@@ -69,7 +69,10 @@ const onT = (x, y, z, w, d) => (u, v) => P(x + w * u, y + d * v, z);           /
 const quad = (f, u0, v0, u1, v1) => [f(u0, v0), f(u1, v0), f(u1, v1), f(u0, v1)];
 
 // floors by room; the 3D view paints the same zones
-const ZONE = (x, y) => x >= WALL ? "deck" : x >= 14.2 ? (y < 7.6 ? "plank" : "carpet") : y < 5.6 + SY ? (x >= 9.6 && y < 4.6 ? "board" : "carpet")
+// Jack, Oct 15: the glass offices sit in the far (west) corner, so the desks and the boardroom are nearest the patio
+const OFFICE = { x: 4.5, split: 3.75, end: 7.6, doors: [[2.3, 3.3], [6.1, 7.1]] };     // glass wall at x; offices west of it
+const BR = { x: 14.6, end: 4.4, door: [14.9, 15.9] };                                     // the boardroom: a glass room, table at the screen
+const ZONE = (x, y) => x >= WALL ? "deck" : y < 5.6 + SY ? (x < OFFICE.x && y < OFFICE.end ? "plank" : x >= BR.x && y < BR.end ? "board" : "carpet")
   : x < 5.1 ? "tile" : x < 9.6 ? "plank" : "review";
 // ───────────────────────────── the floor plan: sortable items ─────────────────────────────
 // Each item has a footprint and a sort key (footprint centre x+y). Long pieces are split into ≤1-tile chunks so a
@@ -174,7 +177,7 @@ function makeDesk(xx, yy, w = 1.9, office = null) {
   item({ key: k + .04, fp: [ax + 1.05, yy + .45, .1, .1], z0: .72, z1: .85, live: g => { if (d.mug) drawMugAt(g, ...P(ax + 1.15, yy + .55, .72), d.mugColor || "#fff"); } });
   return d;
 }
-[.8, 3.2, 5.6, 8.0].forEach(yy => [.5, 2.95, 5.4, 7.85].forEach(xx => makeDesk(xx, yy)));
+[.8, 3.2, 5.6, 8.0].forEach(yy => [5.1, 7.55, 10.0, 12.45].forEach(xx => makeDesk(xx, yy)));
 function drawMonitors(g, d, T) {
   const scr = (x0, w, j) => {
     const x = d.ax + x0, y = d.y + .1;
@@ -202,23 +205,23 @@ function drawMugAt(g, x, y, col, fill = .7) {
 }
 
 // ── boardroom
-solid(10.1, 1.5, .66, 3.2, 1.1, .06, C.wood, { block: [10.1, 1.5, 3.2, 1.1] });
-solid(10.7, 1.9, 0, .3, .3, .66, C.dark, { shadow: false }); solid(12.4, 1.9, 0, .3, .3, .66, C.dark, { shadow: false });
+solid(15.1, 1.5, .66, 3.2, 1.1, .06, C.wood, { block: [15.1, 1.5, 3.2, 1.1] });
+solid(15.7, 1.9, 0, .3, .3, .66, C.dark, { shadow: false }); solid(17.4, 1.9, 0, .3, .3, .66, C.dark, { shadow: false });
 const BOARD = { back: [], front: [], head: null, laptop: null };
-[10.6, 11.7, 12.8].forEach(x => { chair(x, 1.05, "SW", C.plum); BOARD.back.push({ x, y: 1.05, dir: "SW", pose: "sit" });
+[15.6, 16.7, 17.8].forEach(x => { chair(x, 1.05, "SW", C.plum); BOARD.back.push({ x, y: 1.05, dir: "SW", pose: "sit" });
   chair(x, 2.95, "NE", C.plum); BOARD.front.push({ x, y: 2.95, dir: "NE", pose: "sit" }); });
-chair(13.62, 2.05, "NW", C.plum); BOARD.head = { x: 13.62, y: 2.05, dir: "NW", pose: "sit" };
-for (const [gx, gy] of [[10.5, 1.7], [12.5, 1.7], [11.6, 2.3]]) deco(gx + gy + .9, [gx, gy, .1, .1], .72, .85, g => {
+chair(18.62, 2.05, "NW", C.plum); BOARD.head = { x: 18.62, y: 2.05, dir: "NW", pose: "sit" };
+for (const [gx, gy] of [[15.5, 1.7], [17.5, 1.7], [16.6, 2.3]]) deco(gx + gy + .9, [gx, gy, .1, .1], .72, .85, g => {
   const [x, y] = P(gx, gy, .72); g.fillStyle = "rgba(200,230,255,.7)"; g.strokeStyle = "rgba(120,150,180,.6)"; g.lineWidth = .5;
   g.beginPath(); g.roundRect(x - 1.5, y - 4, 3, 4, .6); g.fill(); g.stroke(); });
 OBJ.laptop = { open: 0, glow: 0 };
-item({ key: 14.2, fp: [11.45, 1.55, .5, .35], z0: .72, z1: 1, live: g => {
-  const o = OBJ.laptop; box(g, 11.45, 1.6, .72, .5, .33, .02, "#9aa3ad", { hl: false });
-  if (o.open > .05) { poly(g, [P(11.45, 1.62, .74), P(11.95, 1.62, .74), P(11.95, 1.62 - .08 * o.open, .74 + .3 * o.open), P(11.45, 1.62 - .08 * o.open, .74 + .3 * o.open)], "#8d96a0", "rgba(0,0,0,.25)", .6);
-    const [lx, ly] = P(11.7, 1.6, .89); g.fillStyle = o.glow ? "#e8f4ff" : "#b8c0c8"; g.beginPath(); g.arc(lx, ly, 1.4, 0, 7); g.fill(); } } });
-lamp(11.7, 2.05, 2.3, 120, "255,224,170", "pendant");
+item({ key: 19.2, fp: [16.45, 1.55, .5, .35], z0: .72, z1: 1, live: g => {
+  const o = OBJ.laptop; box(g, 16.45, 1.6, .72, .5, .33, .02, "#9aa3ad", { hl: false });
+  if (o.open > .05) { poly(g, [P(16.45, 1.62, .74), P(16.95, 1.62, .74), P(16.95, 1.62 - .08 * o.open, .74 + .3 * o.open), P(16.45, 1.62 - .08 * o.open, .74 + .3 * o.open)], "#8d96a0", "rgba(0,0,0,.25)", .6);
+    const [lx, ly] = P(16.7, 1.6, .89); g.fillStyle = o.glow ? "#e8f4ff" : "#b8c0c8"; g.beginPath(); g.arc(lx, ly, 1.4, 0, 7); g.fill(); } } });
+lamp(16.7, 2.05, 2.3, 120, "255,224,170", "pendant");
 
-var DINE, REVIEW, BOOTHS, PONG;
+var DINE, REVIEW, PONG;
 { const { P, box, onT, onR, onL, solid, item, deco, chair, plantAt, lamp, BLOCK, slots } = shiftTo(0, SY);              // the south rooms, moved down by SY
 // ── kitchen: counter with coffee machine, sink, microwave, watering can; fridge; dining table
 solid(0, 5.9, 0, .72, 4.0, .86, C.white, { block: true, wallY: true, after: (g, x, y, w, d, f) => {
@@ -318,23 +321,12 @@ deco(10.9 + 6.4 + .4, [10.4, 6.0, 1.0, .8], .71, .75, g => {
 REVIEW = [{ x: 10.9, y: 7.25, dir: "NE" }, { x: 11.85, y: 6.4, dir: "NW" }, { x: 10.9, y: 5.55, dir: "SW" }, { x: 9.95, y: 6.4, dir: "SE" }];
 REVIEW.forEach(s => { s.pose = "sit"; chair(s.x, s.y, s.dir, C.teal); });
 lamp(10.9, 6.4, 2.2, 100, "255,224,170", "pendant");
-BOOTHS = [6.9, 8.2].map(by => {
-  const b = { y: by, busy: false };
-  solid(12.8, by, 0, 1.05, .06, 2.1, "#6b7684", { shadow: false }); solid(12.8, by + .06, 0, .06, 1.04, 2.1, "#6b7684", { shadow: false });
-  solid(12.8, by, 2.1, 1.05, 1.1, .08, "#6b7684", { shadow: false, top: "#7d8896" });
-  BLOCK.push([12.8, by, 1.05, .1], [12.8, by, .1, 1.1]);
-  item({ key: 13.33 + by + 1.1 + .1, fp: [12.8, by + 1.08, 1.05, .02], z0: 0, z1: 2.1, live: g => {
-    poly(g, [P(12.86, by + 1.1), P(13.85, by + 1.1), P(13.85, by + 1.1, 2.1), P(12.86, by + 1.1, 2.1)], "rgba(200,225,245,.30)", "rgba(255,255,255,.5)", .8);
-    line(g, [P(12.9, by + 1.1, 2.13), P(13.8, by + 1.1, 2.13)], b.busy ? "#3fe08a" : "#58606a", 2); } });
-  b.slot = { x: 13.35, y: by + .55, dir: "SW", pose: "stand" };
-  return b;
-});
 solid(10.3, 9.9, .7, 1.8, .9, .05, C.green, { block: [10.3, 9.9, 1.8, .9], after: (g, x, y, w, d) => {
   line(g, [P(x, y + d / 2, .755), P(x + w, y + d / 2, .755)], "rgba(255,255,255,.7)", .7); } });
 solid(10.4, 10.0, 0, .05, .7, .7, C.dark, { shadow: false, hl: false }); solid(12.0, 10.0, 0, .05, .7, .7, C.dark, { shadow: false, hl: false });
 deco(11.2 + 10.35 + .4, [11.18, 9.85, .04, 1.0], .75, .9, g => poly(g, [P(11.2, 9.85, .755), P(11.2, 10.85, .755), P(11.2, 10.85, .87), P(11.2, 9.85, .87)], "rgba(255,255,255,.55)", "#ddd", .6));
 PONG = [{ x: 9.85, y: 10.35, dir: "SE", pose: "stand" }, { x: 12.55, y: 10.35, dir: "NW", pose: "stand" }];
-slots(DINE, REVIEW, PONG); BOOTHS.forEach(b => { b.y += SY; b.slot.y += SY; });
+slots(DINE, REVIEW, PONG);
 }
 OBJ.ball = null;
 item({ key: 0, fp: [0, 0, 0, 0], z0: 0, z1: 0, dynKey: () => OBJ.ball ? OBJ.ball.x + OBJ.ball.y : -1, live: g => {
@@ -343,10 +335,10 @@ item({ key: 0, fp: [0, 0, 0, 0], z0: 0, z1: 0, dynKey: () => OBJ.ball ? OBJ.ball
   g.fillStyle = "#fff8e8"; g.beginPath(); g.arc(x, y, 1.7, 0, 7); g.fill(); } });
 
 // ── plants indoors
-const PLANT_SPOTS = [[9.35, .35, 1.1, { x: 9.35, y: .95, dir: "NE" }], [13.75, .3, 1.2, { x: 13.4, y: .75, dir: "NE" }],
+const PLANT_SPOTS = [[9.75, .35, 1.1, { x: 9.75, y: .95, dir: "NE" }], [13.75, .3, 1.2, { x: 13.4, y: .75, dir: "NE" }],
   [9.4, 9.6 + SY, 1.2, { x: 9.4, y: 9.0 + SY, dir: "SW" }], [5.0, 5.35 + SY, 1, { x: 5.0, y: 4.85 + SY, dir: "SW" }],
   [WALL + .4, .35, 1.3, null], [X - .35, .4, 1.3, null], [WALL + .4, Y - .4, 1.15, null],
-  [10.6, 9.8, 1.2, { x: 11.2, y: 9.8, dir: "NW" }], [13.6, 4.3, 1.1, null], [14.6, 8.2, 1.2, { x: 15.2, y: 8.4, dir: "NW" }], [15.85, 16.0, 1.3, null]];   // beside the shrine, not in front of it
+  [10.6, 9.8, 1.2, { x: 11.2, y: 9.8, dir: "NW" }], [14.85, 9.3, 1.1, null], [14.6, 8.2, 1.2, { x: 15.2, y: 8.4, dir: "NW" }], [15.85, 16.0, 1.3, null]];   // beside the shrine, not in front of it
 const PLANTS = PLANT_SPOTS.map(([x, y, s, w]) => { const p = plantAt(x, y, s); if (w) p.slot = { ...w, pose: "stand" }; return p; });
 
 var PATIO = [], LOUNGERS, SMOKE;
@@ -403,20 +395,31 @@ for (let y = 0; y < Y; y += .5) if (y < DOOR[0] - .05 || y > DOOR[1] - .1) BLOCK
 for (const dy of DOOR) deco(WALL + dy, [WALL - .05, dy - .05, .1, .1], 0, 2.6, g => box(g, WALL - .05, dy - .05, 0, .1, .1, 2.6, C.metal, { hl: false }));
 
 // ── two glass offices against the patio glass: the CEO's (north) and the PM's, each a door on the floor side
-const OFFICE = { x: 14.2, split: 3.75, end: 7.6, doors: [[2.3, 3.3], [6.1, 7.1]] };
 const pane = (x0, y0, x1, y1) => {                                // a glass partition, in ≤1-tile pieces so people sort right
   const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) - 1e-6));
   for (let i = 0; i < n; i++) { const a = lerp(x0, x1, i / n), b = lerp(y0, y1, i / n), c = lerp(x0, x1, (i + 1) / n), d = lerp(y0, y1, (i + 1) / n);
     glassP(a, b, c, d, 2.6, (a + c) / 2 + (b + d) / 2 + .01); BLOCK.push([Math.min(a, c) - .05, Math.min(b, d) - .05, Math.abs(c - a) + .1, Math.abs(d - b) + .1]); }
 };
 pane(OFFICE.x, 0, OFFICE.x, OFFICE.doors[0][0]); pane(OFFICE.x, OFFICE.doors[0][1], OFFICE.x, OFFICE.doors[1][0]);
-pane(OFFICE.x, OFFICE.doors[1][1], OFFICE.x, OFFICE.end); pane(OFFICE.x, OFFICE.split, WALL, OFFICE.split); pane(OFFICE.x, OFFICE.end, WALL, OFFICE.end);
-const OFFICES = { ceo: makeDesk(16.1, 1.0, 2.2, "ceo"), pm: makeDesk(16.1, 4.75, 2.2, "pm") };
-for (const oy of [0, OFFICE.split]) {                             // a bookcase and an armchair in each
-  solid(18.4, oy + .15, 0, .45, 1.3, 1.5, C.wood, { block: true, after: (g, x, y, w, d) => { const s2 = onR(x, y, 0, w, d, 1.5);
+pane(OFFICE.x, OFFICE.doors[1][1], OFFICE.x, OFFICE.end); pane(OFFICE.x, OFFICE.split, 0, OFFICE.split); pane(OFFICE.x, OFFICE.end, 0, OFFICE.end);
+pane(BR.x, 0, BR.x, BR.end); pane(BR.x, BR.end, BR.door[0], BR.end); pane(BR.door[1], BR.end, WALL, BR.end);
+const OFFICES = { ceo: makeDesk(1.0, 1.0, 2.2, "ceo"), pm: makeDesk(1.0, 4.75, 2.2, "pm") };
+for (const oy of [0, OFFICE.split]) {                             // a bookcase against the outer wall in each (Oct 15: the lone armchair read as a missing table)
+  solid(.1, oy + .15, 0, .45, 1.3, 1.5, C.wood, { block: true, after: (g, x, y, w, d) => { const s2 = onR(x, y, 0, w, d, 1.5);
     for (let r = 0; r < 4; r++) for (let b = 0; b < 6; b++) poly(g, quad(s2, .08 + b * .14, .06 + r * .25, .18 + b * .14, .2 + r * .25), ["#e76f51", "#2a9d8f", "#e9c46a", "#5a7bbf", "#8d6cab"][(b + r) % 5]); } });
-  chair(14.85, oy + .75, "SE", C.sand, { back: .6 });
 }
+// call booths, side by side under the boardroom (Jack, Oct 15: not between the shrine and the lounge)
+const BOOTHS = [16.6, 17.8].map(bx => {     // clear of the boardroom door
+  const by = 5.0, b = { x: bx, y: by, busy: false };
+  solid(bx, by, 0, 1.05, .06, 2.1, "#6b7684", { shadow: false }); solid(bx, by + .06, 0, .06, 1.04, 2.1, "#6b7684", { shadow: false });
+  solid(bx, by, 2.1, 1.05, 1.1, .08, "#6b7684", { shadow: false, top: "#7d8896" });
+  BLOCK.push([bx, by, 1.05, .1], [bx, by, .1, 1.1]);
+  item({ key: bx + .53 + by + 1.1 + .1, fp: [bx, by + 1.08, 1.05, .02], z0: 0, z1: 2.1, live: g => {
+    poly(g, [P(bx + .06, by + 1.1), P(bx + 1.05, by + 1.1), P(bx + 1.05, by + 1.1, 2.1), P(bx + .06, by + 1.1, 2.1)], "rgba(200,225,245,.30)", "rgba(255,255,255,.5)", .8);
+    line(g, [P(bx + .1, by + 1.1, 2.13), P(bx + 1.0, by + 1.1, 2.13)], b.busy ? "#3fe08a" : "#58606a", 2); } });
+  b.slot = { x: bx + .55, y: by + .55, dir: "SW", pose: "stand" };
+  return b;
+});
 
 // ── the pool: a raised plunge pool on the patio's new south end, with loungers along the rail
 const POOL = [20.4, 12.0, 4.6, 3.6];                              // x, y, w, d (outer edge of the coping)
@@ -437,24 +440,21 @@ for (const lx of [20.4, 22.4]) {
 
 // ── the shrine (Jack, Oct 15): an agent that needs Jack brings a paper here; it glows while anything waits on him.
 // Its back to the open south edge, facing into the office, a gate in front. Anchors for the 3D view's lights live on SHRINE.
-const SHRINE = (() => { const x = 16.6, y = 15.1, RED = "#9b2f2f", RED2 = "#b8382c", GOLD = "#c9a24a", ROOF = "#33262a";
+const SHRINE = (() => { const x = 16.6, y = 15.1, STONE = "#d9d3c7", MARBLE = "#efeae0", CLOTH = "#2f4a7a", GOLD = "#c9a24a", IRON = "#3a3532";
+  // Jack, Oct 15: not Japanese — a plain stone altar in an arched niche, an altar cloth, candles, two iron candle stands
   solid(x - .1, y - .25, 0, 1.4, 1.5, .08, C.stone, { block: [x - .15, y - .3, 1.5, 1.65] });                // two stone steps
   solid(x, y - .1, .08, 1.2, 1.3, .08, C.stone);
-  solid(x + .1, y + .05, .16, 1.0, 1.1, .62, RED); solid(x + .05, y, .78, 1.1, 1.2, .06, GOLD);           // lacquered altar, gilt top
-  solid(x + .25, y + .3, .84, .7, .7, .55, "#f3ead8");                                                   // the sanctum, door to the office
-  for (const px of [.2, .92]) for (const py of [.26, .96]) solid(x + px, y + py, .84, .08, .08, .55, RED2);
-  solid(x - .05, y + .12, 1.39, 1.3, 1.05, .07, ROOF); solid(x + .12, y + .26, 1.46, .96, .77, .07, ROOF);  // three-tier roof
-  solid(x + .28, y + .4, 1.53, .64, .49, .06, ROOF); solid(x + .42, y + .52, 1.59, .36, .25, .05, ROOF);
-  for (const [ex, ey] of [[-.08, .09], [1.21, .09], [-.08, 1.12], [1.21, 1.12]]) solid(x + ex, y + ey, 1.44, .12, .12, .05, GOLD);   // upturned eaves
-  solid(x + .56, y + .6, 1.64, .08, .08, .26, GOLD); solid(x + .53, y + .57, 1.9, .14, .14, .1, GOLD);       // finial
-  const lanterns = [x - .42, x + 1.38].map(lx => { solid(lx, y - .55, 0, .26, .26, .08, C.stone, { block: [lx - .02, y - .57, .3, .3] });
-    solid(lx + .08, y - .47, .08, .1, .1, .45, C.stone); solid(lx - .02, y - .57, .66, .3, .3, .05, C.stone); solid(lx + .08, y - .47, .71, .1, .1, .06, C.stone);
-    return [lx + .04, y - .51, .53]; });
-  for (const px of [x - .05, x + 1.15]) { solid(px - .03, y - 1.23, 0, .16, .16, .12, ROOF, { block: [px - .05, y - 1.25, .2, .2] });   // the gate
-    solid(px, y - 1.2, .12, .1, .1, 1.73, RED2); }
-  solid(x - .15, y - 1.19, 1.5, 1.5, .08, .08, RED2); solid(x - .25, y - 1.22, 1.77, 1.7, .14, .08, RED2); solid(x - .35, y - 1.23, 1.85, 1.9, .16, .08, ROOF);
-  return { x, y, door: [x + .43, y + .288, .9], candles: [[x + .12, y + .06], [x + 1.02, y + .06]], papers: [x + .6, y + .15], top: .84,
-    lanterns, halo: [x + .6, y - .7], count: [x + .6, y + .6, 2.25], box: [x - .4, y - 1.25, x + 1.65, y + 1.25, 2.0] };
+  solid(x + .1, y + .05, .16, 1.0, 1.1, .62, MARBLE); solid(x + .05, y, .78, 1.1, 1.2, .06, STONE);       // marble altar, stone top
+  solid(x + .35, y - .005, .2, .4, .02, .6, CLOTH); solid(x + .42, y - .01, .22, .26, .02, .05, GOLD);     // the cloth hanging down its front
+  solid(x + .25, y + .9, .84, .7, .1, .62, "#f3ead8");                                                   // the lit back of the niche
+  for (const px of [.12, .93]) solid(x + px, y + .55, .84, .15, .45, .7, STONE);                         // pillars
+  solid(x + .05, y + .5, 1.54, 1.1, .55, .1, STONE); solid(x + .22, y + .55, 1.64, .76, .45, .08, STONE); // the arch, stepped
+  solid(x + .4, y + .6, 1.72, .4, .35, .06, STONE); solid(x + .56, y + .74, 1.78, .08, .06, .22, GOLD);    // keystone, a small gold mark
+  const lanterns = [x - .42, x + 1.38].map(lx => { solid(lx, y - .55, 0, .26, .26, .06, IRON, { block: [lx - .02, y - .57, .3, .3] });
+    solid(lx + .1, y - .45, .06, .06, .06, 1.0, IRON); solid(lx + .03, y - .52, 1.06, .2, .2, .03, IRON);
+    return [lx + .04, y - .51, 1.09]; });
+  return { x, y, door: [x + .43, y + .885, 1.0], candles: [[x + .12, y + .06], [x + 1.02, y + .06]], papers: [x + .6, y + .15], top: .84,
+    lanterns, halo: [x + .6, y - .7], count: [x + .6, y + .6, 2.25], box: [x - .5, y - .6, x + 1.7, y + 1.25, 1.9] };
 })();
 OBJ.shrine = { n: 0, flash: -99 };
 
@@ -474,8 +474,8 @@ const SLOTS = {
   nap: [{ x: 7.25, y: 10.25 + SY, dir: "NE", pose: "lie", z: .38, lieAng: Math.atan2(TH / 2, TW / 2) }],
   books: [{ x: 5.95, y: 6.85 + SY, dir: "NE", pose: "stand" }], coolerA: [{ x: 9.05, y: 5.95 + SY, dir: "SE", pose: "stand" }],
   coolerB: [{ x: 9.8, y: 5.92 + SY, dir: "NW", pose: "stand" }],
-  window: [{ x: 9.85, y: .4, dir: "NE", pose: "stand" }, { x: .45, y: 5.3, dir: "NW", pose: "stand" }, { x: 13.1, y: .4, dir: "NE", pose: "stand" }],
-  whiteboard: [{ x: 3.9, y: .38, dir: "NE", pose: "stand" }], pong: PONG,
+  window: [{ x: 9.85, y: .4, dir: "NE", pose: "stand" }, { x: .45, y: 8.6, dir: "NW", pose: "stand" }, { x: 13.1, y: .4, dir: "NE", pose: "stand" }],
+  whiteboard: [{ x: 5.35, y: .38, dir: "NE", pose: "stand" }], pong: PONG,
   patioA: PATIO[0], patioB: PATIO[1], lounger: LOUNGERS,
   rail: [{ x: X - .38, y: 1.9, dir: "SE" }, { x: X - .38, y: 3.6, dir: "SE" }, { x: X - .9, y: Y - .35, dir: "SW" }, { x: X - 1.7, y: Y - .35, dir: "SW" }, { x: WALL + 1.2, y: .4, dir: "NE" }].map(s => ({ ...s, pose: "stand", lean: 1 })),
   smoke: SMOKE, plant: PLANTS.filter(p => p.slot).map(p => ({ ...p.slot, plant: p })),
@@ -1337,16 +1337,16 @@ function drawBase(g) {
     poly(g, [P(x, y), P(x + .5, y), P(x + .5, y + .5), P(x, y + .5)], c);
   }
   for (let y = 5.6 + SY; y < Y; y += .25) line(g, [P(5.1, y), P(9.6, y)], "rgba(90,60,30,.12)", .6);      // lounge planks
-  for (let y = 0; y < OFFICE.end; y += .25) line(g, [P(OFFICE.x, y), P(WALL, y)], "rgba(90,60,30,.12)", .6);   // office floors
+  for (let y = 0; y < OFFICE.end; y += .25) line(g, [P(0, y), P(OFFICE.x, y)], "rgba(90,60,30,.12)", .6);   // office floors
   for (let x = WALL; x < X; x += .25) line(g, [P(x, 0), P(x, Y)], "rgba(60,35,15,.22)", .7);              // deck boards
   for (let y = .5; y < Y; y += 1.5) for (let x = WALL; x < X; x += .25) if ((hash(x * 40 + y) % 3) === 0) line(g, [P(x, y), P(x + .25, y)], "rgba(60,35,15,.2)", .6);
   // rugs
   { const P2 = (x, y, z) => P(x, y + SY, z);
     poly(g, [P2(6.45, 7.3), P2(8.75, 7.3), P2(8.75, 9.75), P2(6.45, 9.75)], C.rugEdge); poly(g, [P2(6.6, 7.45), P2(8.6, 7.45), P2(8.6, 9.6), P2(6.6, 9.6)], C.rug);
     for (let k = 0; k < 3; k++) poly(g, [P2(6.9 + k * .02, 7.75 + k * .4), P2(8.3, 7.75 + k * .4), P2(8.3, 7.85 + k * .4), P2(6.9 + k * .02, 7.85 + k * .4)], "rgba(200,120,80,.25)"); }
-  for (const oy of [0, OFFICE.split]) { poly(g, [P(15.6, oy + .6), P(18.5, oy + .6), P(18.5, oy + 3.0), P(15.6, oy + 3.0)], C.rugEdge); poly(g, [P(15.75, oy + .75), P(18.35, oy + .75), P(18.35, oy + 2.85), P(15.75, oy + 2.85)], oy ? "#cfd8e3" : "#e3d5c7"); }
-  poly(g, [P(9.85, 1.0), P(13.55, 1.0), P(13.55, 3.15), P(9.85, 3.15)], "rgba(141,108,171,.16)");
-  for (const { y: by } of BOOTHS) poly(g, [P(12.8, by), P(13.85, by), P(13.85, by + 1.1), P(12.8, by + 1.1)], "#cfd5dc");
+  for (const oy of [0, OFFICE.split]) { poly(g, [P(.55, oy + .6), P(3.45, oy + .6), P(3.45, oy + 3.0), P(.55, oy + 3.0)], C.rugEdge); poly(g, [P(15.75, oy + .75), P(18.35, oy + .75), P(18.35, oy + 2.85), P(15.75, oy + 2.85)], oy ? "#cfd8e3" : "#e3d5c7"); }
+  poly(g, [P(14.85, 1.0), P(18.55, 1.0), P(18.55, 3.15), P(14.85, 3.15)], "rgba(141,108,171,.16)");
+  for (const { x: bx, y: by } of BOOTHS) poly(g, [P(bx, by), P(bx + 1.05, by), P(bx + 1.05, by + 1.1), P(bx, by + 1.1)], "#cfd5dc");
   // contact shadows: soft, under everything that stands on the floor
   g.save(); if ("filter" in g) g.filter = `blur(${Math.max(1, 3 * cam.s)}px)`;
   for (const [x, y, w, d, a] of SHADOWS) poly(g, [P(x - .05, y - .02), P(x + w + .12, y - .02), P(x + w + .12, y + d + .12), P(x - .05, y + d + .12)], `rgba(30,35,45,${a})`);
@@ -1364,10 +1364,10 @@ function drawBase(g) {
     for (let y = y0 + .5; y < y1 - .1; y += .5) line(g, [P(0, y, .6), P(0, y, 2.35)], C.winFrame, 1.2);
     line(g, [P(0, y0, 1.55), P(0, y1, 1.55)], C.winFrame, 1); };
   winY(.3, 3.0); winY(4.8, 9.4); winY(9.75, 10.45); winY(12.95, 13.9); winY(14.6, 18.6); winX(.3, 5.3); winX(5.6, 10.3);
-  poly(g, [P(3.15, 0, .85), P(4.65, 0, .85), P(4.65, 0, 2.0), P(3.15, 0, 2.0)], "#9aa3ab");
+  poly(g, [P(4.6, 0, .85), P(6.1, 0, .85), P(6.1, 0, 2.0), P(4.6, 0, 2.0)], "#9aa3ab");
   poly(g, [P(3.2, 0, .9), P(4.6, 0, .9), P(4.6, 0, 1.95), P(3.2, 0, 1.95)], "#fbfcfd");
-  poly(g, [P(3.15, .02, .82), P(4.65, .02, .82), P(4.65, .1, .85), P(3.15, .1, .85)], "#9aa3ab");
-  poly(g, [P(10.55, 0, .95), P(12.85, 0, .95), P(12.85, 0, 1.98), P(10.55, 0, 1.98)], "#1c2027");
+  poly(g, [P(4.6, .02, .82), P(6.1, .02, .82), P(6.1, .1, .85), P(4.6, .1, .85)], "#9aa3ab");
+  poly(g, [P(15.55, 0, .95), P(17.85, 0, .95), P(17.85, 0, 1.98), P(15.55, 0, 1.98)], "#1c2027");
   for (let y = 5.95 + SY; y < 9.9 + SY; y += 1.0) { box(g, 0, y, 1.55, .32, .98, .72, C.white, { hl: false });
     const s = onR(0, y, 1.55, .32, .98, .72); line(g, [s(.5, .05), s(.5, .95)], "rgba(0,0,0,.12)", .7); line(g, [s(.45, .2), s(.45, .35)], "#8c959e", 1.2); line(g, [s(.55, .2), s(.55, .35)], "#8c959e", 1.2); }
   for (let y = 5.95 + SY; y < 9.9 + SY; y += .2) line(g, [P(0, y, .92), P(0, y, 1.55)], "rgba(0,0,0,.06)", .6);
@@ -1376,11 +1376,11 @@ function drawBase(g) {
   const plaque = (t, x, y, z, onX) => { g.save(); const [px, py] = P(x, y, z); g.translate(px, py); g.transform(1, onX ? -.5 : .5, 0, 1, 0, 0);
     g.font = "700 6.5px system-ui,sans-serif"; const w = g.measureText(t).width + 8; g.fillStyle = "rgba(40,46,56,.78)"; g.beginPath(); g.roundRect(0, -8, w, 10, 2); g.fill();
     g.fillStyle = "#fff"; g.fillText(t, 4, 0); g.restore(); };
-  plaque("BOARDROOM", 13.95, 0, 2.62, false); plaque("PRODUCT FLOOR", 5.6, 0, 2.62, false); plaque("KITCHEN", 0, 5.65 + SY, 2.62, true);
-  plaque("CEO", 18.6, 0, 2.62, false); plaque("PM", OFFICE.x, OFFICE.split + .3, 2.62, true);
+  plaque("BOARDROOM", 18.4, 0, 2.62, false); plaque("PRODUCT FLOOR", 10.2, 0, 2.62, false); plaque("KITCHEN", 0, 5.65 + SY, 2.62, true);
+  plaque("CEO", 3.6, 0, 2.62, false); plaque("PM", OFFICE.x, OFFICE.split + .3, 2.62, true);
 }
 function drawWalls(g) {
-  for (const s of OBJ.board.strokes) line(g, s.pts.map(([u, v]) => P(3.25 + u * 1.3, .01, 1.9 - v * .95)), s.col, .8);
+  for (const s of OBJ.board.strokes) line(g, s.pts.map(([u, v]) => P(4.7 + u * 1.3, .01, 1.9 - v * .95)), s.col, .8);
   const ceo = [...people.values()].find(p => p.mode === "ceo" && p.slot && !p.path.length);
   const scr = (u, v) => P(10.6 + u * 2.2, 0, 1.0 + v * .93);
   poly(g, quad(scr, 0, 0, 1, 1), ceo ? "#16263a" : "#20252d");
@@ -1504,8 +1504,8 @@ function drawNight(g, n) {
   for (const d of DESKS) if (d.busy) glow(...P(d.x + .7, d.y + .35, 1.05), 44, "90,180,255", .3 * n, .8);
   if (OBJ.micro.run) glow(...P(.75, 8.65, 1.1), 26, "255,200,110", .55 * n);
   if (OBJ.fridge.open > .1) glow(...P(1.0, 10.6, .9), 50, "220,240,255", .45 * n * OBJ.fridge.open, .6);
-  for (const b of BOOTHS) if (b.busy) glow(...P(13.3, b.y + 1.1, 2.1), 24, "60,230,140", .5 * n);
-  if ([...people.values()].some(p => p.mode === "ceo")) glow(...P(11.7, 0, 1.45), 60, "120,180,255", .25 * n, .8);
+  for (const b of BOOTHS) if (b.busy) glow(...P(b.x + .5, b.y + 1.1, 2.1), 24, "60,230,140", .5 * n);
+  if ([...people.values()].some(p => p.mode === "ceo")) glow(...P(16.7, 0, 1.45), 60, "120,180,255", .25 * n, .8);
   for (let t = 0; t <= 1.0001; t += 1 / 22) {                // string lights over the patio
     const [x, y] = t < .5 ? P(14.1 + t * 2 * (X - 14.2), Y - .05, 1.55 - Math.sin(t * 2 * Math.PI * 3) * .12) : P(X - .05, Y - .1 - (t - .5) * 2 * (Y - .3), 1.55 - Math.sin((t - .5) * 2 * Math.PI * 4) * .12);
     glow(x, y, 5, "255,214,140", .95 * n); glow(x, y + 4, 14, "255,190,110", .18 * n, .6); }
@@ -1742,7 +1742,7 @@ function mount() {
   requestAnimationFrame(frame);
 }
 window.Office = { update, mount,
-  sim: { X, Y, C, SOLIDS, DESKS, BOARD, BOOTHS, LIGHTS, OBJ, SLOTS, PARTS, people, shade, hash, WALL, SY, EX, DOOR, OFFICE, POOL, SHRINE, ZONE, get T() { return T; } },   // read-only, for office3d.js
+  sim: { X, Y, C, SOLIDS, DESKS, BOARD, BOOTHS, LIGHTS, OBJ, SLOTS, PARTS, people, shade, hash, WALL, SY, EX, DOOR, OFFICE, BR, POOL, SHRINE, ZONE, get T() { return T; } },   // read-only, for office3d.js
   debug: { people, SLOTS, OBJ, get T() { return T; }, get cache() { return cache; },
   force(name, k) { const p = people.get(name); if (!p || p.mode !== "idle") return; stop(p); p.activity = k; start(p, IDLE[k][2](p)); } } };
 mount();

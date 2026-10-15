@@ -7,7 +7,7 @@ export const DT = .75, CT = .9375;                          // table tops and th
 const GLASS = "#ffffff", DARK = "#3b414a";
 
 export function buildWorld(sim) {
-  const { X, Y, C, SOLIDS, DESKS, BOOTHS, OBJ, LIGHTS, shade, hash, WALL, SY, EX, DOOR, OFFICE, ZONE } = sim;
+  const { X, Y, C, SOLIDS, DESKS, BOOTHS, OBJ, LIGHTS, shade, hash, WALL, SY, EX, DOOR, OFFICE, BR, ZONE } = sim;
   const scene = new THREE.Scene(), ticks = [], tick = f => ticks.push(f);
   const st = new Mesher(), gl = new Mesher();              // everything static and solid; everything static and glass
   const add = (o, x = 0, y = 0, z = 0, parent = scene) => (parent.add(at(o, x, y, z)), o);
@@ -45,15 +45,15 @@ export function buildWorld(sim) {
       b += len;
     }
   };
-  boards(WALL, X, 0, Y, true, C.deck); boards(5, 9.5, 5.5 + SY, Y, false, C.plank); boards(OFFICE.x, WALL, 0, OFFICE.end, false, C.plank);
+  boards(WALL, X, 0, Y, true, C.deck); boards(5, 9.5, 5.5 + SY, Y, false, C.plank); boards(0, OFFICE.x, 0, OFFICE.end, false, C.plank);
   st.box(0, 0, -.32, X, Y, .32, C.slab, { faces: "EWSND" });                                        // the floor slab's edge
   st.box(-.25, -.25, -.32, WALL + .25, .25, .32, C.slab); st.box(-.25, 0, -.32, .25, Y, .32, C.slab);
   st.box(6.45, 7.3 + SY, 0, 2.3, 2.45, .02, C.rugEdge); st.box(6.6, 7.45 + SY, 0, 2.0, 2.15, .03, C.rug);      // rugs
   for (let k = 0; k < 3; k++) st.box(6.9, 7.75 + SY + k * .4, 0, 1.4, .1, .035, "#dcae8e");
-  for (const oy of [0, OFFICE.split]) { st.box(15.6, oy + .6, 0, 2.9, 2.4, .02, C.rugEdge); st.box(15.75, oy + .75, 0, 2.6, 2.1, .03, oy ? "#cfd8e3" : "#e3d5c7"); }
-  st.box(9.85, 1.0, 0, 3.7, 2.15, .02, "#d5cde6"); st.box(10.0, 1.15, 0, 3.4, 1.85, .025, "#ddd6ec");
-  for (const b of BOOTHS) st.box(12.8, b.y, 0, 1.05, 1.1, .02, "#cfd5dc");
-  // ── the shrine: a lit doorway, candles, stone lanterns, the papers left for Jack; it glows while anything waits, flares when one lands
+  for (const oy of [0, OFFICE.split]) { st.box(.55, oy + .6, 0, 2.9, 2.4, .02, C.rugEdge); st.box(.7, oy + .75, 0, 2.6, 2.1, .03, oy ? "#cfd8e3" : "#e3d5c7"); }
+  st.box(14.85, 1.0, 0, 3.7, 2.15, .02, "#d5cde6"); st.box(15.0, 1.15, 0, 3.4, 1.85, .025, "#ddd6ec");
+  for (const b of BOOTHS) st.box(b.x, b.y, 0, 1.05, 1.1, .02, "#cfd5dc");
+  // ── the shrine: a lit niche, candles, candle stands, the papers left for Jack; it glows while anything waits, flares when one lands
   { const S = sim.SHRINE, sh = OBJ.shrine, z = S.top;
     const door = add(glowBox(.34, .012, .34, "#5a4630"), ...S.door);
     const halo = pool(S.halo[0], S.halo[1], .012, 1.6, "#ffcf7a");
@@ -95,23 +95,23 @@ export function buildWorld(sim) {
     B(m, a0, a1, 0, .1, "#e4e8ed", 0, .02);                                                           // skirting
     grp.add(m.mesh(), g.mesh(MAT.glass, false));
   };
-  wall(north, "x", -.25, WALL, [[.3, 3.0], [4.8, 9.4], [9.75, 10.45], [12.95, 13.9], [14.6, 18.6]]);
+  wall(north, "x", -.25, WALL, [[.3, 4.0], [6.4, 14.3], [14.8, 15.3], [18.1, 18.7]]);     // whiteboard at 4.6, boardroom screen at 15.5
   wall(west, "y", 0, Y, [[.3, 5.3], [5.6, 10.3]]);
   const sign = (text, h, grp, x, y, z, turn) => {
     const t = textTexture(text, { px: 44, pad: 14, radius: 10 }), m = new THREE.Mesh(new THREE.PlaneGeometry(h * t.userData.aspect, h), new THREE.MeshLambertMaterial({ map: t, transparent: true }));
     if (turn) m.rotation.y = Math.PI / 2; add(m, x, y, z, grp);
   };
-  sign("BOARDROOM", .2, north, 11.7, .012, 2.58); sign("PRODUCT FLOOR", .2, north, 3.9, .012, 2.58); sign("KITCHEN", .2, west, .012, 7.9 + SY, 2.58, true);
-  sign("CEO", .2, north, 17.0, .012, 2.58);
+  sign("BOARDROOM", .2, north, 16.7, .012, 2.58); sign("PRODUCT FLOOR", .2, north, 10.2, .012, 2.58); sign("KITCHEN", .2, west, .012, 7.9 + SY, 2.58, true);
+  sign("CEO", .2, north, 2.15, .012, 2.58);
 
   // the whiteboard: whatever the sim's doodlers have drawn
   const wn = new Mesher();
-  wn.box(3.15, 0, .85, 1.5, .04, 1.15, "#9aa3ab"); wn.box(3.15, .04, .8, 1.5, .07, .03, "#9aa3ab");
-  wn.box(10.5, 0, .9, 2.4, .06, 1.13, "#1c2027");                                                    // the boardroom screen's case
+  wn.box(4.6, 0, .85, 1.5, .04, 1.15, "#9aa3ab"); wn.box(4.6, .04, .8, 1.5, .07, .03, "#9aa3ab");
+  wn.box(15.5, 0, .9, 2.4, .06, 1.13, "#1c2027");                                                    // the boardroom screen's case
   north.add(wn.mesh());
   const canvasTex = (w, h) => { const c = Object.assign(document.createElement("canvas"), { width: w, height: h }), t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return [c.getContext("2d"), t]; };
   const [wbG, wbT] = canvasTex(280, 210);
-  add(new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.05), new THREE.MeshLambertMaterial({ map: wbT })), 3.9, .045, 1.425, north);
+  add(new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.05), new THREE.MeshLambertMaterial({ map: wbT })), 5.35, .045, 1.425, north);
   let wbSeen = null;
   tick(() => { const s = OBJ.board.strokes, key = s.length + ":" + (s[s.length - 1] ? s[s.length - 1].pts[0][0] : 0); if (key === wbSeen) return; wbSeen = key;
     wbG.fillStyle = "#fbfcfd"; wbG.fillRect(0, 0, 280, 210); wbG.lineWidth = 3; wbG.lineCap = wbG.lineJoin = "round";
@@ -119,7 +119,7 @@ export function buildWorld(sim) {
     wbT.needsUpdate = true; });
   // the boardroom screen: live charts while the CEO is in
   const [scG, scT] = canvasTex(256, 108), scMat = new THREE.MeshBasicMaterial({ map: scT });
-  add(new THREE.Mesh(new THREE.PlaneGeometry(2.2, .93), scMat), 11.7, .065, 1.465, north);
+  add(new THREE.Mesh(new THREE.PlaneGeometry(2.2, .93), scMat), 16.7, .065, 1.465, north);
   let scAt = -9, scOn = null;
   tick((dt, T) => { const ceo = [...sim.people.values()].some(p => p.mode === "ceo" && p.slot && !p.path.length);
     if (ceo === scOn && (!ceo || T - scAt < .2)) return; scOn = ceo; scAt = T;
@@ -227,9 +227,9 @@ export function buildWorld(sim) {
   [[10.45, 6.05, "#fff"], [10.62, 6.12, "#f6f6f0"], [11.05, 6.5, "#fff"]].forEach(([px, py, c], k) => st.box(px, py, DT + k * .004, .3, .22, .008, c));
   [[10.95, 6.0, "#ffe27a"], [11.1, 6.05, "#ffb3c6"], [11.25, 6.0, "#9ee6c0"]].forEach(([px, py, c]) => st.box(px, py, DT, .1, .1, .008, c));
   }
-  for (const b of BOOTHS) { gl.box(12.86, b.y + 1.085, 0, .99, .02, 2.12, GLASS); st.box(12.92, b.y + 1.07, 1.0, .03, .05, .22, "#9aa3ab");
-    st.box(12.95, b.y + .12, .9, .5, .28, .04, "#8c96a3");                                             // a small shelf inside
-    const strip = add(glowBox(.9, .04, .05, "#58606a"), 12.9, b.y + 1.07, 2.14); tick(() => strip.material.color.set(b.busy ? "#3fe08a" : "#58606a")); }
+  for (const b of BOOTHS) { gl.box(b.x + .06, b.y + 1.085, 0, .99, .02, 2.12, GLASS); st.box(b.x + .12, b.y + 1.07, 1.0, .03, .05, .22, "#9aa3ab");
+    st.box(b.x + .15, b.y + .12, .9, .5, .28, .04, "#8c96a3");                                             // a small shelf inside
+    const strip = add(glowBox(.9, .04, .05, "#58606a"), b.x + .1, b.y + 1.07, 2.14); tick(() => strip.material.color.set(b.busy ? "#3fe08a" : "#58606a")); }
   { const { st } = shifted(0, SY);
   st.box(10.3, 10.335, DT, 1.8, .03, .004, "#fff"); st.box(10.3, 9.9, DT, 1.8, .02, .004, "#fff"); st.box(10.3, 10.78, DT, 1.8, .02, .004, "#fff");
   st.box(11.19, 9.85, DT, .02, 1.0, .12, "#f4f4f4"); st.box(11.17, 9.83, DT, .06, .04, .14, DARK); st.box(11.17, 10.83, DT, .06, .04, .14, DARK); }
@@ -280,7 +280,9 @@ export function buildWorld(sim) {
     for (let k = 0; k <= Math.ceil(L / 1.15); k++) { const t = Math.min(k * 1.15, L); vx ? st.box(x0 - .03, y0 + t - .025, 0, .06, .05, 2.6, C.metal) : st.box(x0 + t - .025, y0 - .03, 0, .05, .06, 2.6, C.metal); } };
   glassWall(WALL, 0, WALL, DOOR[0]); glassWall(WALL, DOOR[1], WALL, Y); st.box(WALL - .05, DOOR[0], 2.6, .1, DOOR[1] - DOOR[0], .06, C.metal);
   glassWall(OFFICE.x, 0, OFFICE.x, OFFICE.doors[0][0]); glassWall(OFFICE.x, OFFICE.doors[0][1], OFFICE.x, OFFICE.doors[1][0]);
-  glassWall(OFFICE.x, OFFICE.doors[1][1], OFFICE.x, OFFICE.end); glassWall(OFFICE.x, OFFICE.split, WALL, OFFICE.split); glassWall(OFFICE.x, OFFICE.end, WALL, OFFICE.end);
+  glassWall(OFFICE.x, OFFICE.doors[1][1], OFFICE.x, OFFICE.end); glassWall(0, OFFICE.split, OFFICE.x, OFFICE.split); glassWall(0, OFFICE.end, OFFICE.x, OFFICE.end);
+  glassWall(BR.x, 0, BR.x, BR.end); glassWall(BR.x, BR.end, BR.door[0], BR.end); glassWall(BR.door[1], BR.end, WALL, BR.end);    // the boardroom
+  st.box(BR.door[0], BR.end - .05, 2.6, BR.door[1] - BR.door[0], .1, .06, C.metal);
   for (const [a, b] of OFFICE.doors) st.box(OFFICE.x - .05, a, 2.6, .1, b - a, .06, C.metal);
   // string lights over the patio: grey beads by day, warm at night
   const beadMat = MAT.glow("#cfd3d8"), beads = new Mesher(), wire = [];
