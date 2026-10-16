@@ -9,6 +9,7 @@ only where local output is as good.
 ```
 fleet tool run imagegen "<prompt>"
 python3 tools/imagegen/run.py "<prompt>" [--out DIR] [--seed N] [--steps N] [--size N]
+    [--width N] [--height N] [--aspect square|portrait|landscape|wide|tall]
 python3 tools/imagegen/run.py --diag          # torch/CUDA/GPU diagnostics, no generation
 fleet tool run imagegen --cuda-torch "<prompt>"  # force the CUDA-torch repair check
 ```

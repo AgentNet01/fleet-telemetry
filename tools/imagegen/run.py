@@ -169,6 +169,41 @@ def _missing(mod):
         return True
 
 
+# Aspect presets for --aspect: (width_ratio, height_ratio). Scaled so the
+# long edge equals --size, then rounded to a multiple of 8 (see resolve_dims).
+ASPECT_RATIOS = {"square": (1, 1), "portrait": (3, 4), "landscape": (4, 3),
+                 "wide": (16, 9), "tall": (9, 16)}
+
+
+def resolve_dims(size, width, height, aspect):
+    """Resolve (width, height) from --size / --width / --height / --aspect.
+
+    Returns (width, height, requested) where requested is the pre-rounding
+    (width, height) so callers can warn when rounding changed the dims.
+    Rules: --aspect conflicts with --width/--height; a single --width or
+    --height falls back to --size for the other dimension; no flags means
+    square --size x --size. Diffusers pipelines require dims divisible by
+    8, so the result is rounded to the nearest multiple of 8 (min 8).
+    """
+    if aspect is not None and (width is not None or height is not None):
+        raise ValueError("--aspect conflicts with --width/--height; pass only one")
+    if aspect is not None:
+        rw, rh = ASPECT_RATIOS[aspect]
+        if rw >= rh:
+            req_w, req_h = size, round(size * rh / rw)
+        else:
+            req_w, req_h = round(size * rw / rh), size
+    else:
+        req_w = width if width is not None else size
+        req_h = height if height is not None else size
+    for name, v in (("width", req_w), ("height", req_h)):
+        if v <= 0:
+            raise ValueError(f"{name} must be a positive integer, got {v}")
+    w = max(8, round(req_w / 8) * 8)
+    h = max(8, round(req_h / 8) * 8)
+    return w, h, (req_w, req_h)
+
+
 def slugify(prompt: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", prompt.lower()).strip("-")[:48]
     return slug or "image"
@@ -199,11 +234,28 @@ def main() -> int:
                       "contained to it so files stay retrievable (task #333)")
     ap.add_argument("--seed", type=int, default=None, help="Random seed (default: random)")
     ap.add_argument("--steps", type=int, default=25, help="Inference steps (default: 25)")
-    ap.add_argument("--size", type=int, default=512, help="Square image size in px (default: 512)")
+    ap.add_argument("--size", type=int, default=512, help="Square image size in px (default: 512). "
+                      "Also the fallback for the unspecified dimension with --width/--height, "
+                      "and the long edge with --aspect.")
+    ap.add_argument("--width", type=int, default=None,
+                    help="Output width in px (default: --size). Use with --height for non-square output.")
+    ap.add_argument("--height", type=int, default=None,
+                    help="Output height in px (default: --size). Use with --width for non-square output.")
+    ap.add_argument("--aspect", choices=sorted(ASPECT_RATIOS), default=None,
+                    help="Aspect preset, scaled to --size on the long edge: "
+                         "square 1:1, portrait 3:4, landscape 4:3, wide 16:9, tall 9:16. "
+                         "Conflicts with --width/--height.")
     ap.add_argument("--negative", default=DEFAULT_NEGATIVE, help="Negative prompt")
     ap.add_argument("--model", default=os.environ.get("IMAGEGEN_MODEL", DEFAULT_MODEL),
                       help=f"HF model id or local path (default: {DEFAULT_MODEL})")
     args = ap.parse_args()
+    try:
+        width, height, requested = resolve_dims(args.size, args.width, args.height, args.aspect)
+    except ValueError as e:
+        ap.error(str(e))
+    if (width, height) != requested:
+        print(f"[imagegen] WARNING: dimensions {requested[0]}x{requested[1]} rounded "
+              f"to multiple of 8: {width}x{height}", file=sys.stderr)
 
     import torch
     from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
@@ -248,7 +300,7 @@ def main() -> int:
     t0 = time.time()
     image = pipe(args.prompt, negative_prompt=args.negative,
                  num_inference_steps=args.steps,
-                 height=args.size, width=args.size,
+                 height=height, width=width,
                  generator=generator).images[0]
     elapsed = time.time() - t0
 
@@ -287,7 +339,7 @@ def main() -> int:
         # a 10737 MiB peak, over the 8 GB the #1050 check reported).
         vram = f" vram_mb={torch.cuda.max_memory_allocated() / 1048576:.0f}"
         vram += f" vram_total_mb={torch.cuda.get_device_properties(0).total_memory / 1048576:.0f}"
-    print(f"wrote {out_path}  seed={seed} steps={args.steps} size={args.size} "
+    print(f"wrote {out_path}  seed={seed} steps={args.steps} size={width}x{height} "
           f"device={device} secs={elapsed:.1f} bytes={size}{vram}")
     if args.upscale:
         # Task #537: 4x Real-ESRGAN upscale (vendored, tiled for 8GB VRAM).

@@ -47,10 +47,17 @@ fleet tool run imagegen --seed 101 --steps 25 --size 1024 "<prompt>"
 ```
 
 Flags: `--seed N` (default random), `--steps N` (default 25),
-`--size N` (square px, default 512), `--negative "…"` (default: "blurry,
+`--size N` (square px, default 512; also the fallback for the unspecified
+dimension with `--width`/`--height`, and the long edge with `--aspect`),
+`--width N` / `--height N` (output dims in px; one may be omitted to fall
+back to `--size`), `--aspect <square|portrait|landscape|wide|tall>`
+(1:1, 3:4, 4:3, 16:9, 9:16, scaled to `--size` on the long edge; conflicts
+with `--width`/`--height`), `--negative "…"` (default: "blurry,
 low quality, distorted, deformed, bad anatomy, text, watermark"),
 `--model <HF id or path>` (default `Lykon/dreamshaper-8`,
-override with `IMAGEGEN_MODEL`), `--out DIR`.
+override with `IMAGEGEN_MODEL`), `--out DIR`. Dimensions are rounded to
+the nearest multiple of 8 (diffusers requirement) with a warning when
+rounding changes them.
 
 **Do not pass an absolute `--out`.** On the Windows hub it escapes the
 job's output dir and the file is not registered — the job reports "done"
@@ -60,6 +67,11 @@ or a relative subdir.
 Sizes: SD 1.5 at 512 (its native res), SDXL at 1024 (its native res).
 Generating SDXL at 512 handicaps it; generating SD 1.5 above 512 just
 smears it. Neither matches Muse's 1920×1280 originals — see Upscaling.
+Non-square: `--width 768 --height 1024` (portrait) or
+`--width 1024 --height 768` (landscape), or `--aspect portrait` /
+`--aspect landscape` (scaled to `--size` on the long edge, so
+`--size 1024 --aspect portrait` = 768×1024). Dimensions are rounded to
+the nearest multiple of 8.
 
 Measured speed on the hub GPU (device=cuda): SD 1.5, 512px/25 steps,
 **4.3 s** generation. SDXL, 1024px/25 steps, **~48–50 s** generation
