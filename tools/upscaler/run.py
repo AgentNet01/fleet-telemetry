@@ -211,6 +211,9 @@ def main() -> int:
                     help="Tile size for 1024px+ inputs (default: 512)")
     ap.add_argument("--tile-overlap", type=int, default=64,
                     help="Overlap between tiles in px (default: 64)")
+    ap.add_argument("--no-tiling", action="store_true",
+                    help="Force direct full-image upscale even for 1024px+ inputs "
+                         "(may page/OOM on 8GB cards; for tiled-vs-direct comparisons)")
     ap.add_argument("--weights-url", default=WEIGHTS_URL, help="RealESRGAN_x4plus.pth URL")
     args = ap.parse_args()
 
@@ -260,10 +263,14 @@ def main() -> int:
         if device == "cuda":
             torch.cuda.reset_peak_memory_stats()
         t0 = time.time()
-        # Tiled upscale for 1024px+ inputs (prevents OOM on 8GB cards)
-        tiled_img, num_tiles, was_tiled = upscale_tiled(
-            model, img, device, scale=args.scale,
-            tile_size=args.tile_size, overlap=args.tile_overlap)
+        # Tiled upscale for 1024px+ inputs (prevents OOM on 8GB cards),
+        # unless --no-tiling forces the direct path (tiled-vs-direct comparisons)
+        if args.no_tiling:
+            was_tiled, num_tiles = False, 0
+        else:
+            tiled_img, num_tiles, was_tiled = upscale_tiled(
+                model, img, device, scale=args.scale,
+                tile_size=args.tile_size, overlap=args.tile_overlap)
         if was_tiled:
             tiled_img.save(os.path.join(args.out, f"{name}_esrgan.png"))
             out_w, out_h = w * args.scale, h * args.scale
@@ -291,6 +298,7 @@ def main() -> int:
         rec = {"name": name, "input": src, "input_px": [w, h],
                "output_px": [out_w, out_h],
                "tiled": was_tiled, "tiles": num_tiles,
+               "no_tiling": args.no_tiling,
                "esrgan_secs": round(esrgan_secs, 2),
                "bicubic_secs": round(bicubic_secs, 3) if bicubic_secs is not None else None,
                "vram_peak_mb": round(vram_mb, 1) if vram_mb is not None else None,
