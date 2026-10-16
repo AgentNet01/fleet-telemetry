@@ -248,8 +248,10 @@ def main() -> int:
                          "square 1:1, portrait 3:4, landscape 4:3, wide 16:9, tall 9:16. "
                          "Conflicts with --width/--height.")
     ap.add_argument("--negative", default=DEFAULT_NEGATIVE, help="Negative prompt")
-    ap.add_argument("--model", default=os.environ.get("IMAGEGEN_MODEL", DEFAULT_MODEL),
-                      help=f"HF model id or local path (default: {DEFAULT_MODEL})")
+    ap.add_argument("--model", default=None,
+                      help="HF model id or local path (default: Lykon/dreamshaper-xl-1-0 "
+                           "with --sdxl, else Lykon/dreamshaper-8; "
+                           "overridden by IMAGEGEN_MODEL env var)")
     # Task #1480: ControlNet canny-edge conditioning
     ap.add_argument("--control-image", default=None,
                     help="Path to control image for ControlNet (e.g. canny edge map). "
@@ -268,6 +270,14 @@ def main() -> int:
     ap.add_argument("--canny-high", type=int, default=200,
                     help="Canny edge detection high threshold (default: 200).")
     args = ap.parse_args()
+    # Task #1618: --sdxl without an explicit model used to silently load the
+    # SD 1.5 default weights into the SDXL pipeline, producing a broken pipe
+    # (None tokenizers) and a confusing AttributeError minutes later.
+    # Resolve the model default from the pipeline choice instead.
+    if args.model is None:
+        args.model = os.environ.get(
+            "IMAGEGEN_MODEL",
+            "Lykon/dreamshaper-xl-1-0" if args.sdxl else DEFAULT_MODEL)
     try:
         width, height, requested = resolve_dims(args.size, args.width, args.height, args.aspect)
     except ValueError as e:
@@ -373,6 +383,16 @@ def main() -> int:
             pipe = Pipeline.from_single_file(
                 f"https://huggingface.co/{args.model}/resolve/main/{ckpts[0]}",
                 dtype=dtype, safety_checker=None)
+    # Task #1618: fail fast with a clear message if the weights don't match
+    # the pipeline (e.g. SD 1.5 weights in the SDXL pipeline leave the
+    # tokenizers as None and crash obscurely at generation time).
+    missing = [c for c in (("tokenizer", "tokenizer_2") if args.sdxl else ("tokenizer",))
+               if getattr(pipe, c, None) is None]
+    if missing:
+        raise RuntimeError(
+            f"pipeline loaded without {', '.join(missing)}; "
+            f"model {args.model!r} does not match the "
+            f"{'SDXL' if args.sdxl else 'SD 1.5'} pipeline")
     pipe = pipe.to(device)
     if device == "cpu":
         pipe.enable_attention_slicing()
