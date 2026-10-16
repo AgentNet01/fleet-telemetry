@@ -291,7 +291,15 @@ def main() -> int:
 
         if args.canny:
             # Generate canny edge map from the input photo
-            photo = cv2.imread(args.canny)
+            # Jobs run in an empty folder, so a relative path is also tried
+            # against the script's own directory (repo fixtures live there).
+            _canny_path = args.canny
+            photo = cv2.imread(_canny_path)
+            if photo is None:
+                _alt = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.canny)
+                photo = cv2.imread(_alt)
+                if photo is not None:
+                    _canny_path = _alt
             if photo is None:
                 ap.error(f"--canny: could not read image: {args.canny}")
             gray = cv2.cvtColor(photo, cv2.COLOR_BGR2GRAY)
@@ -299,10 +307,18 @@ def main() -> int:
             # Canny outputs single-channel; ControlNet wants RGB
             edges_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
             control_image = Image.fromarray(edges_rgb)
-            print(f"[imagegen] canny edges from {args.canny} "
+            print(f"[imagegen] canny edges from {_canny_path} "
                   f"(thresholds {args.canny_low}/{args.canny_high})", file=sys.stderr)
         else:
-            control_image = Image.open(args.control_image).convert("RGB")
+            # Same script-dir fallback as --canny (jobs run in an empty folder).
+            try:
+                control_image = Image.open(args.control_image).convert("RGB")
+            except Exception:
+                _alt = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.control_image)
+                try:
+                    control_image = Image.open(_alt).convert("RGB")
+                except Exception:
+                    ap.error(f"--control-image: could not read image: {args.control_image}")
             print(f"[imagegen] control image: {args.control_image}", file=sys.stderr)
 
         # Resize control image to match output dims
