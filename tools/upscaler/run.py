@@ -131,6 +131,55 @@ def build_rrdbnet(num_feat=64, num_block=23, num_grow_ch=32, scale=4):
     return RRDBNet()
 
 
+def upscale_tiled(model, img, device, scale=4, tile_size=512, overlap=64):
+    """Upscale 1024px+ images using overlapping tiles to stay under VRAM limits.
+    
+    Splits input into tile_size tiles with overlap px overlap, upscales each
+    independently via the model, then reassembles. Prevents OOM on 8GB cards
+    when upscaling 1024x1024 -> 4096x4096.
+    
+    Returns: (PIL Image or None, num_tiles, was_tiled)
+    Returns None image if input < 1024px (caller should use direct path).
+    """
+    import torch
+    import numpy as np
+    from PIL import Image
+    
+    w, h = img.size
+    if max(w, h) < 1024:
+        return None, 0, False
+    
+    step = tile_size - overlap
+    tiles_x = max(1, (w - overlap + step - 1) // step)
+    tiles_y = max(1, (h - overlap + step - 1) // step)
+    
+    out_w, out_h = w * scale, h * scale
+    output = Image.new("RGB", (out_w, out_h))
+    
+    num_tiles = 0
+    for ty in range(tiles_y):
+        for tx in range(tiles_x):
+            x0 = min(tx * step, w - tile_size)
+            y0 = min(ty * step, h - tile_size)
+            tile = img.crop((x0, y0, x0 + tile_size, y0 + tile_size))
+            arr = np.asarray(tile).astype(np.float32) / 255.0
+            tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
+            if device == "cuda":
+                tensor = tensor.half().to(device)
+            with torch.no_grad():
+                out = model(tensor)
+            out_arr = out.detach().float().clamp(0, 1).squeeze(0).permute(1, 2, 0).cpu().numpy()
+            out_tile = Image.fromarray((out_arr * 255.0).round().astype(np.uint8))
+            output.paste(out_tile, (x0 * scale, y0 * scale))
+            num_tiles += 1
+            del tensor, out
+            if device == "cuda":
+                torch.cuda.empty_cache()
+    
+    return output, num_tiles, True
+
+
+
 def fetch(url_or_path, dest):
     if os.path.exists(url_or_path):
         with open(url_or_path, "rb") as f:
@@ -158,6 +207,10 @@ def main() -> int:
                     help="Resize inputs so the long edge is this many px (0 = keep native size)")
     ap.add_argument("--baseline", action="store_true",
                     help="Also emit a bicubic 4x baseline per image")
+    ap.add_argument("--tile-size", type=int, default=512,
+                    help="Tile size for 1024px+ inputs (default: 512)")
+    ap.add_argument("--tile-overlap", type=int, default=64,
+                    help="Overlap between tiles in px (default: 64)")
     ap.add_argument("--weights-url", default=WEIGHTS_URL, help="RealESRGAN_x4plus.pth URL")
     args = ap.parse_args()
 
@@ -204,19 +257,31 @@ def main() -> int:
             img = img.resize((round(img.size[0] * scale), round(img.size[1] * scale)), Image.LANCZOS)
         w, h = img.size
         name = f"img{i + 1}"
-        arr = np.asarray(img).astype(np.float32) / 255.0
-        tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
         if device == "cuda":
-            tensor = tensor.half().to(device)
             torch.cuda.reset_peak_memory_stats()
         t0 = time.time()
-        with torch.no_grad():
-            out = model(tensor)
+        # Tiled upscale for 1024px+ inputs (prevents OOM on 8GB cards)
+        tiled_img, num_tiles, was_tiled = upscale_tiled(
+            model, img, device, scale=args.scale,
+            tile_size=args.tile_size, overlap=args.tile_overlap)
+        if was_tiled:
+            tiled_img.save(os.path.join(args.out, f"{name}_esrgan.png"))
+            out_w, out_h = w * args.scale, h * args.scale
+        else:
+            # Direct upscale for smaller inputs (no regression)
+            arr = np.asarray(img).astype(np.float32) / 255.0
+            tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
+            if device == "cuda":
+                tensor = tensor.half().to(device)
+            with torch.no_grad():
+                out = model(tensor)
+            out_img = out.detach().float().clamp(0, 1).squeeze(0).permute(1, 2, 0).cpu().numpy()
+            Image.fromarray((out_img * 255.0).round().astype(np.uint8)).save(
+                os.path.join(args.out, f"{name}_esrgan.png"))
+            out_w, out_h = w * args.scale, h * args.scale
+            del tensor, out
         esrgan_secs = time.time() - t0
         vram_mb = (torch.cuda.max_memory_allocated() / 1e6) if device == "cuda" else None
-        out_img = out.detach().float().clamp(0, 1).squeeze(0).permute(1, 2, 0).cpu().numpy()
-        Image.fromarray((out_img * 255.0).round().astype(np.uint8)).save(
-            os.path.join(args.out, f"{name}_esrgan.png"))
         bicubic_secs = None
         if args.baseline:
             t1 = time.time()
@@ -224,7 +289,8 @@ def main() -> int:
                 os.path.join(args.out, f"{name}_bicubic.png"))
             bicubic_secs = time.time() - t1
         rec = {"name": name, "input": src, "input_px": [w, h],
-               "output_px": [w * args.scale, h * args.scale],
+               "output_px": [out_w, out_h],
+               "tiled": was_tiled, "tiles": num_tiles,
                "esrgan_secs": round(esrgan_secs, 2),
                "bicubic_secs": round(bicubic_secs, 3) if bicubic_secs is not None else None,
                "vram_peak_mb": round(vram_mb, 1) if vram_mb is not None else None,
