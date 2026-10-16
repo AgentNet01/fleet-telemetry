@@ -7,6 +7,8 @@ Usage (via the hub runner):
 Direct usage:
     python3 tools/imagegen/run.py "<prompt>" [--out DIR] [--seed N]
         [--steps N] [--size N] [--negative "..."] [--model HF_ID_OR_PATH]
+        [--sdxl] [--control-image PATH | --canny PHOTO]
+        [--controlnet-model HF_ID] [--controlnet-scale F]
 
 Writes a PNG and prints its path. Model: DreamShaper 8 (SD 1.5, ungated),
 ~4 GB, fits 8 GB VRAM (fp16 on CUDA) and runs on CPU (fp32) where no GPU
@@ -32,7 +34,7 @@ DEFAULT_NEGATIVE = "blurry, low quality, watermark, signature"
 DEPS = [("torch", "torch"), ("diffusers", "diffusers"),
         ("transformers", "transformers"), ("accelerate", "accelerate"),
         ("safetensors", "safetensors"), ("PIL", "Pillow"),
-        ("huggingface_hub", "huggingface_hub")]
+        ("huggingface_hub", "huggingface_hub"), ("cv2", "opencv-python-headless")]
 
 
 def ensure_deps():
@@ -248,6 +250,23 @@ def main() -> int:
     ap.add_argument("--negative", default=DEFAULT_NEGATIVE, help="Negative prompt")
     ap.add_argument("--model", default=os.environ.get("IMAGEGEN_MODEL", DEFAULT_MODEL),
                       help=f"HF model id or local path (default: {DEFAULT_MODEL})")
+    # Task #1480: ControlNet canny-edge conditioning
+    ap.add_argument("--control-image", default=None,
+                    help="Path to control image for ControlNet (e.g. canny edge map). "
+                         "Enables ControlNet conditioning.")
+    ap.add_argument("--canny", default=None,
+                    help="Generate a canny edge map from this photo and use it as the "
+                         "control image (shortcut for --control-image).")
+    ap.add_argument("--controlnet-model", default=None,
+                    help="HF model id for ControlNet weights. Default with --sdxl: "
+                         "diffusers/controlnet-canny-sdxl-1.0; otherwise: "
+                         "lllyasviel/sd-controlnet-canny.")
+    ap.add_argument("--controlnet-scale", type=float, default=0.5,
+                    help="ControlNet conditioning strength 0.0-1.0 (default: 0.5).")
+    ap.add_argument("--canny-low", type=int, default=100,
+                    help="Canny edge detection low threshold (default: 100).")
+    ap.add_argument("--canny-high", type=int, default=200,
+                    help="Canny edge detection high threshold (default: 200).")
     args = ap.parse_args()
     try:
         width, height, requested = resolve_dims(args.size, args.width, args.height, args.aspect)
@@ -258,8 +277,53 @@ def main() -> int:
               f"to multiple of 8: {width}x{height}", file=sys.stderr)
 
     import torch
-    from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
-    Pipeline = StableDiffusionXLPipeline if args.sdxl else StableDiffusionPipeline
+    from diffusers import (StableDiffusionPipeline, StableDiffusionXLPipeline,
+                           StableDiffusionControlNetPipeline,
+                           StableDiffusionXLControlNetPipeline)
+
+    # Task #1480: ControlNet setup — resolve control image and load weights
+    control_image = None
+    controlnet = None
+    if args.canny or args.control_image:
+        import cv2
+        from PIL import Image
+        from diffusers import ControlNetModel
+
+        if args.canny:
+            # Generate canny edge map from the input photo
+            photo = cv2.imread(args.canny)
+            if photo is None:
+                ap.error(f"--canny: could not read image: {args.canny}")
+            gray = cv2.cvtColor(photo, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, args.canny_low, args.canny_high)
+            # Canny outputs single-channel; ControlNet wants RGB
+            edges_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
+            control_image = Image.fromarray(edges_rgb)
+            print(f"[imagegen] canny edges from {args.canny} "
+                  f"(thresholds {args.canny_low}/{args.canny_high})", file=sys.stderr)
+        else:
+            control_image = Image.open(args.control_image).convert("RGB")
+            print(f"[imagegen] control image: {args.control_image}", file=sys.stderr)
+
+        # Resize control image to match output dims
+        control_image = control_image.resize((width, height))
+
+        # Load ControlNet weights
+        cn_model = args.controlnet_model
+        if cn_model is None:
+            cn_model = ("diffusers/controlnet-canny-sdxl-1.0" if args.sdxl
+                        else "lllyasviel/sd-controlnet-canny")
+        print(f"[imagegen] loading ControlNet: {cn_model}", file=sys.stderr)
+        # dtype is defined below; use torch.float16 on CUDA, float32 on CPU
+        _cn_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+        controlnet = ControlNetModel.from_pretrained(cn_model, dtype=_cn_dtype)
+        print(f"[imagegen] ControlNet scale: {args.controlnet_scale}", file=sys.stderr)
+
+    if controlnet is not None:
+        Pipeline = (StableDiffusionXLControlNetPipeline if args.sdxl
+                    else StableDiffusionControlNetPipeline)
+    else:
+        Pipeline = StableDiffusionXLPipeline if args.sdxl else StableDiffusionPipeline
 
     print_diagnostics()
     if args.diag:
@@ -272,8 +336,12 @@ def main() -> int:
     print(f"device={device} dtype={dtype} model={args.model}", file=sys.stderr)
 
     try:
-        pipe = Pipeline.from_pretrained(
-            args.model, dtype=dtype, safety_checker=None)
+        if controlnet is not None:
+            pipe = Pipeline.from_pretrained(
+                args.model, controlnet=controlnet, dtype=dtype, safety_checker=None)
+        else:
+            pipe = Pipeline.from_pretrained(
+                args.model, dtype=dtype, safety_checker=None)
     except Exception as e:  # fall back to a single-file checkpoint in the same repo
         print(f"diffusers-format load failed ({e}); trying single-file checkpoint", file=sys.stderr)
         from huggingface_hub import list_repo_files
@@ -281,9 +349,14 @@ def main() -> int:
         ckpts = [f for f in files if f.endswith((".safetensors", ".ckpt")) and "pruned" in f]
         if not ckpts:
             raise RuntimeError(f"no pruned single-file checkpoint found in {args.model}") from e
-        pipe = Pipeline.from_single_file(
-            f"https://huggingface.co/{args.model}/resolve/main/{ckpts[0]}",
-            dtype=dtype, safety_checker=None)
+        if controlnet is not None:
+            pipe = Pipeline.from_single_file(
+                f"https://huggingface.co/{args.model}/resolve/main/{ckpts[0]}",
+                controlnet=controlnet, dtype=dtype, safety_checker=None)
+        else:
+            pipe = Pipeline.from_single_file(
+                f"https://huggingface.co/{args.model}/resolve/main/{ckpts[0]}",
+                dtype=dtype, safety_checker=None)
     pipe = pipe.to(device)
     if device == "cpu":
         pipe.enable_attention_slicing()
@@ -298,15 +371,20 @@ def main() -> int:
     seed = args.seed if args.seed is not None else int.from_bytes(os.urandom(4), "big")
     generator = torch.Generator(device=device).manual_seed(seed)
     t0 = time.time()
-    image = pipe(args.prompt, negative_prompt=args.negative,
-                 num_inference_steps=args.steps,
-                 height=height, width=width,
-                 generator=generator).images[0]
+    gen_kwargs = dict(prompt=args.prompt, negative_prompt=args.negative,
+                      num_inference_steps=args.steps,
+                      height=height, width=width,
+                      generator=generator)
+    if controlnet is not None:
+        gen_kwargs["image"] = control_image
+        gen_kwargs["controlnet_conditioning_scale"] = args.controlnet_scale
+    image = pipe(**gen_kwargs).images[0]
     elapsed = time.time() - t0
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     digest = hashlib.sha256(args.prompt.encode()).hexdigest()[:8]
-    name = f"imagegen-{stamp}-{slugify(args.prompt)}-{digest}-seed{seed}.png"
+    cn_tag = "-controlnet" if controlnet is not None else ""
+    name = f"imagegen-{stamp}-{slugify(args.prompt)}-{digest}-seed{seed}{cn_tag}.png"
     # Task #333 (backslash bug): a Linux-style --out path handed to the
     # Windows hub made os.path.join produce a mixed-separator path that
     # resolved outside the job folder (e.g. C:\home\hatch\...), so the PNG
