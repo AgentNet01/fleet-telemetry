@@ -27,7 +27,7 @@ import time
 from datetime import datetime, timezone
 
 DEFAULT_MODEL = "Lykon/dreamshaper-8"
-DEFAULT_NEGATIVE = "blurry, low quality, distorted, deformed, bad anatomy, text, watermark"
+DEFAULT_NEGATIVE = "blurry, low quality, watermark, signature"
 
 DEPS = [("torch", "torch"), ("diffusers", "diffusers"),
         ("transformers", "transformers"), ("accelerate", "accelerate"),
