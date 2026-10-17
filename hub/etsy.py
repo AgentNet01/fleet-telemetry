@@ -28,6 +28,10 @@ SHOP = "etsy-shop:"         # vault: one per linked shop
 def http(method, url, headers=None, data=None, files=None):
     """(status, json). files = {field: (filename, bytes)} sends multipart. Swapped out in tests."""
     headers = dict(headers or {})
+    if data is not None:
+        # Etsy API expects lowercase true/false for booleans in form-encoded bodies;
+        # urlencode would send Python's True/False (capitalized), which Etsy rejects.
+        data = {k: ("true" if v is True else "false" if v is False else v) for k, v in data.items()}
     body = urllib.parse.urlencode(data).encode() if data is not None else None
     if files:
         b = secrets.token_hex(16)
