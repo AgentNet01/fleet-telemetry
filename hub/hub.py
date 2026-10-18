@@ -226,6 +226,39 @@ JACK_WORTHY = re.compile(r"\$|\b(pay|payment|card|credit|debit|bank|billing|invo
 NOT_JACKS = ("It isn't payment or ID, so it's yours (Jack, Oct 15: \"the ONLY thing that needs me is spending money or my "
              "ID/card/phone\"). Decide it yourself or with your PM, sign up for any account with your own fleet email, and "
              "make Etsy changes with `fleet etsy update`. If it really does need money or Jack's ID, ask again and say how much or which ID.")
+# Jack, Oct 18: 3,300 tasks done, ~150 batches of social posts written, none posted, $0 sales
+SOCIAL_SITES = {                        # a word in a task title -> the hosts its live post lives on
+    "pinterest": ("pinterest.com", "pin.it"), "pins?": ("pinterest.com", "pin.it"),
+    "instagram": ("instagram.com",), "reels?": ("instagram.com", "facebook.com"), "facebook": ("facebook.com", "fb.com"),
+    "reddit": ("reddit.com", "redd.it"), "tiktok": ("tiktok.com",), "threads": ("threads.net", "threads.com"),
+    "quora": ("quora.com",), "youtube": ("youtube.com", "youtu.be"), "shorts": ("youtube.com", "youtu.be"),
+    "twitter|tweets?": ("x.com", "twitter.com"),
+}
+NOT_A_POST = re.compile(r"\b(concepts?|drafts?|ideas?|research|plan|strategy|audit|scout|review|polish|verify|check|calendar)\b", re.I)
+DRAFTY = re.compile(r"\b(concepts?|drafts?|ideas?)\b", re.I)    # writes new posts (review/polish only finish them)
+DRAFTS_UNPOSTED = 6                     # this many concept/draft tasks for a product+site since its last live post: post first
+SOCIAL = ("Social posts (Jack, Oct 18): every post goes concept → draft → review → polish → post, and the work only "
+          "counts once it's live. A post task is done with the live post's own URL on that site (a pin, a Reddit comment, "
+          "an Instagram post), never a gist or file. Research first: what already sells this kind of product on that "
+          "site, the site's and each community's rules for sellers, and its posting limits. Don't spam: say you're the "
+          "seller, follow self-promotion rules (Reddit: mostly helpful comments, few links), no near-duplicate posts, "
+          "spread posts out and schedule them rather than dumping a batch. Pinterest blocks the VMs: post pins with "
+          "`fleet tool run pinterest` (see its README). Don't write more drafts than you can post: the hub refuses a new "
+          f"draft for a product and site once {DRAFTS_UNPOSTED} sit unposted. When a product is at its sites' posting "
+          "limits, has more than 2 weeks of posts scheduled, and nothing else useful is left for it, its PM proposes a "
+          "new product instead (the new-product rule above: sells for $10 or less and still makes money).")
+
+
+def social_hosts(title):
+    """The sites a task title names, as the hosts a live post on them can have."""
+    return {h for w, hs in SOCIAL_SITES.items() if re.search(rf"\b({w})\b", title or "", re.I) for h in hs}
+
+
+def on_host(url, hosts):
+    h = (urlparse(url).hostname or "").lower()
+    return any(h == x or h.endswith("." + x) for x in hosts)
+
+
 ALLOW = ("allow_always", "allow_today", "allow_session", "allow_once")     # broadest allow Muse offers, first
 ANY_FIT_AFTER = 15 * 60                 # Jack, Oct 16: a ready task nobody on its team is free for goes to any idle agent after this
 TASK_CAP = 2 * 3600                     # Jack, Oct 15: tasks held 5h+ on "still blocked" notes; past this it goes back to its PM
@@ -416,7 +449,9 @@ class Hub:
                     f"finished run `fleet task done {t} <link>` with a link to the evidence (commit, file or URL). "
                     f"{OPERATOR_ONLY} When you hit one, put it on their list at once: "
                     f"`fleet task operator {t} '<what to do, one short line>' '<why it blocks you>' <link>` (single quotes, so $ amounts survive the shell)."
-                    + self._keys_line(it["too"]) + self._listing_line(t))
+                    + self._keys_line(it["too"]) + self._listing_line(t)
+                    + (f"\n{SOCIAL}" if social_hosts(self.db.execute("select title from tasks where id=?",
+                                                                       (t,)).fetchone()["title"]) else ""))
         if kind == "verify":
             t = it["ref"]
             return (f"{head}[fleet · verify task #{t}]\n{body}\n"
@@ -748,6 +783,21 @@ class Hub:
                                  (project_id,)).fetchone()
             if st and st["status"] != "active":
                 raise ValueError(f"{st['name']} is {st['status']}: no new tasks (set it active first)")
+            hosts = social_hosts(title)
+            if hosts and DRAFTY.search(title):
+                unposted = []                        # newest first, back to this product's last live post on these sites
+                for r in self.db.execute("select t.id, t.title, t.evidence from tasks t join projects j on t.project=j.id "
+                                         "where j.product=(select product from projects where id=?) and t.status in "
+                                         "('done','verifying') order by t.id desc limit 400", (project_id,)):
+                    if social_hosts(r["title"]) & hosts:
+                        if on_host(r["evidence"] or "", hosts):
+                            break
+                        if DRAFTY.search(r["title"]):
+                            unposted.append(r["id"])
+                if len(unposted) >= DRAFTS_UNPOSTED:
+                    raise ValueError(f"{len(unposted)} drafts for this product on {' / '.join(sorted(hosts))} are unposted "
+                                     f"(e.g. {', '.join('#%d' % i for i in unposted[:5])}). Post those first: add a task to "
+                                     f"post them, or look at what else this product needs. {SOCIAL}")
             tid = self.db.execute(
                 "insert into tasks(project, title, role, done_def, blocked_by, owner, status, created, touched) "
                 "values(?,?,?,?,?,?,?,?,?)",
@@ -1036,6 +1086,11 @@ class Hub:
             if back and back["link"].strip() == link.strip():
                 raise ValueError(f"#{tid} was already sent back for this same evidence. The checker said: {back['why']}\n"
                                  f"Fix that, then hand in a link that shows it (a screenshot saved as a Muse file works).")
+            hosts = social_hosts(t["title"])
+            if hosts and not NOT_A_POST.search(t["title"]) and not on_host(link, hosts):
+                raise ValueError(f"#{tid} is a post task: it's done when the post is live, with the post's own link on "
+                                 f"{' or '.join(sorted(hosts))}. A draft in a gist or file isn't a post. If something "
+                                 f"stops you posting, `fleet task wait {tid} <who> '<what>'` says so.")
         if not self.evidence_ok(link):                                  # network check, outside the lock
             raise ValueError(f"the evidence link doesn't open: {link}")
         with self.lock:
@@ -1509,7 +1564,7 @@ class Hub:
                 f"{OPERATOR_ONLY} When you hit one: fleet task operator <id> '<what to do, one "
                 "short line>' '<why it blocks you>' <link> — one plain step each, written for someone who hasn't read your work; they can reply "
                 "to you from it. To stop until they act, use fleet task wait <id> operator '<what>'. Tools (marked tool in fleet portfolio) are shared "
-                "by every product: use them, and put tool work in the tool, not in your product.")
+                "by every product: use them, and put tool work in the tool, not in your product.\n" + SOCIAL)
         if self._ceo_level(who):
             ceo = (self.db.execute("select agent from seats where role='ceo'").fetchone() or {"agent": None})["agent"]
             seat = ("You hold the CEO seat" if who == ceo else f"You're standing in as CEO while {ceo} is silent"
