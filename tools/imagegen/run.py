@@ -36,6 +36,40 @@ DEPS = [("torch", "torch"), ("diffusers", "diffusers"),
         ("safetensors", "safetensors"), ("PIL", "Pillow"),
         ("huggingface_hub", "huggingface_hub"), ("cv2", "opencv-python-headless")]
 
+# Task #3935: extra deps for --model sd35-medium only (not in DEPS, so SD1.5/
+# SDXL machines never install them): bitsandbytes (NF4 transformer
+# quantization) and sentencepiece (T5-XXL tokenizer).
+SD35_DEPS = [("bitsandbytes", "bitsandbytes"),
+             ("sentencepiece", "sentencepiece")]
+
+
+def ensure_sd35_deps():
+    """pip-install the SD3.5-only deps (bitsandbytes, sentencepiece), then
+    re-exec. Same bootstrap contract as ensure_deps(), but only when
+    --model sd35-medium is used."""
+    missing = [pkg for mod, pkg in SD35_DEPS if _missing(mod)]
+    if not missing:
+        return
+    if os.environ.get("IMAGEGEN_NO_BOOTSTRAP") == "1":
+        raise RuntimeError(f"sd35-medium needs Python packages: {', '.join(missing)} "
+                           "(bootstrap disabled via IMAGEGEN_NO_BOOTSTRAP=1)")
+    if os.environ.get("IMAGEGEN_SD35_BOOTSTRAPPED") == "1":
+        raise RuntimeError(f"packages still missing after install: {', '.join(missing)}")
+    print(f"[imagegen] installing sd35-medium packages: {', '.join(missing)}",
+          file=sys.stderr)
+    for attempt in (False, True):
+        cmd = [sys.executable, "-m", "pip", "install", "--user"]
+        if attempt:
+            cmd.append("--break-system-packages")
+        r = subprocess.run(cmd + missing)
+        if r.returncode == 0:
+            break
+    else:
+        raise RuntimeError(f"pip install failed for: {', '.join(missing)}")
+    os.environ["IMAGEGEN_SD35_BOOTSTRAPPED"] = "1"
+    r = subprocess.run([sys.executable, os.path.abspath(__file__), *sys.argv[1:]])
+    sys.exit(r.returncode)
+
 
 def ensure_deps():
     """pip-install any missing Python deps once, then re-exec.
@@ -211,6 +245,68 @@ def slugify(prompt: str) -> str:
     return slug or "image"
 
 
+def _load_sd35_medium(args, device):
+    """Load SD3.5 Medium for --model sd35-medium (task #3935).
+
+    MMDiT transformer, NF4-quantized via bitsandbytes so the 2.5B transformer
+    fits the 8 GB card; FP8 T5-XXL text encoder when available; model CPU
+    offload so only the active component sits on the GPU. Returns a pipeline
+    already offloaded — callers must NOT call pipe.to(device) on it.
+    Requires HF_TOKEN with the Stability AI Community License accepted
+    (task #3934); raises a clear error otherwise.
+    """
+    import torch
+    from diffusers import StableDiffusion3Pipeline, SD3Transformer2DModel
+    from transformers import BitsAndBytesConfig, T5EncoderModel
+
+    model_id = args.model
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16,
+    )
+    try:
+        transformer = SD3Transformer2DModel.from_pretrained(
+            model_id, subfolder="transformer",
+            quantization_config=bnb_config, torch_dtype=torch.bfloat16)
+    except Exception as e:
+        raise RuntimeError(
+            f"SD3.5 transformer load failed: {e}. "
+            f"Check HF_TOKEN is set and the Stability AI Community License "
+            f"is accepted at https://huggingface.co/{model_id} (#3934).") from e
+    print("[imagegen] SD3.5 transformer loaded (NF4)", file=sys.stderr)
+    # FP8 T5-XXL saves ~2 GB; fall back to the default encoder if unavailable.
+    try:
+        text_encoder_3 = T5EncoderModel.from_pretrained(
+            model_id, subfolder="text_encoder_3",
+            torch_dtype=torch.float8_e4m3fn)
+        print("[imagegen] T5-XXL loaded (FP8)", file=sys.stderr)
+    except Exception as e:
+        print(f"[imagegen] FP8 T5-XXL unavailable ({e}); using default encoder",
+              file=sys.stderr)
+        text_encoder_3 = None
+    pipe_kwargs = dict(transformer=transformer, torch_dtype=torch.bfloat16)
+    if text_encoder_3 is not None:
+        pipe_kwargs["text_encoder_3"] = text_encoder_3
+    try:
+        pipe = StableDiffusion3Pipeline.from_pretrained(model_id, **pipe_kwargs)
+    except Exception as e:
+        raise RuntimeError(
+            f"SD3.5 pipeline load failed: {e}. "
+            f"Check HF_TOKEN and license acceptance (#3934).") from e
+    # Fail fast if the encoders didn't load (mirrors the #1618 check).
+    missing = [c for c in ("tokenizer", "tokenizer_2", "tokenizer_3")
+               if getattr(pipe, c, None) is None]
+    if missing:
+        raise RuntimeError(
+            f"SD3.5 pipeline loaded without {', '.join(missing)}; "
+            f"model {model_id!r} is incomplete")
+    pipe.enable_model_cpu_offload()
+    print("[imagegen] SD3.5 Medium ready (NF4 transformer, CPU offload)",
+          file=sys.stderr)
+    return pipe
+
+
 def main() -> int:
     ensure_deps()
     ensure_cuda_torch()
@@ -248,6 +344,10 @@ def main() -> int:
                          "square 1:1, portrait 3:4, landscape 4:3, wide 16:9, tall 9:16. "
                          "Conflicts with --width/--height.")
     ap.add_argument("--negative", default=DEFAULT_NEGATIVE, help="Negative prompt")
+    # Task #3935: SD3.5 likes lower CFG than SDXL/SD1.5 (4.5 vs 7.0).
+    ap.add_argument("--guidance", type=float, default=None,
+                    help="Guidance scale (default: 4.5 with --model sd35-medium, "
+                         "else the pipeline default)")
     ap.add_argument("--model", default=None,
                       help="HF model id or local path (default: Lykon/dreamshaper-xl-1-0 "
                            "with --sdxl, else Lykon/dreamshaper-8; "
@@ -278,6 +378,19 @@ def main() -> int:
         args.model = os.environ.get(
             "IMAGEGEN_MODEL",
             "Lykon/dreamshaper-xl-1-0" if args.sdxl else DEFAULT_MODEL)
+    # Task #3935: --model sd35-medium shorthand for the gated SD3.5 Medium
+    # repo (Stability AI Community License; HF_TOKEN must be set — see #3934).
+    use_sd35 = args.model == "sd35-medium"
+    if use_sd35:
+        args.model = "stabilityai/stable-diffusion-3.5-medium"
+        if args.sdxl:
+            ap.error("--sdxl cannot be combined with --model sd35-medium")
+        if args.canny or args.control_image:
+            ap.error("ControlNet is not supported with --model sd35-medium")
+    if args.guidance is None:
+        args.guidance = 4.5 if use_sd35 else 7.0
+    if use_sd35:
+        ensure_sd35_deps()
     try:
         width, height, requested = resolve_dims(args.size, args.width, args.height, args.aspect)
     except ValueError as e:
@@ -290,6 +403,10 @@ def main() -> int:
     from diffusers import (StableDiffusionPipeline, StableDiffusionXLPipeline,
                            StableDiffusionControlNetPipeline,
                            StableDiffusionXLControlNetPipeline)
+    if use_sd35:
+        # Task #3935: SD3.5 Medium needs these at import time.
+        from diffusers import StableDiffusion3Pipeline, SD3Transformer2DModel
+        from transformers import BitsAndBytesConfig, T5EncoderModel
 
     # Task #1480: ControlNet setup — resolve control image and load weights
     control_image = None
@@ -361,39 +478,45 @@ def main() -> int:
     dtype = torch.float16 if device == "cuda" else torch.float32
     print(f"device={device} dtype={dtype} model={args.model}", file=sys.stderr)
 
-    try:
-        if controlnet is not None:
-            pipe = Pipeline.from_pretrained(
-                args.model, controlnet=controlnet, dtype=dtype, safety_checker=None)
-        else:
-            pipe = Pipeline.from_pretrained(
-                args.model, dtype=dtype, safety_checker=None)
-    except Exception as e:  # fall back to a single-file checkpoint in the same repo
-        print(f"diffusers-format load failed ({e}); trying single-file checkpoint", file=sys.stderr)
-        from huggingface_hub import list_repo_files
-        files = list_repo_files(args.model, repo_type="model")
-        ckpts = [f for f in files if f.endswith((".safetensors", ".ckpt")) and "pruned" in f]
-        if not ckpts:
-            raise RuntimeError(f"no pruned single-file checkpoint found in {args.model}") from e
-        if controlnet is not None:
-            pipe = Pipeline.from_single_file(
-                f"https://huggingface.co/{args.model}/resolve/main/{ckpts[0]}",
-                controlnet=controlnet, dtype=dtype, safety_checker=None)
-        else:
-            pipe = Pipeline.from_single_file(
-                f"https://huggingface.co/{args.model}/resolve/main/{ckpts[0]}",
-                dtype=dtype, safety_checker=None)
-    # Task #1618: fail fast with a clear message if the weights don't match
-    # the pipeline (e.g. SD 1.5 weights in the SDXL pipeline leave the
-    # tokenizers as None and crash obscurely at generation time).
-    missing = [c for c in (("tokenizer", "tokenizer_2") if args.sdxl else ("tokenizer",))
-               if getattr(pipe, c, None) is None]
-    if missing:
-        raise RuntimeError(
-            f"pipeline loaded without {', '.join(missing)}; "
-            f"model {args.model!r} does not match the "
-            f"{'SDXL' if args.sdxl else 'SD 1.5'} pipeline")
-    pipe = pipe.to(device)
+    if use_sd35:
+        # Task #3935: SD3.5 Medium (MMDiT, not UNet). NF4-quantized transformer
+        # + FP8 T5-XXL + CPU offload fits the 8 GB card (see #3931 spike).
+        # Requires HF_TOKEN with the Stability AI Community License accepted.
+        pipe = _load_sd35_medium(args, device)
+    else:
+        try:
+            if controlnet is not None:
+                pipe = Pipeline.from_pretrained(
+                    args.model, controlnet=controlnet, dtype=dtype, safety_checker=None)
+            else:
+                pipe = Pipeline.from_pretrained(
+                    args.model, dtype=dtype, safety_checker=None)
+        except Exception as e:  # fall back to a single-file checkpoint in the same repo
+            print(f"diffusers-format load failed ({e}); trying single-file checkpoint", file=sys.stderr)
+            from huggingface_hub import list_repo_files
+            files = list_repo_files(args.model, repo_type="model")
+            ckpts = [f for f in files if f.endswith((".safetensors", ".ckpt")) and "pruned" in f]
+            if not ckpts:
+                raise RuntimeError(f"no pruned single-file checkpoint found in {args.model}") from e
+            if controlnet is not None:
+                pipe = Pipeline.from_single_file(
+                    f"https://huggingface.co/{args.model}/resolve/main/{ckpts[0]}",
+                    controlnet=controlnet, dtype=dtype, safety_checker=None)
+            else:
+                pipe = Pipeline.from_single_file(
+                    f"https://huggingface.co/{args.model}/resolve/main/{ckpts[0]}",
+                    dtype=dtype, safety_checker=None)
+        # Task #1618: fail fast with a clear message if the weights don't match
+        # the pipeline (e.g. SD 1.5 weights in the SDXL pipeline leave the
+        # tokenizers as None and crash obscurely at generation time).
+        missing = [c for c in (("tokenizer", "tokenizer_2") if args.sdxl else ("tokenizer",))
+                   if getattr(pipe, c, None) is None]
+        if missing:
+            raise RuntimeError(
+                f"pipeline loaded without {', '.join(missing)}; "
+                f"model {args.model!r} does not match the "
+                f"{'SDXL' if args.sdxl else 'SD 1.5'} pipeline")
+        pipe = pipe.to(device)
     if device == "cpu":
         pipe.enable_attention_slicing()
     if args.sdxl:
@@ -410,7 +533,8 @@ def main() -> int:
     gen_kwargs = dict(prompt=args.prompt, negative_prompt=args.negative,
                       num_inference_steps=args.steps,
                       height=height, width=width,
-                      generator=generator)
+                      generator=generator,
+                      guidance_scale=args.guidance)
     if controlnet is not None:
         gen_kwargs["image"] = control_image
         gen_kwargs["controlnet_conditioning_scale"] = args.controlnet_scale
