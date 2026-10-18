@@ -267,6 +267,14 @@ def pm():
         f"pm: what reaches Jack is the CEO's plain line: {mine}"
     assert mine[0]["link"] == "https://www.etsy.com/listing/1", f"pm: with the CEO's link: {mine[0]}"
 
+    # Oct 16: a screener forwarded "solve a ProtonMail CAPTCHA by screen-share" to Jack. Forwarded or not, only payment or ID reaches him
+    for said in ("JACK: Solve the ProtonMail signup CAPTCHA by screen-share with Neo", "ok, looking into it"):
+        h.task_for_jack("Neo", a, "Solve a CAPTCHA for my ProtonMail signup", "need a mailbox", "https://proton.me/mail")
+        h.tick()
+        ceo_says(said)
+        assert not [n for n in h.needs_jack() if "CAPTCHA" in n["what"]], f"pm: {said!r} doesn't put a non-money ask on Jack's list"
+        assert any("isn't payment or ID" in m and "CAPTCHA" in m for m in muse.sent.get("Neo", [])), "pm: the agent is told it's its own"
+
     h.task_for_jack("Neo", a, "Add a card to PrintKK", "orders", "https://printkk.com/billing")
     h.tick()
     clock.go(hub.SCREEN_WAIT + 1); h.tick()
@@ -330,6 +338,31 @@ def pmwait():
     print("pmwait OK")
 
 
+def said_not_raised():
+    """Jack, Oct 16: "they need a BookVault account ... Pericles said it was waiting on me because they need payment info,
+    and it wasn't on my needs list." Waits and notes said "waiting on Jack" in words; nothing reached his list."""
+    h, muse, clock = new_hub("Neo")
+    pj = h.add_project(h.add_product("Books", brief="b"), "launch")
+    def start(name):
+        t = h.add_task(pj, name, "marketer", "done", owner="Neo"); h.tick(); h.tick()
+        assert h.task(t)["status"] == "working", h.task(t)
+        return t
+    ads = start("Ads")
+    h.task_wait("Neo", ads, "outside", "No ad spend approval from Jack: 14 dollars of Etsy Ads")
+    assert [n for n in h.db.execute("select * from needs_jack where task=?", (ads,))], "said_not_raised: money from Jack, parked on outside, still reaches his list"
+    pins = start("Pins")
+    h.task_wait("Neo", pins, "outside", "Pinterest account decision, then I sign up per Jack's rule")
+    assert not h.db.execute("select 1 from needs_jack where task=?", (pins,)).fetchone(), "said_not_raised: naming Jack's rule isn't an ask"
+    vault = start("BookVault")
+    try:
+        h.task_note("Neo", vault, "Blocked: waiting on Jack for payment info on the BookVault signup")
+        raise AssertionError("said_not_raised: a note claiming it waits on Jack, with nothing on his list, is refused")
+    except ValueError as e:
+        assert "fleet task operator" in str(e), e
+    h.task_note("Neo", vault, "Drafted the interior; cover next")
+    print("said_not_raised OK")
+
+
 def busy_ceo():
     """Jack, Oct 15: Pericles was busy in the Etsy dashboard, so "review the banner images" sat 30 min unscreened and
     reached Jack as written. A busy CEO's ask goes to the stand-in first; only if it sits there too does Jack get it."""
@@ -389,6 +422,7 @@ def keys():
     h.tick(); h.tick()
     task = [m for m in muse.sent.get("Neo", []) if "Price the cups" in m]
     assert "fleet tool run imagegen" in task[-1], f"keys: the hub's GPU tools are named too: {task}"
+    assert "$10 or less" in task[-1] and "AliExpress" in task[-1] and "CAPTCHA" in task[-1], "keys: Jack's Oct 16 rules (cheap new products, no browser takeovers) ride with every task"
     assert task and "PRINTIFY_API_KEY" in task[-1] and "fleet secret get" in task[-1] and "darraghs-bank" not in task[-1], f"keys: {task}"
     print("keys OK")
 
@@ -457,4 +491,4 @@ def tidy():
     print("tidy OK")
 
 
-{"busy_ceo": busy_ceo, "actionable": actionable, "listed": listed, "newpm": newpm, "keys": keys, "pmwait": pmwait, "repeat": repeat, "tidy": tidy, "pm": pm, "steps": steps, "reply": reply, "tools": tools, "doc": doc, "show": show, "plain": plain, "since": since, "ui": ui}[sys.argv[1]]()
+{"said_not_raised": said_not_raised, "busy_ceo": busy_ceo, "actionable": actionable, "listed": listed, "newpm": newpm, "keys": keys, "pmwait": pmwait, "repeat": repeat, "tidy": tidy, "pm": pm, "steps": steps, "reply": reply, "tools": tools, "doc": doc, "show": show, "plain": plain, "since": since, "ui": ui}[sys.argv[1]]()

@@ -182,6 +182,12 @@ def main():
     assert st == 400 and "only its PM" in body, f"etsy: someone with no work on the product can't change its listing: {st} {body}"
     with h.lock:
         h.db.execute("update tasks set owner='Ada', status='working' where id=?", (tid,))
+    # Oct 15: Boboe 11 sent {"dry_run": true, "description": ...}; the hub passed dry_run to Etsy and changed it for real
+    before = len(fake.calls)
+    st, _, body = req("/api/etsy/update", dict(change, dry_run=True), agent)
+    assert st == 200 and json.loads(body)["dry_run"] and "state" in json.loads(body)["changed"], (st, body)
+    assert not [c for c in fake.calls[before:] if c[0] in ("POST", "PATCH", "DELETE")], "etsy: a dry run changes nothing on Etsy"
+    assert fake.state == "inactive", fake.state
     st, _, body = req("/api/etsy/update", change, agent)
     assert st == 200, (st, body)
     assert fake.state == "active" and fake.images == [fake.images[-1]] and 501 not in fake.images, \

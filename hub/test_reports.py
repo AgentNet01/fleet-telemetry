@@ -36,7 +36,15 @@ def main():
     r = reports.Reporter(h, pdf=lambda b: sent.append(b) or "/tmp/brief.pdf",
                          upload=lambda path, title: sent.append(("up", title)))
     r.tick()
-    assert len(sent) == 2 and sent[1] == ("up", sent[0]["title"]), f"brief: one PDF made and posted: {sent}"
+    daily = [x for x in sent if isinstance(x, dict) and "daily" in x["title"]]
+    hourly = [x for x in sent if isinstance(x, dict) and "hourly" in x["title"]]
+    # Jack, Oct 16: "can we make it so we get hourly reports too?"
+    assert len(daily) == 1 and len(hourly) == 1, f"brief: a daily and an hourly brief go out: {[x for x in sent]}"
+    assert hourly[0]["title"] == "Foundlings hourly brief · Thu Oct 15 09:00", hourly[0]["title"]
+    assert hourly[0]["cards"][0][0] == "$0.00" and hourly[0]["cards"][2][0] == "0", \
+        f"brief: the hourly one counts only 8:00-9:00 (the 7:00 sale and the 8:00 finish belong to the day before it): {hourly[0]['cards']}"
+    assert ("up", daily[0]["title"]) in sent and ("up", hourly[0]["title"]) in sent, "brief: both are posted"
+    sent[:] = [daily[0], ("up", daily[0]["title"])]
     b = sent[0]
     assert b["title"] == "Foundlings daily brief · Thu Oct 15", b["title"]
     assert b["cards"][0][0] == "$29.99" and b["cards"][1][0] == "1 of 2", f"brief: the day's sales, products listed: {b['cards']}"
@@ -51,17 +59,20 @@ def main():
     assert "chatter" not in str(b), "brief: an overview, not the log"
 
     r.tick()
-    assert len(sent) == 2, "brief: once a day"
+    assert len(sent) == 2, "brief: once a day, once an hour"
+    clock.go(3600)
+    r.tick()
+    assert [x["title"] for x in sent[2:] if isinstance(x, dict)] == ["Foundlings hourly brief · Thu Oct 15 10:00"], sent[2:]
     clock.go(86400)
     r.tick()
-    assert len(sent) == 4, "brief: the next day's goes out"
+    assert len([x for x in sent[4:] if isinstance(x, dict)]) == 2, "brief: the next day's goes out, with that hour's"
 
     fails = []
     h2 = hub.Hub(os.path.join(tempfile.mkdtemp(), "hub.db"), None, clock)
     r2 = reports.Reporter(h2, pdf=lambda *a: 1 / 0, upload=lambda *a: None, log=fails.append)
     r2.tick()
     r2.tick()
-    assert len(fails) == 1, "brief: a failure is logged once, not retried every minute"
+    assert len(fails) == 2, "brief: a failure is logged once per brief, not retried every minute"
     print("reports OK")
 
 

@@ -640,6 +640,14 @@ def teams():
     h.add_task(prj, "price the bundle", role="optimizer", done_def="a price")
     for _ in range(3): h.tick()
     assert switched("Gen") and not switched("Des"), "nobody on the optimizer team: the generalist covers it, never the designer"
+    # Jack, Oct 16: optimizers sat idle 60-80 min beside ready marketer/engineer tasks nobody on those teams was free for
+    h.manage("dot", "team me designer")                          # no generalist left free
+    h.add_task(prj, "wire the export", role="engineer", done_def="it exports")
+    for _ in range(3): h.tick()
+    assert not switched("Des") and not switched("dot"), "a task just made still waits for its own team"
+    clock.go(hub.ANY_FIT_AFTER + 1)
+    for _ in range(3): h.tick()
+    assert switched("Des") or switched("dot"), "waited long enough with no engineer free: an idle designer takes it rather than both sitting"
 
     # an agent can join a team itself; anyone else's team is the CEO's call
     h.add_agent("Neo", "muse")

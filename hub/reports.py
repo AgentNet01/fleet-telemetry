@@ -25,15 +25,19 @@ class Reporter:
     def tick(self):
         now = self.h.clock()
         lt = time.localtime(now)
-        end = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, HOUR, 0, 0, 0, 0, -1))
-        if end > now:
-            end -= DAY
+        day = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, HOUR, 0, 0, 0, 0, -1))
+        hour = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, lt.tm_hour, 0, 0, 0, 0, -1))
+        # Jack, Oct 16: "can we make it so we get hourly reports too?" — the same page, for the hour just gone
+        for period, length, end in (("brief", DAY, day - DAY if day > now else day), ("hourly", 3600, hour)):
+            self._send(period, length, end, now)
+
+    def _send(self, period, length, end, now):
         with self.h.lock:
-            if self.h.db.execute("select 1 from reports where period='brief' and end=?", (end,)).fetchone():
+            if self.h.db.execute("select 1 from reports where period=? and end=?", (period, end)).fetchone():
                 return
-            rid = self.h.db.execute("insert into reports(period, start, end, status, at) values('brief',?,?,'sending',?)",
-                                    (end - DAY, end, now)).lastrowid
-            b = brief(self.h, end - DAY, end)
+            rid = self.h.db.execute("insert into reports(period, start, end, status, at) values(?,?,?,'sending',?)",
+                                    (period, end - length, end, now)).lastrowid
+            b = brief(self.h, end - length, end)
         try:                                   # one try: a half-done upload retried would post twice
             self.upload(self.pdf(b), b["title"])
             status = "done"
@@ -46,6 +50,7 @@ class Reporter:
 
 
 def brief(h, start, end):
+    daily = end - start > 2 * 3600
     """The day as plain data: the numbers, what needs Jack, one row per product, what's stuck. Called under the hub lock."""
     db = h.db
     one = lambda sql, *a: db.execute(sql, a).fetchone()[0]
@@ -64,9 +69,11 @@ def brief(h, start, end):
         groups.setdefault(b["waiting_on"] or "outside", []).append(b["title"])
     busy = sum(1 for a in agents if a["busy"])
     return {
-        "title": f"Foundlings daily brief · {time.strftime('%a %b %d', time.localtime(end))}",
-        "sub": f"The 24 hours to {time.strftime('%H:%M', time.localtime(end))}, written by the hub from its records.",
-        "cards": [(f"${sales_day:,.2f}", f"sales today, ${sales_all:,.2f} all time"),
+        "title": (f"Foundlings daily brief · {time.strftime('%a %b %d', time.localtime(end))}" if daily else
+                  f"Foundlings hourly brief · {time.strftime('%a %b %d %H:%M', time.localtime(end))}"),
+        "sub": f"The {'24 hours' if daily else 'hour'} to {time.strftime('%H:%M', time.localtime(end))}, written by the hub from its records.",
+        "done_label": "Done today" if daily else "Done this hour",
+        "cards": [(f"${sales_day:,.2f}", f"sales {'today' if daily else 'this hour'}, ${sales_all:,.2f} all time"),
                   (f"{sum(1 for p in products if p['listing_state'] == 'active')} of {len(products)}", "products live on Etsy"),
                   (str(len(finished)), "tasks finished"),
                   (str(len(needs)), "things need you")],
@@ -153,7 +160,7 @@ def make_pdf(folder):
         pdf.set_text_color(*INK)
         with pdf.table(col_widths=(30, 11, 9, 8, 42), text_align="LEFT", borders_layout="HORIZONTAL_LINES",
                        headings_style=FontFace(emphasis="BOLD", color=GREY), line_height=5, padding=1.6, markdown=True) as t:
-            t.row(["Product", "Etsy", "Done today", "Stuck", "Latest finished"])
+            t.row(["Product", "Etsy", b["done_label"], "Stuck", "Latest finished"])
             for p in b["products"]:
                 r = t.row()
                 r.cell(f"**{p['name']}**\n{p['pm']}")

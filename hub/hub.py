@@ -213,15 +213,21 @@ OPERATOR_ONLY = ("Go to an operator (Jack or Darragh) only when you're truly blo
                  "through the shop's API link the hub holds. "
                  "Everything else — choices, sign-offs, which option to take — decide yourself or with your PM; "
                  "don't send it to them. Prices are yours to set; never below cost after maker, shipping and Etsy fees. "
-                 "Facts you can look up, read in a file or ask a maker's support for are yours too.")
+                 "Facts you can look up, read in a file or ask a maker's support for are yours too. "
+                 "Jack can't take over your browser or solve a CAPTCHA for you (Oct 16): if a sign-up wants one, use another "
+                 "route or the email you already have. New products (Jack, Oct 16): pick ones that sell for $10 or less and still "
+                 "make money after maker, shipping and Etsy fees, never at a loss; cheap suppliers like AliExpress (dropshipping) "
+                 "are a good place to look. The ones already listed stay as they are.")
+SAYS_WAITING_ON_JACK = re.compile(r"\b(wait(ing|s)?|blocked|stuck|held)\b[^.]{0,30}\b(on|for|by)\s+(jack|darragh|the operators?|you)\b", re.I)
 # what an unscreened ask must be about to reach Jack: payment, money, or his identity (Jack, Oct 15)
 JACK_WORTHY = re.compile(r"\$|\b(pay|payment|card|credit|debit|bank|billing|invoice|purchase|buy|spend|spending|budget|"
-                         r"dollars?|usd|ads?|advertising|sample order|subscription|charge|tax|ein|ssn|passport|license|"
-                         r"identity|id verification|verify (my|his|your) id|phone number|2fa|in (jack|his)'?s? name)\b", re.I)
+                         r"dollars?|usd|ads?|advertising|(sample|test) order|subscription|charge|tax|ein|ssn|passport|license|"
+                         r"identity|id verification|verify (my|his|your) id|phone( number)?|sms|2fa|in (jack|his)'?s? name)\b", re.I)
 NOT_JACKS = ("It isn't payment or ID, so it's yours (Jack, Oct 15: \"the ONLY thing that needs me is spending money or my "
              "ID/card/phone\"). Decide it yourself or with your PM, sign up for any account with your own fleet email, and "
              "make Etsy changes with `fleet etsy update`. If it really does need money or Jack's ID, ask again and say how much or which ID.")
 ALLOW = ("allow_always", "allow_today", "allow_session", "allow_once")     # broadest allow Muse offers, first
+ANY_FIT_AFTER = 15 * 60                 # Jack, Oct 16: a ready task nobody on its team is free for goes to any idle agent after this
 TASK_CAP = 2 * 3600                     # Jack, Oct 15: tasks held 5h+ on "still blocked" notes; past this it goes back to its PM
 NUDGE_AFTER = 3600                     # a task holder silent this long is reminded, then its PM an hour later
 IDLE_AFTER = 12 * 3600
@@ -438,7 +444,8 @@ class Hub:
             return (f"{head}[fleet #{iid} · you are the chair]\n{body}\n"
                     f"— Read the views and reply with one answer for the fleet.")
         return (f"{head}[fleet #{iid} · request from {it['frm']}]\n{body}\n"
-                f"— Reply here in plain text; your reply goes back to {it['frm']}.")
+                f"— Reply here in plain text; your reply goes back to {it['frm']}. A reply changes nothing on the board: "
+                f"if you decide to resume, cancel or reassign a task, run that fleet command yourself first.")
 
     def _log(self, item, agent, direction, text):
         self.db.execute("insert into events(item, agent, dir, text, at) values(?,?,?,?,?)",
@@ -862,6 +869,10 @@ class Hub:
             t = self._task_row(tid)
             if t["owner"] != agent or t["status"] != "working":
                 raise PermissionError(f"#{tid} isn't a task you're working on")
+            if SAYS_WAITING_ON_JACK.search(text) and not self.db.execute("select 1 from needs_jack where task=? and done=0", (tid,)).fetchone():
+                raise ValueError(f"A note doesn't reach Jack (Oct 16: BookVault sat 'waiting on Jack' in notes, never on his list). "
+                                 f"If it needs payment or his ID, put it on his list: fleet task operator {tid} '<what to do>' "
+                                 f"'<why it blocks you>' <link>. Otherwise it's yours or your PM's: say what you'll do next.")
             self._set("tasks", tid, progress_note=text, touched=self.clock())
             self._log(None, agent, "out", f"task #{tid} note: {text}")
             self._task_event(tid, agent, "note", text)
@@ -942,7 +953,19 @@ class Hub:
             link = url.group(0).rstrip(".,)") if url and "muse.ai/files/" not in url.group(0) else n["link"]
             self.db.execute("update needs_jack set what=?, why=null, link=?, text=? where id=?",
                             (what, link, " — ".join(filter(None, [what, link])), nid))
-        self.db.execute("update needs_jack set triage=null where id=?", (nid,))
+        self._to_jack(self.db.execute("select * from needs_jack where id=?", (nid,)).fetchone())
+
+    def _to_jack(self, n):
+        """The one way an agent's ask reaches Jack's list: payment or his ID (Jack's rule). Anything else, however it got
+        here (a screener's JACK:, a stray reply, a timeout; Oct 16: a CAPTCHA by screen-share), goes back to the agent."""
+        if JACK_WORTHY.search(" ".join(filter(None, (n["what"], n["why"], n["text"])))):
+            self.db.execute("update needs_jack set triage=null where id=?", (n["id"],))
+            return
+        self.db.execute("update needs_jack set triage=null, done=1, answer=? where id=?", (NOT_JACKS, n["id"]))
+        self._note(n["agent"], f"Your ask for Jack wasn't sent: “{(n['what'] or n['text'])[:200]}”", NOT_JACKS)
+        t = n["task"] and self.db.execute("select * from tasks where id=?", (n["task"],)).fetchone()
+        if t and t["waiting_on"]:
+            self._resume(t, "hub")
 
     def _screen_timeouts(self):
         """Unsorted after SCREEN_WAIT: the other seat (CEO or stand-in) gets it once (Jack, Oct 15: a busy CEO let "review the
@@ -960,14 +983,8 @@ class Hub:
                 self.db.execute("update needs_jack set triage=? where id=?", (other, n["id"]))
                 self.db.execute("insert into items(kind, frm, too, text, depth, status, created, ref) values('screen','hub',?,?,0,'queued',?,?)",
                                 (other, tries[-1]["text"], self.clock(), n["id"]))
-            elif JACK_WORTHY.search(" ".join(filter(None, (n["what"], n["why"], n["text"])))):
-                self.db.execute("update needs_jack set triage=null where id=?", (n["id"],))
-            else:                   # Oct 15: unscreened asks reached Jack as written; only payment or ID may
-                self.db.execute("update needs_jack set triage=null, done=1, answer=? where id=?", (NOT_JACKS, n["id"]))
-                self._note(n["agent"], f"Your ask for Jack wasn't sent: “{(n['what'] or n['text'])[:200]}”", NOT_JACKS)
-                t = n["task"] and self.db.execute("select * from tasks where id=?", (n["task"],)).fetchone()
-                if t and t["waiting_on"]:
-                    self._resume(t, "hub")
+            else:                   # Oct 15: unscreened asks reached Jack as written
+                self._to_jack(n)
 
     def jack_list(self, who):
         with self.lock:
@@ -1054,7 +1071,7 @@ class Hub:
                 self._note(t["owner"], f"task #{tid} didn't pass verification",
                            f"{t['title']}\n{agent}: {reason}\nFix it, then `fleet task done {tid} <link>` again.")
 
-    def task_wait(self, agent, tid, who, what):
+    def task_wait(self, agent, tid, who, what, infer=True):
         """The holder can't move until someone else acts: the task is parked for it (pin) and it takes other work.
         Jack/Darragh see it on their list; another agent is asked; anything else ('outside') the holder resumes."""
         with self.lock:
@@ -1065,7 +1082,8 @@ class Hub:
             if who.lower() == "pm":                         # Jack, Oct 15: PM decisions sat on 'outside', unheard
                 pm = self.db.execute("select pm from products where name=?", (self._task_product(tid),)).fetchone()
                 who = (pm and pm["pm"]) or "outside"
-            board = who.lower() in ("jack", "darragh", "board", "operator")
+            board = who.lower() in ("jack", "darragh", "board", "operator") or infer and (    # "waiting on outside: Jack's ad approval"
+                re.search(r"\b(jack|darragh)\b(?!'s)", what, re.I) and JACK_WORTHY.search(what))
             if board:
                 what = self._plain(what, None, None)[0]
             if not board and who != "outside" and not self.db.execute("select 1 from agents where name=?", (who,)).fetchone():
@@ -1152,13 +1170,13 @@ class Hub:
             last = (t["progress_note"] or "no progress posted").strip()[:300]
             what = (f"it ran {int((now - since) // 3600)}h without finishing, so the hub parked it and freed {t['owner']}. "
                     f"Last note: {last} — Decide: split it into tasks that can finish in one sitting, wait it on what it really "
-                    f"needs (money from Jack: `fleet task operator`), or drop it (`fleet task set {t['id']} status cancelled`). "
+                    f"needs (payment or ID: `fleet task operator`), or drop it (`fleet task set {t['id']} status cancelled`). "
                     f"To give it back as is: fleet task resume {t['id']}")
             to = boss if boss and boss != t["owner"] else "outside"
             self._note(t["owner"], f"#{t['id']} “{t['title']}” is parked: {int((now - since) // 3600)}h without finishing",
                        (f"The hub handed it to {to} to split, re-scope or drop." if to != "outside" else
                         "It's back on the board for whoever plans this product.") + " Stop work on it; your next task comes from the hub.")
-            self.task_wait(t["owner"], t["id"], to, what)
+            self.task_wait(t["owner"], t["id"], to, what, infer=False)   # the hub's own park; its quoted note isn't an ask
 
     def _nudge(self):
         """A holder with no progress for an hour gets a nudge, worded differently each time; the clock
@@ -1922,8 +1940,10 @@ class Hub:
             product = self._task_product(t["id"])
             if next(self._idle(product, t["role"], t["pin"]), None):
                 continue                                       # someone already fits; _assign_tasks will take it
-            free = [self._agent(n) for n in self._idle() if n not in switched]
-            free = [a for a in free if (a["name"] == t["pin"] if t["pin"] else self._fits(a, t["role"]))]
+            idle = [self._agent(n) for n in self._idle() if n not in switched]
+            free = [a for a in idle if (a["name"] == t["pin"] if t["pin"] else self._fits(a, t["role"]))]
+            if not free and not t["pin"] and self.clock() - (t["created"] or 0) >= ANY_FIT_AFTER:
+                free = idle                                    # an idle agent off-team beats a task and an agent both waiting
             # specialists before generalists; then hold people constant — files and programs on a VM don't move
             # with a switch, so prefer someone whose loaded context is already this product, then none, then another
             loaded = lambda a: 0 if a["current_product"] == product else 1 if not a["current_product"] else 2

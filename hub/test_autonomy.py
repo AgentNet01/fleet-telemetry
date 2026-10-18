@@ -362,15 +362,15 @@ def overdue():
         clock.go(1800)
         h.task_note("Ada", ads, "still blocked on ad budget")
         h.tick()
+    h.task_note("Ada", ads, "Jack declined the $34.80 test order, so ads wait on a new plan")   # Oct 16: this note crashed every tick
     assert h.task(ads)["status"] == "working", "overdue: not parked before the cap"
     clock.go(1800)
-    h.task_note("Ada", ads, "still blocked on ad budget")
     h.tick(); h.tick()
     t = h.task(ads)
     assert t["status"] == "blocked" and t["owner"] is None and t["waiting_on"] == "Pam", f"overdue: parked for the PM: {t}"
     assert any(f"#{ads}" in s and "Stop work on it" in s for s in muse.sent.get("Ada", [])), "overdue: the holder knows to stop"
     told = [s for s in muse.sent.get("Pam", []) if f"#{ads}" in s]
-    assert told and "still blocked on ad budget" in told[-1] and "split" in told[-1], f"overdue: the PM hears why and what to do: {told}"
+    assert told and "Jack declined" in told[-1] and "split" in told[-1], f"overdue: the PM hears why and what to do: {told}"
     clock.go(4 * 3600); h.tick(); h.tick()
     assert sum(f"#{ads}" in s and "Hats Etsy Ads" in s for s in muse.sent.get("Pam", [])) == 1, "overdue: told once"
     print("overdue OK")

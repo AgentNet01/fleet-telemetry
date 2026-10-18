@@ -266,6 +266,9 @@ def update(h, who, lid, f, image):
             raise PermissionError(f"listing {lid} belongs to {p or 'no product'}: only its PM, the CEO, or someone with a "
                                   f"task on {p or 'it'} changes it")
     pics = [image(ref) for ref in f.get("images") or []]            # fetch first: a bad picture changes nothing
+    if f.pop("dry_run", False):     # Oct 15: passed through to Etsy, which ignored it and applied the change for real
+        return {"listing_id": lid, "live": f"https://www.etsy.com/listing/{lid}", "dry_run": True,
+                "changed": (["images"] if pics else []) + [k for k in f if k not in ("images", "product")]}
     with EDITING:
         return _apply(h, who, app, name, rec, lid, f, pics)
 

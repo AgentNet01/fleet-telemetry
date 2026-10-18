@@ -55,6 +55,8 @@ def routing():
     h.tick()
     assert len(muse.sent["Boboe 3"]) == 1, "Boboe 3 should get the request exactly once"
     assert "price?" in muse.sent["Boboe 3"][0] and "Boboe 7" in muse.sent["Boboe 3"][0], muse.sent
+    # Oct 16: the CEO, then the PM, each replied "resume #1452 and publish" and ran nothing, so the task sat blocked
+    assert "changes nothing on the board" in muse.sent["Boboe 3"][0], f"a reply is not an action: {muse.sent['Boboe 3'][0]}"
     h.tick()
     assert len(muse.sent["Boboe 3"]) == 1, "no duplicate delivery while it's in flight"
 
