@@ -328,6 +328,11 @@ def post(h, who, f, image):
     f: title, description, price, tags, category, kind physical|download, quantity, product, images, files, plus any
     other Etsy listing field. image(ref) -> (filename, bytes). Returns {listing_id, edit, live}."""
     app, name, rec = _shop(h, f.get("product"))
+    # Oct 20: listings posted without a product never got a link, so the hub kept planning them as unlaunched
+    with h.lock:
+        known = f.get("product") and h.db.execute("select 1 from products where name=? and status='active'", (f["product"],)).fetchone()
+    if not known:
+        raise ValueError('"product" must name the hub product this listing sells (fleet product add it first)')
     pics = [image(ref) for ref in f.get("images") or []]           # fetch first: a bad picture leaves no half-made draft
     if not pics:
         raise ValueError("a listing needs at least one picture")

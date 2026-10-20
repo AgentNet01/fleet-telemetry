@@ -163,6 +163,8 @@ def main():
     assert st == 200 and files == [("book.pdf", b"%PDF")], f"etsy: a download's file goes up before it goes live: {st} {body} {files}"
     st, _, body = req("/api/etsy/post", dict(listing, kind="download"), agent)
     assert st == 400 and "file" in body, f"etsy: a download with nothing to download is refused: {st} {body}"
+    st, _, body = req("/api/etsy/post", {k: v for k, v in listing.items() if k != "product"}, agent)
+    assert st == 400 and "product" in body, f"etsy: a listing must name its product, or the hub never links it: {st} {body}"
     # Oct 20: three agents posted silicone stretch lids within an hour
     fake.live = [{"listing_id": 77, "title": "Custom Pet Photo Magnets Set of 2, Fridge Gift"}]
     before = len([c for c in fake.calls if c[0] == "POST" and c[1].endswith("/shops/42/listings")])
