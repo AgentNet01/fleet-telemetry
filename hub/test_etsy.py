@@ -25,6 +25,7 @@ class FakeEtsy:
         self.challenge = None
         self.calls = []
         self.state, self.images = "active", [501, 502]
+        self.live = []                                  # the shop's other active listings
         self.receipts = [
             {"receipt_id": 11, "is_paid": True, "grandtotal": {"amount": 450, "divisor": 100, "currency_code": "USD"}, "created_timestamp": 1000},
             {"receipt_id": 12, "is_paid": False, "grandtotal": {"amount": 999, "divisor": 100, "currency_code": "USD"}, "created_timestamp": 1001},
@@ -50,6 +51,8 @@ class FakeEtsy:
             return 200, {"results": [{"shipping_profile_id": 555}]}
         if url.endswith("/shops/42/readiness-state-definitions"):
             return 200, {"results": [{"readiness_state_id": 66}]}
+        if method == "GET" and "/shops/42/listings?state=active" in url:
+            return 200, {"results": self.live if "offset=0" in url else []}
         if method == "POST" and url.endswith("/shops/42/listings"):
             return 201, {"listing_id": 9001, "state": "draft"}
         if method == "POST" and url.endswith("/listings/9001/images"):
@@ -160,6 +163,15 @@ def main():
     assert st == 200 and files == [("book.pdf", b"%PDF")], f"etsy: a download's file goes up before it goes live: {st} {body} {files}"
     st, _, body = req("/api/etsy/post", dict(listing, kind="download"), agent)
     assert st == 400 and "file" in body, f"etsy: a download with nothing to download is refused: {st} {body}"
+    # Oct 20: three agents posted silicone stretch lids within an hour
+    fake.live = [{"listing_id": 77, "title": "Custom Pet Photo Magnets Set of 2, Fridge Gift"}]
+    before = len([c for c in fake.calls if c[0] == "POST" and c[1].endswith("/shops/42/listings")])
+    st, _, body = req("/api/etsy/post", listing, agent)
+    assert st == 400 and "77" in body and "already sells" in body, f"etsy: a second listing of the same item is refused: {st} {body}"
+    assert len([c for c in fake.calls if c[0] == "POST" and c[1].endswith("/shops/42/listings")]) == before, "etsy: and no draft is made"
+    st, _, body = req("/api/etsy/post", dict(listing, title="Wooden Pinecone Gift Tags 50 Pack"), agent)
+    assert st == 200, f"etsy: a different item still posts: {st} {body}"
+    fake.live = []
 
     # Jack, Oct 15: a listing was taken down and agents spent whole tasks finding out by hand; the PM never heard
     h.add_agent("Pam", "poll")

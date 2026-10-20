@@ -1371,7 +1371,8 @@ class Hub:
             self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('scout','hub',?,?,0,'queued',?)",
                             (n, f"{self.SCOUT}\nNothing is waiting for you, so research and launch a NEW product: a cheap item "
                                 "under $10 (AliExpress or similar dropship suppliers are fine, free US shipping, good reviews) "
-                                f"that is not already in the shop. Already in the shop: {shop}.\n"
+                                f"that is not already in the shop. Already in the shop: {shop}. Also check the live shop, "
+                                "https://www.etsy.com/shop/QuietLedgerStudioUS: posting an item it already sells is refused.\n"
                                 "Add it with `fleet product add \"<name>\" \"<brief with supplier, cost, price, margin>\"`, then post "
                                 "the listing live with `fleet etsy post` (real supplier photos, title, 13 tags, price). Don't add "
                                 "docs, audits or promo tasks for listings that are already live. Anything only Jack can do goes on "

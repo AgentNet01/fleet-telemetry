@@ -298,6 +298,31 @@ def _apply(h, who, app, name, rec, lid, f, pics):
     return {"listing_id": lid, "live": f"https://www.etsy.com/listing/{lid}", "changed": (["images"] if pics else []) + list(data)}
 
 
+def _item(title):
+    """The item a title names: its first three words that aren't sizes, counts or filler."""
+    # ponytail: first-3-words match, catches "Silicone Stretch Lids Set of 6" vs "... 6 Pack"; a smarter match if
+    # agents start posting true duplicates under reworded titles
+    words = [w for w in re.findall(r"[a-z]+", title.lower()) if w not in _FILLER and len(w) > 1]
+    return " ".join(words[:3])
+
+
+_FILLER = {"set", "of", "pack", "pcs", "pc", "piece", "the", "a", "an", "and", "for", "with", "cm", "mm", "in"}
+
+
+def _twin(app, tok, shop, title):
+    """A live listing in the shop selling the same item, or None. Oct 20: three agents posted silicone stretch lids
+    and two posted makeup pads within an hour; the hub's product list didn't show listings posted without a product."""
+    want, offset = _item(title), 0
+    while True:
+        page = _get(app, tok, f"{API}/shops/{shop}/listings?state=active&limit=100&offset={offset}").get("results", [])
+        for l in page:
+            if _item(l.get("title", "")) == want:
+                return l
+        if len(page) < 100:
+            return None
+        offset += 100
+
+
 def post(h, who, f, image):
     """An agent's listing, put live on Etsy with its pictures (and, for a download, its files).
     f: title, description, price, tags, category, kind physical|download, quantity, product, images, files, plus any
@@ -315,6 +340,11 @@ def post(h, who, f, image):
             raise ValueError(f"missing {k}")
     rec = _fresh(h, app, rec)
     shop, tok = rec["shop_id"], rec["access"]
+    twin = _twin(app, tok, shop, f["title"])
+    if twin:
+        raise ValueError(f"the shop already sells this: listing {twin['listing_id']} \"{twin.get('title', '')[:80]}\" "
+                         f"https://www.etsy.com/listing/{twin['listing_id']} is live. Pick a different item, or improve that "
+                         "listing with fleet etsy update instead")
     data = {k: v for k, v in f.items() if k not in ("images", "files", "category", "kind", "product", "tags")}
     data.update(title=f["title"], taxonomy_id=_taxonomy(app, tok, f["category"]), type=kind,
                 quantity=f.get("quantity") or (999 if kind == "download" else 99),
