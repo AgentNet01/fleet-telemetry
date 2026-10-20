@@ -67,6 +67,29 @@ Pink-on-pink and similar color-ambiguous cases need `--quad`.
 `Pillow`, `numpy`, `opencv-python-headless` (for `--auto` only).
 Pure-Python + PIL otherwise; runs on CPU.
 
+## Batch mode (v4 P1, task #5538)
+
+```bash
+python3 banner_composite.py --batch <scene-dir> --text "Happy Birthday Emma!" \
+  --out <output-dir> [--min-confidence 0.78]
+```
+
+Runs the v4 P0 detector gate over every image in `<scene-dir>`:
+
+- **Accepted** scenes (winner clears the calibrated confidence floor —
+  0.78 by default, `--min-confidence` overrides — and no distinct runner-up
+  within the ambiguity margin) are composited to
+  `<output-dir>/<stem>-composite.png`.
+- **Rejected** scenes are skipped; a `<stem>-candidates.png` debug image
+  shows what the detector saw and why it refused.
+- **Every decision is logged** to `<output-dir>/decisions.jsonl`, one JSON
+  line per scene: `{scene, decision, confidence, margin, reason, output}`.
+- The run prints a summary with the **reject rate** for the set.
+
+Use it as the regression gate for scene generation: generate a batch of
+blank scenes, run batch mode, and read the reject rate before any of the
+scenes reach a listing.
+
 ## Samples (task #4062)
 
 Run on existing #3831 scenes (which already had text baked in from the

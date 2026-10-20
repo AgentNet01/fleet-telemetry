@@ -448,14 +448,112 @@ def composite(scene_path, text, quad, out_path, blend="luminance",
           f"(blend={blend}, warp={warp}, curve={curve}, blur={blur}, v1={v1})")
 
 
+# ---------------------------------------------------------------------------
+# Batch mode (v4 P1, task #5538): detector-gated run over a scene set
+# ---------------------------------------------------------------------------
+
+IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def preflight_decision(cands, near_miss, floor):
+    """The v4 P0 gate as a pure decision (#5538, shared by main + batch).
+
+    Returns (accept: bool, reason: str). Mirrors main()'s exit-2/exit-3
+    logic exactly: no quad at all, near-miss only, ambiguous runner-up,
+    or winner below the confidence floor are all rejects.
+    """
+    if not cands and not near_miss:
+        return False, "no banner quad found"
+    if not cands:
+        return False, (f"no single banner-like quad "
+                       f"({len(near_miss)} near-miss fit(s) rejected by "
+                       f"scoring constraints)")
+    winner = cands[0]
+    if len(cands) > 1:
+        margin = winner.score - cands[1].score
+        if margin < AMBIGUITY_MARGIN:
+            return False, (f"ambiguous scene: distinct runner-up within "
+                           f"{margin:.3f} (margin floor {AMBIGUITY_MARGIN})")
+    if winner.conf < floor:
+        return False, f"low confidence: {winner.conf:.3f} below floor {floor}"
+    return True, "accepted"
+
+
+def run_batch(scene_dir, text, out_dir, floor, blend="luminance",
+              warp="flat", curve=25.0, blur=0.8,
+              text_color=(20, 30, 80, 255)):
+    """Detector-gated batch composite over every scene in scene_dir.
+
+    Each scene is pre-flighted with the calibrated gate: accepted scenes
+    are composited into out_dir/<stem>-composite.png; rejected scenes are
+    skipped (a <stem>-candidates.png debug image is written instead).
+    Every decision is logged as one JSON line in out_dir/decisions.jsonl:
+    {scene, decision, confidence, margin, reason, output}. Returns the
+    summary dict {total, accepted, rejected, reject_rate}.
+    """
+    import json
+    os.makedirs(out_dir, exist_ok=True)
+    scenes = sorted(f for f in os.listdir(scene_dir)
+                    if f.lower().endswith(IMG_EXTS))
+    log_path = os.path.join(out_dir, "decisions.jsonl")
+    accepted = rejected = 0
+    with open(log_path, "w") as log:
+        for name in scenes:
+            scene_path = os.path.join(scene_dir, name)
+            stem = os.path.splitext(name)[0]
+            cands, near_miss = detect_candidates(scene_path)
+            winner = cands[0] if cands else None
+            margin = (winner.score - cands[1].score
+                      if len(cands) > 1 else None)
+            ok, reason = preflight_decision(cands, near_miss, floor)
+            entry = {"scene": name,
+                     "decision": "accept" if ok else "reject",
+                     "confidence": (round(winner.conf, 3)
+                                    if winner else None),
+                     "margin": (round(margin, 3)
+                                if margin is not None else None),
+                     "reason": reason,
+                     "output": None}
+            if ok:
+                out_path = os.path.join(out_dir, stem + "-composite.png")
+                composite(scene_path, text, winner.quad, out_path,
+                          blend=blend, warp=warp, curve=curve, blur=blur,
+                          text_color=text_color)
+                entry["output"] = os.path.basename(out_path)
+                accepted += 1
+            else:
+                write_candidates_debug(
+                    scene_path, cands, near_miss,
+                    os.path.join(out_dir, stem + "-candidates.png"))
+                rejected += 1
+            log.write(json.dumps(entry) + "\n")
+            print(f"{entry['decision'].upper():6} {name}: {reason}"
+                  + (f" (conf={entry['confidence']})" if winner else ""))
+    total = accepted + rejected
+    summary = {"total": total, "accepted": accepted, "rejected": rejected,
+               "reject_rate": (rejected / total if total else 0.0)}
+    print(f"batch summary: {total} scene(s), {accepted} accepted, "
+          f"{rejected} rejected, reject rate "
+          f"{summary['reject_rate']:.1%} (floor {floor}); "
+          f"decisions logged to {log_path}")
+    return summary
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Deterministic banner-text compositing "
                     "(tasks #3831 + #4010 + #4017).")
-    ap.add_argument("--scene", required=True, help="Background scene image")
+    ap.add_argument("--scene", help="Background scene image")
     ap.add_argument("--text", required=True, help="Banner text (exact)")
-    ap.add_argument("--out", required=True, help="Output PNG path")
-    corners = ap.add_mutually_exclusive_group(required=True)
+    ap.add_argument("--out",
+                    help="Output PNG path (batch mode: output directory)")
+    ap.add_argument("--batch", metavar="DIR",
+                    help="Batch mode (v4 P1, #5538): run the detector "
+                         "gate over every scene in DIR, composite the "
+                         "accepted ones into --out (a directory), log "
+                         "every accept/reject to <out>/decisions.jsonl "
+                         "and print the reject rate")
+    corners = ap.add_mutually_exclusive_group(required=False)
     corners.add_argument("--auto", action="store_true",
                          help="Detect banner corners automatically (#4010)")
     corners.add_argument("--quad", nargs=4, metavar="X,Y",
@@ -483,6 +581,22 @@ def main():
                          f"rejected with exit 3 (default floor: "
                          f"{DEFAULT_MIN_CONFIDENCE})")
     a = ap.parse_args()
+
+    color = tuple(map(int, a.color.split(","))) + (255,)
+    floor = (DEFAULT_MIN_CONFIDENCE if a.min_confidence is None
+             else a.min_confidence)
+
+    if a.batch:
+        if not a.out:
+            ap.error("--batch needs --out DIR (output directory)")
+        run_batch(a.batch, a.text, a.out, floor, blend=a.blend,
+                  warp=a.warp, curve=a.curve, blur=0 if a.v1 else a.blur,
+                  text_color=color)
+        return
+    if not a.scene or not a.out:
+        ap.error("--scene and --out are required (or use --batch DIR)")
+    if not a.auto and not a.quad:
+        ap.error("one of --auto or --quad is required")
 
     if a.auto:
         root, _ = os.path.splitext(a.out)
