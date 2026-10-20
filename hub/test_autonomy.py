@@ -528,6 +528,26 @@ def live_done():
     print("live_done OK")
 
 
+def scout():
+    """Jack, Oct 20: "if they're blocked like that why don't they go research and discover new products?" A free
+    agent with nothing to take is sent to find and post one, once per PLAN_WAIT; a busy agent and the chair aren't."""
+    h, muse, clock = new_hub("Cee", "Ada", "Bo")
+    h.seat("ceo", "Cee")
+    prj = h.add_project(h.add_product("Cups", brief="cups", pm="Cee"), "launch")
+    h.add_task(prj, "busy", "engineer", "x", owner="Bo")
+    h.tick()
+    scouts = lambda n: [m for m in muse.sent.get(n, []) if hub.Hub.SCOUT in m]
+    assert not scouts("Ada"), "scout: not the moment an agent goes free"
+    clock.go(hub.SCOUT_AFTER + 1); h.tick(); h.tick()
+    assert len(scouts("Ada")) == 1 and "Cups" in scouts("Ada")[0] and "under $10" in scouts("Ada")[0], muse.sent.get("Ada")
+    assert not scouts("Bo"), "scout: a busy agent keeps its task"
+    clock.go(3600); h.tick()
+    assert len(scouts("Ada")) == 1, "scout: once per PLAN_WAIT, not every tick"
+    clock.go(hub.PLAN_WAIT); h.tick(); h.tick()
+    assert len(scouts("Ada")) == 2, "scout: again while it stays free"
+    print("scout OK")
+
+
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "ask_up": ask_up, "overdue": overdue, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain, "unjoined": unjoined, "live_done": live_done}[sys.argv[1]]()
+     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "ask_up": ask_up, "overdue": overdue, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain, "unjoined": unjoined, "live_done": live_done, "scout": scout}[sys.argv[1]]()

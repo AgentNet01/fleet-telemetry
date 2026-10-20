@@ -275,7 +275,9 @@ def seats():
     h.seat("ceo", "dot")
     clock.go(13 * 3600); h.tick()
     assert any("W1" in m for m in muse.sent.get("dot", [])), f"seats: dot (over Slack) gets it: {muse.sent.get('dot')}"
-    assert not any(n in muse.sent for n in ("W1", "W2", "W3", "W4")), "idle agents themselves are never pinged"
+    # Jack, Oct 20: the one thing they may get is work, the find-a-new-product item
+    assert not [m for n in ("W1", "W2", "W3", "W4") for m in muse.sent.get(n, []) if hub.Hub.SCOUT not in m], \
+        "idle agents themselves are never pinged except with work"
     print("seats OK")
 
 

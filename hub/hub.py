@@ -190,7 +190,7 @@ MIGRATIONS = [
 ]
 WORKERS = ("muse", "poll")            # kinds that take tasks; 'slack' (dot) and 'jack' (the board) don't
 PUSH = ("muse", "slack")              # kinds the hub sends to; 'poll' agents fetch with `fleet inbox`
-ONE_SHOT = ("note", "task", "verify", "nudge", "plan")
+ONE_SHOT = ("note", "task", "verify", "nudge", "plan", "scout")
 # Waiting FYIs go to an agent as one message (Jack, Oct 14: ~30 queued for one PM, a turn each). muse-cli takes the
 # text as a Windows command-line argument (~32k chars) and sends one frame (<= 64 KB), so a digest stays well under.
 DIGEST_CHARS = 20000
@@ -268,6 +268,7 @@ STANDIN_AFTER = 3 * 3600              # a CEO silent this long is stood in for b
 # tasks in an active product: a paused (or removed) product is kept, but nobody is handed its work
 LIVE_TASKS = "from tasks t join projects j on t.project=j.id join products p on j.product=p.id where p.status='active'"
 REVIEW_WAIT = 2 * 3600                # a PM's company change the CEO hasn't answered goes ahead after this
+SCOUT_AFTER = 30 * 60                # free this long with nothing to take: sent to find a new product
 PLAN_WAIT = 2 * 3600                  # a PM silent this long on an unplanned product: a free agent plans it
 CEO_IDLE_COUNT = 3                    # more than this many idle workers → the CEO hears about it
 NUDGES = (                            # same meaning, different words: agents tune out a repeated message
@@ -461,6 +462,8 @@ class Hub:
                     f"made (`fleet task show {t}` shows the list).")
         if kind == "plan":
             return f"{head}[fleet #{iid} · planner]\n{body}"
+        if kind == "scout":
+            return f"{head}[fleet #{iid} · new product]\n{body}"
         if kind == "screen":
             return (f"{head}[fleet #{iid} · for Jack? you decide]\n{body}\n"
                     f"— You decide what reaches Jack. If an agent can decide it (which supplier, which tool, wording, "
@@ -537,6 +540,7 @@ class Hub:
             self._watch_jobs()
             self._reviews()
             self._dry()
+            self._scout()
             self._screen_timeouts()
             agents = [dict(a) for a in self.db.execute(
                 "select * from agents where kind in ('muse','poll','slack') and state != 'parked' order by name")]
@@ -1345,6 +1349,33 @@ class Hub:
                              "and add them: fleet task add <project id> \"<title>\" <role> \"<done when>\" "
                              "(fleet project add first if it needs a new one). Every agent can take any product's task. "
                              f"If nothing is added within {PLAN_WAIT // 3600} h, a free agent is asked to plan it instead.")
+
+    SCOUT = "Find a new product and post it live"
+
+    def _scout(self):
+        """Jack, Oct 20: free agents sat idle while every listing was live and ~900 tasks waited on social accounts that
+        don't exist. A free agent with nothing to pick up for SCOUT_AFTER is sent to find and post a new sub-$10 product,
+        at most once per PLAN_WAIT. The chair is left to run the company."""
+        now, chair = self.clock(), self._chair()
+        shop = ", ".join(r["name"] for r in self.db.execute("select name from products where status='active' order by id"))
+        for n in self._idle():
+            a = self._agent(n)
+            if n == chair or a["kind"] != "muse" or not a["free_since"] or now - a["free_since"] < SCOUT_AFTER:
+                continue
+            # a PM whose own product isn't live yet gets that live first (the planning asks cover it)
+            if self.db.execute("select 1 from products where pm=? and status='active' and coalesce(listing_state,'') != 'active'",
+                               (n,)).fetchone():
+                continue
+            if self.db.execute("select 1 from items where too=? and kind='scout' and created > ?", (n, now - PLAN_WAIT)).fetchone():
+                continue
+            self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('scout','hub',?,?,0,'queued',?)",
+                            (n, f"{self.SCOUT}\nNothing is waiting for you, so research and launch a NEW product: a cheap item "
+                                "under $10 (AliExpress or similar dropship suppliers are fine, free US shipping, good reviews) "
+                                f"that is not already in the shop. Already in the shop: {shop}.\n"
+                                "Add it with `fleet product add \"<name>\" \"<brief with supplier, cost, price, margin>\"`, then post "
+                                "the listing live with `fleet etsy post` (real supplier photos, title, 13 tags, price). Don't add "
+                                "docs, audits or promo tasks for listings that are already live. Anything only Jack can do goes on "
+                                "his list; no purchase before a customer pays.", now))
 
     def _projects_line(self, pid):
         return ", ".join(f"#{j['id']} {j['name']}" for j in self.db.execute(

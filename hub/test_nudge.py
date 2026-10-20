@@ -79,7 +79,9 @@ def idle_silent():
     h, muse, clock, prj = world()
     h.tick()
     hours(h, clock, 48)
-    assert not muse.sent.get("Ada"), f"nudge: an agent with no task is never messaged: {muse.sent.get('Ada')}"
+    # Jack, Oct 20: the one thing it may get is work, the find-a-new-product item
+    chatter = [m for m in muse.sent.get("Ada", []) if hub.Hub.SCOUT not in m]
+    assert not chatter, f"nudge: an agent with no task is never messaged except with work: {chatter}"
     print("idle_silent OK")
 
 
@@ -168,7 +170,7 @@ def ceo_only():
     h, muse, clock, names = ceo_world(5)
     hours(h, clock, 30)
     # Jack, Oct 13: no check-ins — the one thing an idle agent may get is work: the acting-planner item
-    chatter = [m for n in names for m in muse.sent.get(n, []) if "acting planner" not in m and "switch to" not in m]
+    chatter = [m for n in names for m in muse.sent.get(n, []) if "acting planner" not in m and "switch to" not in m and hub.Hub.SCOUT not in m]
     assert not chatter, f"CEO: idle agents themselves are never messaged except with work: {chatter}"
     print("ceo_only OK")
 
