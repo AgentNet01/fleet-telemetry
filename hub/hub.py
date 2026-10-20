@@ -1297,7 +1297,8 @@ class Hub:
                         self.db.execute("select name, pm from products where status='active' order by id"))
         self._deliver_to(ceo, f"{len(idle)} agents have had no task for over 12 hours",
                          f"{who}\n\nProducts and PMs:\n{pms or '- (no products yet)'}\n"
-                         "Ask the PMs for work these agents can take, or add tasks yourself.")
+                         "Products with a live Etsy listing are done; put these agents on NEW products (cheap items under $10, "
+                         "AliExpress or similar dropship suppliers are fine), each added and posted live by the agent.")
 
     def _dry(self):
         """A product with nothing waiting to be picked up while agents sit idle gets planned, by rounds: its PM
@@ -1316,8 +1317,10 @@ class Hub:
                 self.db.execute("delete from grants where agent=? and level=?", (row["planner"], "plan:" + p["name"]))
             if queued or not idle:
                 continue
+            # Jack, Oct 20: a live listing is done; planning it more only bred docs, audits and promo copy
+            live = p["listing_state"] == "active"
             if row and not landed:
-                if row["stage"] == "pm" and now - row["at"] >= PLAN_WAIT:
+                if row["stage"] == "pm" and now - row["at"] >= PLAN_WAIT and not live:
                     asked = p["pm"] or self._chair()
                     self._plan_by_agent(p, [n for n in idle if n != asked], row)
                 if now - row["at"] < (2 * PLAN_WAIT if row["stage"] == "planner" else IDLE_AFTER):
@@ -1328,6 +1331,14 @@ class Hub:
             if row and row["planner"]:
                 self.db.execute("delete from grants where agent=? and level=?", (row["planner"], "plan:" + p["name"]))
             self.db.execute("insert or replace into dry_notes(product, at, stage, planner) values(?,?,'pm',null)", (p["id"], now))
+            if live:
+                self._deliver_to(who, f"{p['name']} is live on Etsy and {len(idle)} agents are free",
+                                 "Its listing is done: don't add docs, audits, copy, pins or re-checks for it. Add work here "
+                                 "only for a real problem on the live listing (wrong info, missing photos). Put the free agents "
+                                 "on a NEW product instead: a cheap item under $10 (AliExpress or similar dropship suppliers "
+                                 "are fine) not already in the shop, `fleet product add` it, and post the listing live with "
+                                 "`fleet etsy post`. Anything only Jack can do goes on his list; no purchase before a customer pays.")
+                continue
             self._deliver_to(who, f"{p['name']} has no work lined up and {len(idle)} agents are free",
                              f"Goal: {p['metric'] or '(none set)'}. {p['brief'] or ''}\nProjects: {self._projects_line(p['id'])}\n"
                              "Plan the next steps, especially work that can run alongside what's in progress or waiting, "

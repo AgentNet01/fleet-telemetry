@@ -511,6 +511,23 @@ def chain():
     print("chain OK")
 
 
+def live_done():
+    """Jack, Oct 20: every product with a live listing was planned again every 2 h, so agents filled them with docs,
+    audits and Pinterest batch 31. A live listing gets one ask to start a NEW product, and never an acting planner."""
+    h, muse, clock = new_hub("Pm", "Ada", "Bo")
+    pid = h.add_product("Cups", brief="cups", pm="Pm")
+    h.add_project(pid, "launch")
+    h.db.execute("update products set listing_state='active' where id=?", (pid,))
+    h.tick(); h.tick()
+    told = muse.sent.get("Pm", [])
+    assert any("is live on Etsy" in m and "NEW product" in m for m in told), f"live: the PM is pointed at new products: {told}"
+    assert not any("no work lined up" in m for m in told), f"live: no ask to plan more for it: {told}"
+    clock.go(3 * 3600); h.tick(); h.tick()
+    assert not any("acting planner" in m for n in ("Ada", "Bo") for m in muse.sent.get(n, [])), "live: no acting planner"
+    assert len(muse.sent.get("Pm", [])) == len(told), "live: asked once per round, not every tick"
+    print("live_done OK")
+
+
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "ask_up": ask_up, "overdue": overdue, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain, "unjoined": unjoined}[sys.argv[1]]()
+     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "ask_up": ask_up, "overdue": overdue, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain, "unjoined": unjoined, "live_done": live_done}[sys.argv[1]]()
