@@ -517,7 +517,7 @@ def live_done():
     h, muse, clock = new_hub("Pm", "Ada", "Bo")
     pid = h.add_product("Cups", brief="cups", pm="Pm")
     h.add_project(pid, "launch")
-    h.db.execute("update products set listing_state='active' where id=?", (pid,))
+    h.db.execute("update products set listing_state='active', link='https://www.etsy.com/listing/1' where id=?", (pid,))
     h.tick(); h.tick()
     told = muse.sent.get("Pm", [])
     assert any("is live on Etsy" in m and "NEW product" in m for m in told), f"live: the PM is pointed at new products: {told}"
@@ -525,6 +525,18 @@ def live_done():
     clock.go(3 * 3600); h.tick(); h.tick()
     assert not any("acting planner" in m for n in ("Ada", "Bo") for m in muse.sent.get(n, [])), "live: no acting planner"
     assert len(muse.sent.get("Pm", [])) == len(told), "live: asked once per round, not every tick"
+    # taken down: one ask to get it live again, still no acting planner; a shared tool is never planned
+    h.db.execute("update products set listing_state='inactive' where id=?", (pid,))
+    h.db.execute("delete from dry_notes")
+    tool = h.add_product("Fulfillment", brief="ship orders", pm="Pm")
+    h.add_project(tool, "ops")
+    h.db.execute("update products set kind='tool' where id=?", (tool,))
+    h.tick(); h.tick()
+    assert any("is inactive" in m and "live again" in m for m in muse.sent.get("Pm", [])), f"live: taken down: {muse.sent.get('Pm')}"
+    clock.go(3 * 3600); h.tick(); h.tick()
+    assert not any("acting planner" in m for n in ("Ada", "Bo") for m in muse.sent.get(n, [])), "taken down: no acting planner"
+    assert not [m for m in muse.sent.get("Pm", []) if "Fulfillment" in m and ("no work lined up" in m or "is live" in m)], \
+        f"a shared tool isn't planned on its own: {[m[:120] for m in muse.sent.get('Pm', []) if 'Fulfillment' in m]}"
     print("live_done OK")
 
 

@@ -1321,8 +1321,11 @@ class Hub:
                 self.db.execute("delete from grants where agent=? and level=?", (row["planner"], "plan:" + p["name"]))
             if queued or not idle:
                 continue
-            # Jack, Oct 20: a live listing is done; planning it more only bred docs, audits and promo copy
-            live = p["listing_state"] == "active"
+            # Jack, Oct 20: a posted listing is done; planning it more only bred docs, audits and promo copy. Shared tools
+            # (fulfillment, image generation) aren't planned on their own: with no order yet they only bred SOPs
+            if p["kind"] == "tool":
+                continue
+            live = bool(p["link"])
             if row and not landed:
                 if row["stage"] == "pm" and now - row["at"] >= PLAN_WAIT and not live:
                     asked = p["pm"] or self._chair()
@@ -1335,6 +1338,12 @@ class Hub:
             if row and row["planner"]:
                 self.db.execute("delete from grants where agent=? and level=?", (row["planner"], "plan:" + p["name"]))
             self.db.execute("insert or replace into dry_notes(product, at, stage, planner) values(?,?,'pm',null)", (p["id"], now))
+            if live and p["listing_state"] not in ("active", None):
+                self._deliver_to(who, f"{p['name']}'s Etsy listing is {p['listing_state']}",
+                                 "Get it live again and nothing else: fix what took it down and set it active with `fleet etsy "
+                                 "update`, or repost it with `fleet etsy post`. Don't add docs, audits, copy or pins for it. "
+                                 "Free agents go to NEW products under $10.")
+                continue
             if live:
                 self._deliver_to(who, f"{p['name']} is live on Etsy and {len(idle)} agents are free",
                                  "Its listing is done: don't add docs, audits, copy, pins or re-checks for it. Add work here "
