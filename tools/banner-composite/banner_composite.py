@@ -9,6 +9,13 @@ Consolidates:
          quad fit -> scoring), with --quad as manual fallback
   #4017  v2 realism: luminance-multiply blend (text picks up fabric shading),
          Gaussian blur softening, optional curved-fabric warp
+  #5257  v4 P0: scene pre-flight validation + detector confidence score.
+         --auto now collects ALL candidate quads; if the best candidate is
+         weak (low absolute score) or a runner-up is nearly as good
+         (ambiguous scene, e.g. multi-panel), the run exits 3 and writes a
+         candidates debug image instead of silently compositing onto the
+         wrong target. The winner's confidence score is always printed;
+         --min-confidence lets pipelines set their own floor.
 
 Usage:
     python3 banner_composite.py --scene SCENE.png --text "Happy Birthday!" \\
@@ -35,7 +42,19 @@ Flags:
                       for comparison with the #3831 prototype behavior.
     --color           text RGB, e.g. "20,30,80" (default: dark navy).
     --debug           with --auto: write <out>-debug.png showing the
-                      detected quad overlay.
+                      detected quad overlay (and, on pre-flight failure,
+                      all candidate quads).
+    --min-confidence  minimum detector confidence (winner, 0-1) required
+                      to proceed with --auto (default: built-in floor).
+                      Below it the scene is rejected with exit 3.
+
+Exit codes (v4 P0, task #5257):
+    0  success
+    1  usage / runtime error
+    2  --auto found no banner quad at all
+    3  pre-flight rejection: scene is ambiguous (multiple comparable
+       candidate quads) or best candidate is below the confidence floor.
+       A <out>-candidates.png debug image shows every candidate + score.
 """
 
 import argparse
@@ -48,8 +67,18 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 
 # ---------------------------------------------------------------------------
-# Corner detection (#4010)
+# Corner detection (#4010) + v4 P0 pre-flight validation (#5257)
 # ---------------------------------------------------------------------------
+
+# Pre-flight thresholds (#5257). A scene is ambiguous when a second *distinct*
+# candidate (IoU < IOU_DISTINCT with the winner) scores within
+# AMBIGUITY_MARGIN of the winner. The winner's confidence must also clear
+# the floor (DEFAULT_MIN_CONFIDENCE, overridable via --min-confidence).
+# Thresholds calibrated on the 5 #4010 test scenes; see DEPLOYMENT-5257 notes.
+AMBIGUITY_MARGIN = 0.15
+DEFAULT_MIN_CONFIDENCE = 0.75
+IOU_DISTINCT = 0.5  # IoU above this: two quads are the same region
+
 
 def _kmeans_colors(pixels, k=5, attempts=3):
     """k-means via cv2 on an (N,3) float32 BGR sample -> (k,3) centers."""
@@ -59,6 +88,61 @@ def _kmeans_colors(pixels, k=5, attempts=3):
                                     criteria, attempts,
                                     cv2.KMEANS_PP_CENTERS)
     return centers
+
+
+def _quad_metrics(quad):
+    """(aspect, rectangularity) of a 4-point quad. aspect = mean top/bottom
+    edge over mean left/right edge; rectangularity = 1 - mean |angle-90|/90."""
+    pts = np.array(quad, dtype=float)
+    edges = [np.linalg.norm(pts[(i + 1) % 4] - pts[i]) for i in range(4)]
+    w_est = (edges[0] + edges[2]) / 2
+    h_est = (edges[1] + edges[3]) / 2
+    aspect = w_est / max(h_est, 1e-6)
+
+    def angle(a, b, c):
+        v1, v2 = a - b, c - b
+        cosang = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-9)
+        return math.degrees(math.acos(np.clip(cosang, -1, 1)))
+    angs = [angle(pts[i], pts[(i + 1) % 4], pts[(i + 2) % 4]) for i in range(4)]
+    rect = 1.0 - sum(abs(a - 90) for a in angs) / 360.0
+    return aspect, rect
+
+
+def _quad_iou(q1, q2, h, w):
+    """Intersection-over-union of two quads on an h×w canvas."""
+    import cv2
+    m1 = np.zeros((h, w), np.uint8)
+    m2 = np.zeros((h, w), np.uint8)
+    cv2.fillPoly(m1, [np.array(q1, dtype=np.int32)], 1)
+    cv2.fillPoly(m2, [np.array(q2, dtype=np.int32)], 1)
+    inter = np.logical_and(m1 > 0, m2 > 0).sum()
+    union = np.logical_or(m1 > 0, m2 > 0).sum()
+    return inter / max(union, 1)
+
+
+def _fill_ratio(mask, quad, h, w):
+    """Fraction of the quad's area covered by its own color mask (#5257).
+    Real banners are solid: fill near 1. Loose fits (blobs, drapes) score low."""
+    import cv2
+    m = np.zeros((h, w), np.uint8)
+    cv2.fillPoly(m, [np.array(quad, dtype=np.int32)], 1)
+    inside = np.logical_and(mask > 0, m > 0).sum()
+    return inside / max(m.sum(), 1)
+
+
+def _confidence(aspect, fill, rect):
+    """Detector confidence 0..1 for a candidate quad (#5257, V4-2).
+
+    Combines three independent signals:
+      aspect: full credit for wide banners (>= 1.5), linear ramp from the
+              1.2 scoring floor (drapes/blobs tend to sit near 1.2-1.3)
+      fill:   color-mask coverage of the quad (solid banners ~1.0)
+      rect:   corner angles near 90 deg
+    Calibrated so #4010 backyard (0.99) and garden (0.91) pass the 0.75
+    floor while dining drape (0.58) and living junk quads (~0.70) fail.
+    """
+    aspect_s = min(max((aspect - 1.2) / 0.3, 0.0), 1.0)
+    return 0.20 * aspect_s + 0.35 * fill + 0.45 * rect
 
 
 def _score_quad(quad, img_w, img_h):
@@ -106,11 +190,38 @@ def _order_corners(pts):
     return [tuple(tl), tuple(tr), tuple(br), tuple(bl)]
 
 
-def detect_corners(scene_path, debug_path=None):
-    """Automatic banner-corner detection (#4010 method).
+class Candidate:
+    """One detected quad candidate (#5257)."""
+    __slots__ = ("quad", "score", "color", "aspect", "fill", "rect", "conf")
 
-    Returns [(x1,y1), (x2,y2), (x3,y3), (x4,y4)] as TL, TR, BR, BL,
-    or None if no plausible quad is found.
+    def __init__(self, quad, score, color, aspect, fill, rect, conf):
+        self.quad = quad
+        self.score = score
+        self.color = color
+        self.aspect = aspect
+        self.fill = fill
+        self.rect = rect
+        self.conf = conf
+
+
+class NearMiss:
+    """A 4-point fit that violated the detector's hard constraints (#5257)."""
+    __slots__ = ("quad", "reason")
+
+    def __init__(self, quad, reason):
+        self.quad = quad
+        self.reason = reason
+
+
+def detect_candidates(scene_path):
+    """Automatic banner-corner detection (#4010 method), all candidates.
+
+    Returns (valid, near_miss):
+      valid     list of Candidate, sorted by score descending, near-duplicate
+                regions removed (IoU >= IOU_DISTINCT; highest score kept)
+      near_miss list of NearMiss: 4-point fits rejected by the hard scoring
+                constraints (kept so pre-flight can show *why* a scene with
+                visible banner-like regions still failed — task #5257)
     """
     import cv2
     img = cv2.imread(scene_path)
@@ -126,7 +237,8 @@ def detect_corners(scene_path, debug_path=None):
     candidates = [tuple(map(float, c)) for c in centers]
     candidates.append(tuple(map(float, np.median(center_patch, axis=0))))
 
-    best, best_score = None, float("-inf")
+    valid = []    # Candidate: best valid-eps fit per candidate color
+    near_miss = []  # NearMiss: best rejected fit per candidate color
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     for bgr in candidates:
         lower = np.array([max(0, c - 28) for c in bgr], dtype=np.uint8)
@@ -142,27 +254,80 @@ def detect_corners(scene_path, debug_path=None):
         if cv2.contourArea(cnt) < 0.02 * w * h:
             continue
         hull = cv2.convexHull(cnt)
+        best_quad, best_score = None, float("-inf")
+        rej_quad, rej_reason = None, ""
         for eps in (0.01, 0.02, 0.04):
             peri = cv2.arcLength(hull, True)
             approx = cv2.approxPolyDP(hull, eps * peri, True)
             if len(approx) != 4:
                 continue
             quad = _order_corners([tuple(p[0]) for p in approx])
+            aspect, rect = _quad_metrics(quad)
             score = _score_quad(quad, w, h)
-            if score > best_score:
-                best, best_score = quad, score
-    if best is None:
+            if score > float("-inf"):
+                if score > best_score:
+                    fill = _fill_ratio(mask, quad, h, w)
+                    best_quad, best_score = quad, score
+                    best_meta = (bgr, aspect, fill, rect,
+                                 _confidence(aspect, fill, rect))
+            else:
+                rej_quad = quad
+                if aspect < 1.2 or aspect > 6.0:
+                    rej_reason = f"aspect {aspect:.2f} outside 1.2-6.0"
+                else:
+                    rej_reason = "edge too short (<20px)"
+        if best_quad is not None:
+            bgr, aspect, fill, rect, conf = best_meta
+            valid.append(Candidate(best_quad, best_score, bgr, aspect, fill,
+                                   rect, conf))
+        elif rej_quad is not None:
+            near_miss.append(NearMiss(rej_quad, rej_reason))
+
+    # Dedupe: different colors can yield the same region. Quads with
+    # IoU >= IOU_DISTINCT are the same physical region; keep the best.
+    valid.sort(key=lambda c: c.score, reverse=True)
+    deduped = []
+    for c in valid:
+        if any(_quad_iou(c.quad, d.quad, h, w) >= IOU_DISTINCT
+               for d in deduped):
+            continue
+        deduped.append(c)
+    return deduped, near_miss
+
+
+def write_candidates_debug(scene_path, candidates, near_misses, debug_path):
+    """Draw every candidate quad on the scene (#5257): winner green with its
+    confidence, runners-up yellow, rejected near-misses orange."""
+    import cv2
+    img = cv2.imread(scene_path)
+    for i, c in enumerate(candidates):
+        pts = np.array(c.quad, dtype=np.int32)
+        color = (0, 255, 0) if i == 0 else (0, 255, 255)
+        cv2.polylines(img, [pts], True, color, 3)
+        x, y = int(pts[0][0]), int(pts[0][1])
+        cv2.putText(img, f"#{i} conf={c.conf:.2f}", (x, max(0, y - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+    for nm in near_misses:
+        pts = np.array(nm.quad, dtype=np.int32)
+        cv2.polylines(img, [pts], True, (0, 165, 255), 2)
+        x, y = int(pts[0][0]), int(pts[0][1])
+        cv2.putText(img, f"nm: {nm.reason}", (x, max(0, y - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+    cv2.imwrite(debug_path, img)
+
+
+def detect_corners(scene_path, debug_path=None):
+    """Automatic banner-corner detection (#4010 method).
+
+    Returns [(x1,y1), (x2,y2), (x3,y3), (x4,y4)] as TL, TR, BR, BL,
+    or None if no plausible quad is found. (Unchanged v3 contract.)
+    """
+    cands, _nm = detect_candidates(scene_path)
+    if not cands:
         return None
     if debug_path:
-        dbg = img.copy()
-        pts = np.array(best, dtype=np.int32)
-        cv2.polylines(dbg, [pts], True, (0, 255, 0), 3)
-        for i, (x, y) in enumerate(pts):
-            cv2.circle(dbg, (int(x), int(y)), 8, (0, 0, 255), -1)
-            cv2.putText(dbg, str(i), (int(x) + 10, int(y) - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-        cv2.imwrite(debug_path, dbg)
-    return best
+        write_candidates_debug(scene_path, cands, [], debug_path)
+    return cands[0].quad
 
 
 # ---------------------------------------------------------------------------
@@ -312,21 +477,57 @@ def main():
     ap.add_argument("--debug", action="store_true",
                     help="With --auto: write <out>-debug.png with the "
                          "detected quad overlay")
+    ap.add_argument("--min-confidence", type=float, default=None,
+                    help="Minimum detector confidence (winner, 0-1) to "
+                         "proceed with --auto. Below it the scene is "
+                         f"rejected with exit 3 (default floor: "
+                         f"{DEFAULT_MIN_CONFIDENCE})")
     a = ap.parse_args()
 
     if a.auto:
-        debug_path = None
-        if a.debug:
-            root, _ = os.path.splitext(a.out)
-            debug_path = root + "-debug.png"
-        quad = detect_corners(a.scene, debug_path=debug_path)
-        if quad is None:
+        root, _ = os.path.splitext(a.out)
+        cands, near_miss = detect_candidates(a.scene)
+        if not cands and not near_miss:
             print("ERROR: --auto found no banner quad; "
                   "re-run with --quad x1,y1 x2,y2 x3,y3 x4,y4",
                   file=sys.stderr)
             sys.exit(2)
+        floor = (DEFAULT_MIN_CONFIDENCE if a.min_confidence is None
+                 else a.min_confidence)
+        cand_path = root + "-candidates.png"
+
+        def preflight_fail(reason):
+            write_candidates_debug(a.scene, cands, near_miss, cand_path)
+            print(f"ERROR: pre-flight rejected scene: {reason}; "
+                  f"re-run with --quad x1,y1 x2,y2 x3,y3 x4,y4 or pick "
+                  f"another scene. Candidates in {cand_path}",
+                  file=sys.stderr)
+            sys.exit(3)
+
+        if not cands:
+            preflight_fail(f"no single banner-like quad "
+                           f"({len(near_miss)} near-miss fit(s) rejected "
+                           f"by scoring constraints)")
+        winner = cands[0]
+        runner = cands[1] if len(cands) > 1 else None
+        margin = winner.score - runner.score if runner else None
         print("detected quad: " +
-              " ".join(f"{x:.0f},{y:.0f}" for x, y in quad))
+              " ".join(f"{x:.0f},{y:.0f}" for x, y in winner.quad))
+        print(f"confidence={winner.conf:.3f} "
+              f"margin={'n/a' if margin is None else f'{margin:.3f}'} "
+              f"({len(cands)} candidate(s), {len(near_miss)} near-miss)")
+        # V4-1 pre-flight (#5257): reject ambiguous or weak detections
+        # instead of compositing onto the wrong target.
+        if margin is not None and margin < AMBIGUITY_MARGIN:
+            preflight_fail(f"ambiguous scene: distinct runner-up within "
+                           f"{margin:.3f} (margin floor {AMBIGUITY_MARGIN})")
+        elif winner.conf < floor:
+            preflight_fail(f"low confidence: {winner.conf:.3f} below floor "
+                           f"{floor}")
+        quad = winner.quad
+        if a.debug:
+            write_candidates_debug(a.scene, cands, near_miss,
+                                   root + "-debug.png")
     else:
         quad = [tuple(map(float, p.split(","))) for p in a.quad]
 
