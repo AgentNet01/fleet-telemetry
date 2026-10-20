@@ -171,6 +171,9 @@ def main():
     st, _, body = req("/api/etsy/post", listing, agent)
     assert st == 400 and "77" in body and "already sells" in body, f"etsy: a second listing of the same item is refused: {st} {body}"
     assert len([c for c in fake.calls if c[0] == "POST" and c[1].endswith("/shops/42/listings")]) == before, "etsy: and no draft is made"
+    fake.live = [{"listing_id": 78, "title": "Jade Roller and Gua Sha Set, Natural Stone Facial Massage Kit"}]
+    st, _, body = req("/api/etsy/post", dict(listing, title="Facial Roller and Gua Sha Set Black Resin"), agent)
+    assert st == 400 and "78" in body, f"etsy: the same item under a reworded title is refused too: {st} {body}"
     st, _, body = req("/api/etsy/post", dict(listing, title="Wooden Pinecone Gift Tags 50 Pack"), agent)
     assert st == 200, f"etsy: a different item still posts: {st} {body}"
     fake.live = []

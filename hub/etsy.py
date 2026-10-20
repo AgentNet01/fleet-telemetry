@@ -299,14 +299,20 @@ def _apply(h, who, app, name, rec, lid, f, pics):
 
 
 def _item(title):
-    """The item a title names: its first three words that aren't sizes, counts or filler."""
-    # ponytail: first-3-words match, catches "Silicone Stretch Lids Set of 6" vs "... 6 Pack"; a smarter match if
-    # agents start posting true duplicates under reworded titles
+    """The item a title names: its first four words that aren't sizes, counts or filler."""
     words = [w for w in re.findall(r"[a-z]+", title.lower()) if w not in _FILLER and len(w) > 1]
-    return " ".join(words[:3])
+    return frozenset(w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w for w in words[:4])
 
 
-_FILLER = {"set", "of", "pack", "pcs", "pc", "piece", "the", "a", "an", "and", "for", "with", "cm", "mm", "in"}
+def _same(a, b):
+    """Two titles name one item when most of their leading words agree: "Jade Roller and Gua Sha Set" and "Facial
+    Roller and Gua Sha Set" do, "Satin Sleep Bonnet" and "Satin Sleep Eye Mask" don't."""
+    # ponytail: word overlap on the first four words; a reworded title with no shared words still slips through
+    return bool(a and b) and len(a & b) / len(a | b) >= 0.6
+
+
+_FILLER = {"set", "of", "pack", "pcs", "pc", "piece", "the", "a", "an", "and", "for", "with", "from", "cm", "mm", "in",
+           "personalized", "custom", "customized", "photo", "picture", "name", "gift", "cute"}
 
 
 def _twin(app, tok, shop, title):
@@ -316,7 +322,7 @@ def _twin(app, tok, shop, title):
     while True:
         page = _get(app, tok, f"{API}/shops/{shop}/listings?state=active&limit=100&offset={offset}").get("results", [])
         for l in page:
-            if _item(l.get("title", "")) == want:
+            if _same(_item(l.get("title", "")), want):
                 return l
         if len(page) < 100:
             return None
