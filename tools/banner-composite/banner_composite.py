@@ -76,7 +76,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 # the floor (DEFAULT_MIN_CONFIDENCE, overridable via --min-confidence).
 # Thresholds calibrated on the 5 #4010 test scenes; see DEPLOYMENT-5257 notes.
 AMBIGUITY_MARGIN = 0.15
-DEFAULT_MIN_CONFIDENCE = 0.75
+DEFAULT_MIN_CONFIDENCE = 0.78
 IOU_DISTINCT = 0.5  # IoU above this: two quads are the same region
 
 
