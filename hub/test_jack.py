@@ -491,4 +491,25 @@ def tidy():
     print("tidy OK")
 
 
-{"said_not_raised": said_not_raised, "busy_ceo": busy_ceo, "actionable": actionable, "listed": listed, "newpm": newpm, "keys": keys, "pmwait": pmwait, "repeat": repeat, "tidy": tidy, "pm": pm, "steps": steps, "reply": reply, "tools": tools, "doc": doc, "show": show, "plain": plain, "since": since, "ui": ui}[sys.argv[1]]()
+def vault_held():
+    """Jack, Oct 20: "I'm 100% sure I've already done this" - PRINTIFY_API_KEY was in the vault, an agent asked for a
+    Printify login anyway, and the CEO put it on his list through the direct route, which skipped every check."""
+    h, muse, clock = new_hub("Cee", "Ada")
+    h.seat("ceo", "Cee")
+    h.db.execute("insert into secrets(name, scope, value, created_by, updated) values('PRINTIFY_API_KEY','fleet','x','jack',0)")
+    try:
+        h.jack_add("Cee", "Save the Printify login in the vault; confirm a payment method in Billing", link="https://printify.com/app/account/billing")
+        raise AssertionError("vault: the CEO can't list a login the vault holds")
+    except ValueError as e:
+        assert "PRINTIFY_API_KEY" in str(e), e
+    assert h.jack_add("Cee", "Add a card in Printify Billing before the first order ($0 now)", link="https://printify.com/app/account/billing"), "a real payment item still lands"
+    pid = h.add_product("Cups", brief="c", pm="Cee")
+    tid = h.add_task(h.add_project(pid, "l"), "t", "engineer", "d", owner="Ada")
+    h.db.execute("update tasks set status='working', owner='Ada' where id=?", (tid,))
+    h.task_for_jack("Ada", tid, "Please save the Printify API key for me", link="https://printify.com/app/account/billing")
+    assert not [n for n in h.needs_jack() if "Printify API key" in n["text"]], "vault: an agent's ask is answered, not listed"
+    h.tick()
+    assert any("PRINTIFY_API_KEY" in m for m in muse.sent.get("Ada", [])), f"vault: the agent is told the key: {muse.sent.get('Ada')}"
+    print("vault_held OK")
+
+{"said_not_raised": said_not_raised, "busy_ceo": busy_ceo, "actionable": actionable, "listed": listed, "newpm": newpm, "keys": keys, "pmwait": pmwait, "repeat": repeat, "tidy": tidy, "pm": pm, "steps": steps, "reply": reply, "tools": tools, "doc": doc, "show": show, "plain": plain, "since": since, "ui": ui, "vault_held": vault_held}[sys.argv[1]]()

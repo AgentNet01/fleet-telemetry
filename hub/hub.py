@@ -223,6 +223,10 @@ SAYS_WAITING_ON_JACK = re.compile(r"\b(wait(ing|s)?|blocked|stuck|held)\b[^.]{0,
 JACK_WORTHY = re.compile(r"\$|\b(pay|payment|card|credit|debit|bank|billing|invoice|purchase|buy|spend|spending|budget|"
                          r"dollars?|usd|ads?|advertising|(sample|test) order|subscription|charge|tax|ein|ssn|passport|license|"
                          r"identity|id verification|verify (my|his|your) id|phone( number)?|sms|2fa|in (jack|his)'?s? name)\b", re.I)
+CREDENTIAL = re.compile(r"\b(log ?in|password|api[ _-]?key|key|token|credentials?|sign[ -]?in)\b", re.I)
+VAULT_GENERIC = {"api", "key", "token", "login", "password", "secret", "app", "bot", "shop", "dashboard"}
+VAULT_HELD = ("{0} is already in the hub vault: read it with `fleet secret get {0}` and use it. Don't ask Jack for a login or key "
+              "the vault holds. If part of this really needs money or his ID, ask for that part alone.")
 NOT_JACKS = ("It isn't payment or ID, so it's yours (Jack, Oct 15: \"the ONLY thing that needs me is spending money or my "
              "ID/card/phone\"). Decide it yourself or with your PM, sign up for any account with your own fleet email, and "
              "make Etsy changes with `fleet etsy update`. If it really does need money or Jack's ID, ask again and say how much or which ID.")
@@ -962,10 +966,25 @@ class Hub:
             self._ask_jack(tid, agent, " — ".join(filter(None, [what, why, link])), what, why, link)
             self._task_event(tid, agent, "for jack", what)
 
+    def _in_vault(self, text):
+        """Jack, Oct 20: agents asked him again and again to save a Printify login while PRINTIFY_API_KEY sat in the vault,
+        and the CEO passed it on. An ask for a login or key the vault already holds names that secret instead."""
+        if not CREDENTIAL.search(text or ""):
+            return None
+        words = set(re.findall(r"[a-z]+", text.lower()))
+        for (name,) in self.db.execute("select name from secrets order by name"):
+            if set(re.findall(r"[a-z]+", name.lower())) - VAULT_GENERIC & words:
+                return name
+        return None
+
     def _ask_jack(self, tid, agent, text, what, why=None, link=None):
         """Jack, Oct 14: the CEO decides what reaches him. It sees the ask first and either answers the agent itself or
         rewrites it as one plain line for Jack (_screened). Never a jam again (49 sat with one PM): an ask not sorted
         within SCREEN_WAIT goes to Jack as it is (_screen_timeouts)."""
+        held = self._in_vault(text)
+        if held:
+            self._note(agent, f"Not sent to Jack: {held} is already in the vault", VAULT_HELD.format(held))
+            return
         chair = self._chair()
         if chair == agent:                                  # Jack, Oct 15: the CEO's own asks reached him unchecked
             chair = next((r["agent"] for r in self.db.execute("select agent from seats where role in ('ceo','ceo_backup')")
@@ -1051,6 +1070,11 @@ class Hub:
                 raise PermissionError("only a PM or the CEO puts items on Jack's list")
             what, why, link = self._plain(what, why, link)
             self._need_link(link)
+            # Jack, Oct 20: this direct route skipped the checks an agent's ask gets, so the CEO's Printify-login slip reached him
+            text = " ".join(filter(None, [what, why, link]))
+            held = self._in_vault(text)
+            if held:
+                raise ValueError(VAULT_HELD.format(held))
             return self.db.execute("insert into needs_jack(text, at, agent, what, why, link) values(?,?,?,?,?,?)",
                                    (" — ".join(filter(None, [what, why, link])), self.clock(), who, what, why, link)).lastrowid
 
