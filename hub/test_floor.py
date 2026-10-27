@@ -119,7 +119,7 @@ def watch():
     h.seat("ceo", "Cee")
     h.manage("Cee", "team Nb nba")
     start = clock() + 10 * HOUR
-    told = lambda n, s: [m for m in muse.sent.get(n, []) if s in m]
+    told = lambda n, s: [m for m in muse.sent.get(n, []) if s in m and "lines moved" in m]     # wakes, not research rounds
     odd = event("g0", "LAL", "UTAH", start, spread=(-2, -110, -110))
     odd["competitions"][0]["odds"].insert(0, None)      # seen live Oct 26: one game's odds list held a null
     feed(h, nba=[odd, event("g1", "BKN", "BOS", start, spread=(-11.5, -110, -110))])
@@ -254,5 +254,23 @@ def wall():
     print("wall OK")
 
 
+def research():
+    """Jack, Oct 27: "the research pauses absolutely shouldn't be pausing. Also every three hours seems way too
+    infrequently." With nothing moving, a desk still gets a research round every 45 minutes, any hour, naming games."""
+    h, muse, clock = new_hub("Cee", "Nb")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba")
+    clock.t = 1_000_000.0 - (1_000_000 % 86400) + 86400 + 3 * HOUR - time.timezone     # 03:00 local: the old pause
+    feed(h, nba=[event("g1", "BKN", "BOS", clock() + 10 * HOUR, spread=(-11.5, -110, -110))])
+    poll(h, clock)                                     # the opener wake
+    rounds = lambda: [m for m in muse.sent.get("Nb", []) if "research round" in m.lower()]
+    clock.go(30 * 60); poll(h, clock)                  # 36.7 min after the wake
+    assert not rounds(), "research: a round came before 45 minutes passed"
+    clock.go(5 * 60); poll(h, clock)                   # 48 min
+    assert len(rounds()) == 1, f"research: no round after 45 quiet minutes at night: {muse.sent.get('Nb')}"
+    assert "BKN at BOS" in rounds()[0], f"research: the round should name the games to look at: {rounds()[0]}"
+    print("research OK")
+
+
 if __name__ == "__main__":
-    {"book": book, "watch": watch, "board_speed": board_speed, "elevator": elevator, "pages": pages, "wall": wall}[sys.argv[1]]()
+    {"book": book, "watch": watch, "board_speed": board_speed, "elevator": elevator, "pages": pages, "wall": wall, "research": research}[sys.argv[1]]()

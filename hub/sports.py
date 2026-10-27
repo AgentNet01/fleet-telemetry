@@ -19,8 +19,7 @@ NAMES = {"nba": "NBA", "nfl": "NFL", "cfb": "College football", "nhl": "NHL", "c
 FEED = "https://site.api.espn.com/apis/site/v2/sports/"
 POLL, JITTER = 300, 90                  # Jack: every five minutes, give or take 90 seconds
 WAKE_GAP = 20 * 60                      # at most one wake per desk this often; moves in between are batched
-SWEEP = 3 * 3600                        # a look over the board when nothing has moved for this long...
-SWEEP_HOURS = range(9, 23)              # ...in the daytime. ponytail: the PC's local clock (US Eastern, no tzdata)
+SWEEP = 45 * 60                         # Jack, Oct 27: a research round this often when nothing has moved, any hour
 MOVE_PTS = {"nhl": 0.5, "soccer": 0.5}  # a spread or total move worth a wake; 1 point everywhere else
 MOVE_PROB = 0.03                        # a moneyline move worth a wake: 3 points of implied probability
 FINAL = ("STATUS_FINAL", "STATUS_FULL_TIME", "STATUS_FINAL_OT", "STATUS_FINAL_PEN", "STATUS_FINAL_AET")
@@ -228,11 +227,21 @@ def _wake(h, desk, now):
         for n in staff:
             h._deliver_to(n, f"{NAMES[desk]} lines moved", "DraftKings lines on your board changed:\n" + body + "\n\n" + NEXT)
         h.db.execute("update desk_state set pending='[]', last_wake=? where desk=?", (now, desk))
-    elif not pending and now - last >= SWEEP and time.localtime(now).tm_hour in SWEEP_HOURS and h.db.execute(
-            "select 1 from games where desk=? and status='STATUS_SCHEDULED' and start > ?", (desk, now)).fetchone():
+    elif not pending and now - last >= SWEEP:
+        games = h.db.execute("select g.*, (select line from lines l where l.game=g.id and l.market='spread' and l.side=g.home "
+                             "order by at desc limit 1) as sp, (select line from lines l where l.game=g.id and l.market='total' "
+                             "and l.side='over' order by at desc limit 1) as tot from games g where desk=? and "
+                             "status='STATUS_SCHEDULED' and start > ? order by start limit 12", (desk, now)).fetchall()
+        if not games:
+            return
+        board = "\n".join(f"- {g['id']} {g['name']} {time.strftime('%a %H:%M', time.localtime(g['start']))}"
+                          + (f" · {g['home']} {g['sp']:+g}" if g["sp"] is not None else "")
+                          + (f" · total {g['tot']:g}" if g["tot"] is not None else "") for g in games)
         for n in staff:
-            h._deliver_to(n, f"{NAMES[desk]} sweep", "Nothing big has moved for a while. Look over your upcoming games for "
-                          "edges the market hasn't priced: injuries, rest, travel, weather, motivation. " + NEXT)
+            h._deliver_to(n, f"{NAMES[desk]} research round", "Nothing big has moved since your last look. Pick one or two of "
+                          "these and dig in properly: injuries and lineups, rest and travel, weather, matchups, recent form, "
+                          "what the market might be missing. Then log a position or pass, and say why in one line.\n"
+                          + board + "\n\n" + NEXT)
         h.db.execute("update desk_state set last_sweep=? where desk=?", (now, desk))
 
 
