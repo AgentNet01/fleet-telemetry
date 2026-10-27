@@ -1662,7 +1662,7 @@ function paintHud() {
   if (!lastBoard) return;
   let w = 0, i = 0, d = 0;
   for (const p of people.values()) p.flag ? d++ : p.mode === "idle" ? i++ : p.mode === "ceo" ? 0 : w++;
-  hudEl.innerHTML = `<b>Foundlings HQ</b><span class="o-w">● ${w} working</span><span class="o-i">● ${i} on break</span>`
+  hudEl.innerHTML = `<b>Foundlings HQ${lastBoard.floorName || ""}</b><span class="o-w">● ${w} working</span><span class="o-i">● ${i} on break</span>`
     + (d ? `<span class="o-d">● ${d} not answering</span>` : "") + `<span class="o-ph">${phaseText()}</span>`;
   tickEl.innerHTML = events.length ? events.slice(0, 4).map((e, k) => `<div style="opacity:${1 - k * .2}"><time>${stamp(e.at)}</time> ${esc(e.line)}</div>`).join("")
     : `<div class="faint">Moves show up here as they happen.</div>`;

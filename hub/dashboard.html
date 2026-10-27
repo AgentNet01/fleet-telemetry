@@ -246,6 +246,10 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
 .o-ph{color:#57606a;border-left:1px solid #d0d7de;padding-left:12px}
 .o-nj{font:inherit;font-weight:600;color:#9a6700;background:#fff8c5;border:1px solid #eac54f;border-radius:8px;padding:2px 9px;cursor:pointer}
 .obtns{position:absolute;right:12px;top:12px;display:flex;gap:8px}
+.obook{position:absolute;left:12px;top:64px;max-height:calc(100% - 120px);width:min(420px,calc(100% - 24px));overflow:auto;background:rgba(255,255,255,.95);color:#1f2933;
+  border-radius:12px;padding:12px 14px;font-size:13px;box-shadow:0 2px 10px rgba(0,0,0,.18)}
+.obook h3{margin:0 0 8px;font-size:13px;letter-spacing:.08em;text-transform:uppercase}.obook .bd{display:grid;grid-template-columns:1fr auto;gap:2px 10px;margin-bottom:8px}
+.obook .bc{border-top:1px solid #e5e7eb;padding:6px 0}.obook .up{color:#1a7f37}.obook .dn{color:#cf222e}.obook .mu{color:#57606a}
 .ozoom{display:flex;gap:2px}.ozoom .ofs{padding:8px 11px;min-width:36px}
 .ofs{font:inherit;font-size:13px;font-weight:600;color:#1f2933;background:rgba(255,255,255,.92);border:0;border-radius:10px;
   padding:8px 13px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.14)}
@@ -275,7 +279,7 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
 </head>
 <body>
 <main>
-  <div class="top"><button class="menubtn" type="button" aria-label="Menu" aria-controls="drawer" aria-expanded="false">☰</button><h1><span class="live"></span>Foundlings HQ</h1><span class="topr"><span class="fresh" id="fresh">Loading…</span></span></div>
+  <div class="top"><button class="menubtn" type="button" aria-label="Menu" aria-controls="drawer" aria-expanded="false">☰</button><h1><span class="live"></span>Foundlings HQ<span id="floorname"></span></h1><span class="topr"><span class="fresh" id="fresh">Loading…</span></span></div>
   <div class="scrim" id="scrim" hidden></div>
   <nav class="drawer" id="drawer" aria-label="Pages">
   <div class="dhead"><b>Foundlings HQ</b><button class="btn sm" id="theme" type="button"></button></div>
@@ -297,8 +301,9 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
       <button class="menubtn omenu" type="button" aria-label="Menu" aria-controls="drawer" aria-expanded="false">☰</button>
       <canvas id="officecv" role="img" aria-label="The office. Each agent is in the room that matches what it is doing: desks for work, the review table for checking, the booths for replies; a red badge means not answering. The same agents are behind the List button."></canvas>
       <div class="ohud" id="ohud"></div>
-      <div class="obtns"><span class="ozoom"><button class="ofs" id="ozout" type="button" title="Zoom out" aria-label="Zoom out">−</button><button class="ofs" id="ozfit" type="button" title="Fit the building (or double-click it)" aria-label="Fit">Fit</button><button class="ofs" id="ozin" type="button" title="Zoom in — or pinch, ⌘-scroll; drag to move" aria-label="Zoom in">+</button></span><button class="ofs" id="olab" type="button" title="Choose which labels show above people">Labels: all</button><button class="ofs" id="olist" type="button" title="Show the agents as a plain list instead of the office">▤ List</button><button class="ofs" id="ohead" type="button" hidden aria-pressed="false" title="Use the webcam: move your head and the view shifts, like looking through a window, and lean in to zoom. The video never leaves this browser.">◉ Look around</button><button class="ofs" id="oeyes" type="button" hidden aria-pressed="false" title="Show the label of whoever you are looking at. Click to calibrate: look at nine dots and click each. The ± is how far the reading typically misses.">◎ Calibrate eyes</button><button class="ofs" id="ofs" type="button">⛶ Full screen</button></div>
+      <div class="obtns"><span class="ozoom"><button class="ofs" id="ozout" type="button" title="Zoom out" aria-label="Zoom out">−</button><button class="ofs" id="ozfit" type="button" title="Fit the building (or double-click it)" aria-label="Fit">Fit</button><button class="ofs" id="ozin" type="button" title="Zoom in — or pinch, ⌘-scroll; drag to move" aria-label="Zoom in">+</button></span><button class="ofs" id="olab" type="button" title="Choose which labels show above people">Labels: all</button><button class="ofs" id="elev" type="button">Floor 2</button><button class="ofs" id="olist" type="button" title="Show the agents as a plain list instead of the office">▤ List</button><button class="ofs" id="ohead" type="button" hidden aria-pressed="false" title="Use the webcam: move your head and the view shifts, like looking through a window, and lean in to zoom. The video never leaves this browser.">◉ Look around</button><button class="ofs" id="oeyes" type="button" hidden aria-pressed="false" title="Show the label of whoever you are looking at. Click to calibrate: look at nine dots and click each. The ± is how far the reading typically misses.">◎ Calibrate eyes</button><button class="ofs" id="ofs" type="button">⛶ Full screen</button></div>
       <div class="oticker" id="oticker" aria-live="polite"></div>
+      <section class="obook" id="book" role="region" aria-label="Book" hidden></section>
       <div class="otip" id="otip" hidden></div>
     </div>
     <div class="roster" id="roster" hidden><button class="btn sm" id="ooffice" type="button">← Back to the office</button>
@@ -466,8 +471,18 @@ function label(a){ const s=stateOf(a), f=a.focus||{};
   if(a.current) return `#${a.current.id}: ${a.current.text}`;
   return a.queue?`Idle · ${a.queue} waiting`:"Idle"; }
 
+// Jack, Oct 26: floor 1 is the Etsy company, floor 2 the sports desk. Same office, each floor's own people.
+let raw=null, floor=1; try{ floor=+localStorage.getItem("hub-floor")||1; }catch(e){}
+const onFloor=b=>({...b, agents:(b.agents||[]).filter(a=>(a.floor||1)===floor), products:floor===1?(b.products||[]):[], floorName:floor===2?" · Sports desk":""});
 async function load(){
-  const [b, o] = await Promise.all([jget("api/board"), jget("api/org")]); if(!b) return; board=b; now=b.now; if(o) org=o;
+  const [b, o] = await Promise.all([jget("api/board"), jget("api/org")]); if(!b) return; raw=b; if(o) org=o; paint();
+}
+function paint(){
+  const b=onFloor(raw); board=b; now=b.now;
+  $("elev").textContent = floor===1 ? "Floor 2" : "Floor 1";
+  $("elev").title = floor===1 ? "Take the elevator to the sports desk" : "Take the elevator back to the Etsy company";
+  $("floorname").textContent = floor===2 ? " · Sports desk" : "";
+  $("book").hidden = floor!==2; if(floor===2) renderBook(raw.book||{calls:[],desks:{}});
   $("fresh").textContent = "updated " + new Date(b.now*1000).toLocaleTimeString();
   $("money").textContent = money(b.revenue && b.revenue.total);
   const by=(b.revenue&&b.revenue.by_product)||{};

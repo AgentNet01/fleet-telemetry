@@ -413,5 +413,23 @@ def stale():
     print("stale OK")
 
 
+
+def call_cli():
+    """Floor 2: a desk agent logs a call with the real `fleet` command and sees it in its list."""
+    import test_floor as tf
+    h, srv, port, tok = start()
+    home = tempfile.mkdtemp()
+    h._set("agents", "Boboe 3", team="nba")
+    tf.feed(h, nba=[tf.event("g9", "BKN", "BOS", h.clock() + 3 * 3600, spread=(-11.5, -110, -110))])
+    tf.poll(h, h.clock)
+    r = fleet(port, tok["Boboe 3"], "call", "games", home=home)
+    assert r.returncode == 0 and "g9" in r.stdout and "BKN at BOS" in r.stdout, r
+    r = fleet(port, tok["Boboe 3"], "call", "add", "g9", "spread", "BOS", "-11.5", "-110", "-125", "2", "rested", "Tatum sits", home=home)
+    assert r.returncode == 0 and "logged" in r.stdout, r
+    r = fleet(port, tok["Boboe 3"], "call", "list", home=home)
+    assert r.returncode == 0 and "BKN at BOS" in r.stdout and "open" in r.stdout, r
+    srv.shutdown()
+    print("call OK")
+
 if __name__ == "__main__":
-    {"dashboard": dashboard, "company": company, "cli": cli, "join": join, "delegate": delegate, "stale": stale}.get(sys.argv[1] if len(sys.argv) > 1 else "", poll_agent_flow)()
+    {"dashboard": dashboard, "company": company, "cli": cli, "join": join, "delegate": delegate, "stale": stale, "call": call_cli}.get(sys.argv[1] if len(sys.argv) > 1 else "", poll_agent_flow)()

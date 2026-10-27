@@ -51,6 +51,14 @@
                                      "title", "description", "tags", ...}. Its PM, the CEO, or whoever has a task on that
                                      product may change it; the product's task messages show whether it's live.
 
+  Sports desk (floor 2, desk agents only): the hub watches your sport's DraftKings lines and wakes you when they move.
+    fleet call games                 your sport's upcoming games with lines, and their ids
+    fleet call add <game id> spread|total|moneyline <side> <line, or - for moneyline> <DraftKings odds> <your fair odds>
+                     <confidence 1-3> "<why>" "<what would make it wrong>"
+                                     log a position before the game starts. It's never edited; the hub records the
+                                     closing line and the result and grades it
+    fleet call list                  your calls: open or settled, units won or lost, and whether each beat the close
+
   Running the company. The CEO can do all of this; a product's PM can manage that product's tasks.
   Parking agents is for Jack and Darragh. Every change is logged and shown on the dashboard.
     fleet portfolio                  every product, project, open task, and who is where
@@ -308,7 +316,7 @@ def main(args):
                "resume": f"#{tid} resumed; it comes back to its holder.",
                "operator": f"On the operators' list, linked to #{tid}. Keep working; a reply comes to you.",
                "jack": f"On the operators' list, linked to #{tid}. Keep working; a reply comes to you."}[verb])
-    elif cmd in ("portfolio", "changes", "product", "project", "pm", "place", "seat", "role", "park", "wake", "grant", "powers", "team") \
+    elif cmd in ("portfolio", "changes", "product", "project", "pm", "place", "seat", "role", "park", "wake", "grant", "powers", "team", "call") \
             or args[:2] in (["task", "add"], ["task", "set"], ["task", "remove"]):
         import shlex
         print(call("POST", "/api/manage", {"line": shlex.join(args)})["result"])

@@ -194,6 +194,10 @@ MIGRATIONS = [
     "create table if not exists approvals(id text primary key, agent text, label text, detail text, options text, expires real)",     # the powers text this agent was last told       # a PM's company command waiting on the CEO's review
 ]
 WORKERS = ("muse", "poll")            # kinds that take tasks; 'slack' (dot) and 'jack' (the board) don't
+# Jack, Oct 26: two-agent sports research pods, walled off from the Etsy company: never routed work, counted idle or polled
+import sports
+DESKS = tuple(sports.LEAGUES)            # nba nfl cfb nhl cbb soccer
+OFF_DESK = f"coalesce(team, '') not in {DESKS}"
 PUSH = ("muse", "slack")              # kinds the hub sends to; 'poll' agents fetch with `fleet inbox`
 ONE_SHOT = ("note", "task", "verify", "nudge", "plan", "scout")
 # Waiting FYIs go to an agent as one message (Jack, Oct 14: ~30 queued for one PM, a turn each). muse-cli takes the
@@ -555,6 +559,11 @@ class Hub:
             self._screen_timeouts()
             agents = [dict(a) for a in self.db.execute(
                 "select * from agents where kind in ('muse','poll','slack') and state != 'parked' order by name")]
+        try:
+            sports.tick(self)                    # floor 2: its feed is read outside the lock; wakes land before delivery
+        except Exception:
+            import traceback
+            print(time.strftime("%F %T"), "sports:", traceback.format_exc(), flush=True)
         # Two passes so cross-agent effects (a reply that queues a note for someone else) land in
         # the same tick regardless of agent order. One bad account can't starve the rest — each
         # agent is serviced independently and the muse-cli I/O runs outside the lock, so a slow or
@@ -847,7 +856,7 @@ class Hub:
         """An active, un-parked agent with nothing in flight and nothing queued, optionally in a given brain.
         A pinned task skips team routing: only the named agent counts."""
         # not joined yet (no token): its Muse login is on the hub, but it can't run fleet commands, so work would bounce
-        for a in self.db.execute(f"select * from agents where kind in {WORKERS} and state='active' "
+        for a in self.db.execute(f"select * from agents where kind in {WORKERS} and state='active' and {OFF_DESK} "
                                  "and token_hash is not null order by name").fetchall():
             if self._open_tasks(a["name"]):
                 continue                             # only holding a task makes an agent busy; a pending question doesn't
@@ -1316,7 +1325,7 @@ class Hub:
         """More than three workers free for over 12 h → one note to whoever holds the CEO seat. Again only
         when that set of agents changes or another 12 h pass. Idle agents themselves are never messaged."""
         now, ceo = self.clock(), self._chair()
-        idle = [a for a in self.db.execute(f"select * from agents where kind in {WORKERS} and state='active' "
+        idle = [a for a in self.db.execute(f"select * from agents where kind in {WORKERS} and state='active' and {OFF_DESK} "
                                            "and token_hash is not null and free_since is not null order by name").fetchall()
                 if a["name"] != ceo and now - a["free_since"] > IDLE_AFTER]
         if len(idle) <= CEO_IDLE_COUNT:
@@ -1480,6 +1489,11 @@ class Hub:
                 self.decide_suggestion(by, int(a[2]), a[1] == "accept", " ".join(a[3:]))   # checks who may decide
                 result = f"suggestion #{a[2]} {a[1]}ed"
                 self.db.execute("insert into changes(by, line, result, at) values(?,?,?,?)", (by, line, result, self.clock()))
+                return result
+            if a[0] == "call":                          # floor 2: a sports desk's own book, not the company's
+                result = sports.manage(self, by, a)
+                if a[1:2] == ["add"]:
+                    self.db.execute("insert into changes(by, line, result, at) values(?,?,?,?)", (by, line, result, self.clock()))
                 return result
             try:
                 self._may_run(by, a)
@@ -1817,7 +1831,7 @@ class Hub:
             return f"role {a[2]} updated"
         if a[0] == "team" and len(a) == 3:
             g = agent(by_name if a[1] == "me" else a[1])
-            team = None if a[2] == "none" else a[2] if a[2] == "generalist" else role(a[2])
+            team = None if a[2] == "none" else a[2] if a[2] in ("generalist",) + DESKS else role(a[2])
             self._set("agents", g["name"], team=team)
             return f"{g['name']} is on the {team or 'generalist'} team"
         if a[0] == "grant" and len(a) == 3 and a[2] in ("ceo", "none"):
@@ -1921,7 +1935,7 @@ class Hub:
     # ---- council ------------------------------------------------------------------------
     def _responders(self):
         return [a["name"] for a in self.db.execute(
-            "select name from agents where kind in ('muse','poll') and state='active'").fetchall()]
+            f"select name from agents where kind in ('muse','poll') and state='active' and {OFF_DESK}").fetchall()]
 
     def ask_up(self, frm, question, key=None):
         """An agent's question for everyone (Jack, Oct 15: no side chats; one went to ~25 agents and queued on the CEO):
@@ -2531,6 +2545,7 @@ class Hub:
         return {"task": ({"id": t["id"], "title": t["title"]} if t else None), "doing": doing, "reporting": fresh}
 
     _board_at, _board_lock = float("-inf"), threading.Lock()
+    sports_fetch = staticmethod(sports.fetch)   # floor 2's line feed; tests hand in their own
 
     def board_changed(self):
         self._board_at = float("-inf")
@@ -2555,6 +2570,7 @@ class Hub:
                             "current": {"id": cur["id"], "text": cur["text"][:200], "sent_at": cur["sent_at"]} if cur else None,
                             "last_in": a["last_in"], "last_out": a["last_out"], "login_expires": a["login_expires"],
                             "product": a["current_product"], "role": a["current_role"], "onboarded": a["onboarded"], "team": a["team"] or "generalist",
+                            "floor": 2 if a["team"] in DESKS else 1,
                             "focus": self._focus(a["name"]), "free_since": a["free_since"], "fleet_rev": a["fleet_rev"],
                             "fleet_old": a["kind"] == "muse" and a["fleet_rev"] != current_rev,
                             "doing": {"busy": bool(a["busy"]), "line": a["doing"], "at": a["doing_at"]}
@@ -2569,7 +2585,7 @@ class Hub:
                                                     or t["touched"]} for t in self._open_tasks(a["name"])), None)})
             return {"now": self.clock(), "agents": out, "needs_jack": self.needs_jack(), "changes": self.changes(30),
                     "approvals": self.approvals(), "tools": self.tools(), "jobs": self.recent_jobs(),
-                    "revenue": self.revenue(), "products": self.portfolio()}
+                    "revenue": self.revenue(), "products": self.portfolio(), "book": sports.book(self)}
 
     def org(self):
         with self.lock:

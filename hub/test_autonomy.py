@@ -560,6 +560,25 @@ def scout():
     print("scout OK")
 
 
+def desk():
+    """Jack, Oct 26: six agents become sports research pods (NBA, NFL, college football), walled off from the Etsy
+    company. An agent on a desk is never handed a task, sent scouting, counted idle or asked to vote; the rest work as usual."""
+    h, muse, clock = new_hub("Cee", "Ada", "Nb")
+    h.seat("ceo", "Cee")
+    assert "nba" in h.manage("Cee", "team Nb nba") and h._agent("Nb")["team"] == "nba"
+    prj = h.add_project(h.add_product("Cups", brief="cups", pm="Cee"), "launch")
+    t1 = h.add_task(prj, "mockups", "designer", "x")
+    clock.go(hub.ANY_FIT_AFTER + 1); h.tick(); h.tick()
+    owner = lambda t: h.db.execute("select owner from tasks where id=?", (t,)).fetchone()["owner"]
+    assert owner(t1) == "Ada", f"desk: the Etsy agent takes the task, got {owner(t1)}"
+    t2 = h.add_task(prj, "copy", "marketer", "x")
+    clock.go(hub.SCOUT_AFTER + hub.ANY_FIT_AFTER + 1); h.tick(); h.tick()
+    assert owner(t2) != "Nb", "desk: a desk agent is never handed Etsy work, even with nobody else free"
+    assert not [m for m in muse.sent.get("Nb", []) if hub.Hub.SCOUT in m or "no work lined up" in m], muse.sent.get("Nb")
+    assert "Nb" not in h._responders(), "desk: a desk agent doesn't vote on company councils"
+    print("desk OK")
+
+
 def board_shared():
     """Oct 26: a board build outlasted the dashboard's 10 s poll, requests queued without end and every page went
     blank. Viewers asking at once share one build; a fresh one comes only after BOARD_TTL."""
@@ -581,4 +600,4 @@ def board_shared():
 
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "ask_up": ask_up, "overdue": overdue, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain, "unjoined": unjoined, "live_done": live_done, "scout": scout, "board_shared": board_shared}[sys.argv[1]]()
+     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "ask_up": ask_up, "overdue": overdue, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain, "unjoined": unjoined, "live_done": live_done, "scout": scout, "desk": desk, "board_shared": board_shared}[sys.argv[1]]()
