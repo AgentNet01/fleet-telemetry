@@ -262,25 +262,57 @@ def _result(c, g):
     return "win" if d > 0 else "push" if d == 0 else "loss"
 
 
+def _moved(c, line, odds):
+    """How far the market moved toward the call since it was made: (points, implied probability). Positive = our way."""
+    prob = implied(odds) - implied(c["odds"])
+    pts = 0.0
+    if c["line"] is not None and line is not None:
+        pts = line - c["line"] if c["side"] == "over" else c["line"] - line
+    return pts, prob
+
+
 def _graded(c):
-    """A settled call as the book shows it: units at 1 risked, and whether it got a better number than the close."""
+    """A call as the book shows it: units at 1 risked, whether it beat the close, and (while open) where the market is now."""
     d = dict(c)
     d["units"] = payout(c["odds"]) if c["result"] == "win" else -1.0 if c["result"] == "loss" else 0.0 if c["result"] else None
     beat = None
     if c["close_odds"] is not None:
-        prob = implied(c["close_odds"]) - implied(c["odds"])
-        pts = 0.0
-        if c["line"] is not None and c["close_line"] is not None:
-            pts = c["close_line"] - c["line"] if c["side"] == "over" else c["line"] - c["close_line"]
+        pts, prob = _moved(c, c["close_line"], c["close_odds"])
         beat = pts > 0 or (pts == 0 and prob > 0)
     d["beat_close"] = beat
+    d["since"] = None
+    if c["result"] is None and c["now_odds"] is not None:
+        pts, prob = _moved(c, c["now_line"], c["now_odds"])
+        d["since"] = {"pts": pts, "prob": round(prob, 4),
+                      "verdict": "agrees" if pts > 0 or (pts == 0 and prob > 0.005) else
+                                 "disagrees" if pts < 0 or (pts == 0 and prob < -0.005) else "flat"}
     return d
+
+
+def _pick(c):
+    """The call in plain words: "Boston -11.5", "Under 2.5", "Boston to win", "Draw"."""
+    name = (c["home_name"] if c["side"] == c["home"] else c["away_name"] if c["side"] == c["away"] else "") or c["side"]
+    if c["market"] == "total":
+        return f"{c['side'].capitalize()} {c['line']:g}"
+    if c["market"] == "spread":
+        return f"{name} {c['line']:+g}"
+    return "Draw" if c["side"] == "draw" else f"{name} to win"
+
+
+def _calls(h, desk=None, limit=500):
+    """Every call with its game and the market's latest line for it: the one query the book and `call list` share."""
+    rows = h.db.execute(
+        "select c.*, g.name as game_name, g.start, g.status, g.home, g.away, g.home_name, g.away_name, g.home_score, "
+        "g.away_score, (select line from lines l where l.game=c.game and l.market=c.market and l.side=c.side "
+        "order by at desc limit 1) as now_line, (select odds from lines l where l.game=c.game and l.market=c.market "
+        "and l.side=c.side order by at desc limit 1) as now_odds from calls c left join games g on g.id=c.game "
+        "where ? is null or c.desk=? order by c.id desc limit ?", (desk, desk, limit))
+    return [dict(_graded(c), pick=_pick(c)) for c in rows]
 
 
 def book(h):
     _ensure(h)
-    calls = [_graded(c) for c in h.db.execute(
-        "select c.*, g.name as game_name, g.start from calls c left join games g on g.id=c.game order by c.id desc limit 500")]
+    calls = _calls(h)
     desks = {}
     for k in LEAGUES:
         mine = [c for c in calls if c["desk"] == k]
@@ -292,7 +324,35 @@ def book(h):
                     "graded": sum(c["beat_close"] is not None for c in mine), "beat_close": sum(bool(c["beat_close"]) for c in mine),
                     "watching": h.db.execute("select count(*) from games where desk=? and status='STATUS_SCHEDULED' and start > ?",
                                              (k, h.clock())).fetchone()[0]}
-    return {"calls": calls, "desks": desks}
+    return {"calls": calls, "desks": desks, "activity": _activity(h)}
+
+
+def _wake_text(text):
+    """A wake as one line: its headline and the first moves it named."""
+    lines = text.split("\n")
+    moves = [l[2:].split(" · new on the board")[0] for l in lines if l.startswith("- ")]
+    return lines[0] + (": " + "; ".join(moves[:2]) + (f" and {len(moves) - 2} more" if len(moves) > 2 else "") if moves else "")
+
+
+def _activity(h, limit=80):
+    """What the desks did, newest first: the hub waking them, what they said back, and the calls they logged."""
+    staff = {r["name"]: r["team"] for r in h.db.execute(f"select name, team from agents where team in {tuple(LEAGUES)}")}
+    if not staff:
+        return []
+    q = ",".join("?" * len(staff))
+    out = [{"at": r["created"], "agent": r["too"], "desk": staff[r["too"]], "kind": "woken",
+            "text": _wake_text(r["text"] or "")}
+           for r in h.db.execute(f"select too, text, created from items where too in ({q}) and frm='hub' and (text like '% lines moved%' "
+                                 "or text like '% sweep%') order by id desc limit ?",
+                                 (*staff, limit))]
+    out += [{"at": r["at"], "agent": r["agent"], "desk": staff[r["agent"]], "kind": "said", "text": (r["text"] or "")[:400]}
+            for r in h.db.execute(f"select agent, text, at from events where agent in ({q}) and dir='out' order by id desc limit ?",
+                                  (*staff, limit))]
+    out += [{"at": r["made_at"], "agent": r["agent"], "desk": r["desk"], "kind": "called",
+             "text": f"{_pick(r)} ({r['odds']:+d}) · {r['game_name']}"}
+            for r in h.db.execute("select c.*, g.name as game_name, g.home, g.away, g.home_name, g.away_name from calls c "
+                                  "left join games g on g.id=c.game order by c.id desc limit ?", (limit,))]
+    return sorted(out, key=lambda e: -(e["at"] or 0))[:limit]
 
 
 def manage(h, by, a):
@@ -308,8 +368,7 @@ def manage(h, by, a):
         return "\n".join(f"{g['id']}  {time.strftime('%a %m-%d %H:%M', time.localtime(g['start']))}  {g['name']}" for g in rows) \
             or "no upcoming games with lines yet"
     if a[1:2] == ["list"]:
-        rows = [_graded(c) for c in h.db.execute("select c.*, g.name as game_name from calls c left join games g on g.id=c.game "
-                                                 "where c.desk=? order by c.id desc limit 30", (desk,))]
+        rows = _calls(h, desk, 30)
         return "\n".join(f"#{c['id']} {c['game_name']} {_show(c['market'], c['side'], c['line'], c['odds'])} · "
                          f"{c['result'] or 'open'}" + (f" {c['units']:+.2f}u" if c["units"] is not None else "") +
                          ("" if c["beat_close"] is None else " · beat the close" if c["beat_close"] else " · missed the close")

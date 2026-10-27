@@ -195,5 +195,64 @@ def elevator():
     print("elevator OK")
 
 
+def pages():
+    """Jack, Oct 27: "I want to be able to see how bets are doing… are they making good decisions… informational
+    digestible". Floor 2 has its own menu; an open position says in plain words whether the market has moved its way."""
+    from playwright.sync_api import sync_playwright
+    from test_ui import PASSWORD, seeded
+    h, srv, url = seeded()
+    h.add_agent("Nb", "muse"); h.manage("dot", "team Nb nba")
+    clock = h.clock; start = clock() + 3 * HOUR
+    feed(h, nba=[event("g1", "BKN", "BOS", start, spread=(-11.5, -110, -110)), event("g2", "DET", "NY", start, spread=(-3.5, -110, -110))])
+    poll(h, clock)
+    h.manage("Nb", 'call add g1 spread BOS -11.5 -110 -125 2 "Brooklyn on a back-to-back" "Tatum sits"')
+    h.manage("Nb", 'call add g2 spread NY -3.5 -110 -120 1 "Pistons travel" "Brunson out"')
+    # after the calls: Boston's number grows (the market agrees), New York's shrinks (it disagrees)
+    feed(h, nba=[event("g1", "BKN", "BOS", start, spread=(-13, -110, -110)), event("g2", "DET", "NY", start, spread=(-2, -110, -110))])
+    poll(h, clock)
+    with sync_playwright() as pw:
+        page = pw.chromium.launch().new_page(viewport={"width": 1440, "height": 900},
+                                             http_credentials={"username": "jack", "password": PASSWORD})
+        page.goto(url)
+        page.wait_for_function("window.Office3D && Office3D.debug.state().ready", timeout=60000)
+        page.get_by_role("button", name="Floor 2").click()
+        page.get_by_role("button", name="Menu").first.click()
+        tabs = page.get_by_role("tab")
+        names = [t.inner_text().strip() for t in tabs.all() if t.is_visible()]
+        if "Positions" not in " ".join(names):
+            raise AssertionError(f"pages: floor 2 has no Positions page: {names}")
+        assert not any(n.startswith(("Portfolio", "Needs you", "Suggestions", "Council")) for n in names), f"pages: Etsy pages on floor 2: {names}"
+        page.get_by_role("tab", name="Positions").click()
+        rows = page.get_by_role("region", name="Open positions")
+        boston = rows.locator("tr", has_text="BOS").inner_text().lower()
+        newyork = rows.locator("tr", has_text="NY").inner_text().lower()
+        assert "agrees" in boston and "disagrees" not in boston, f"pages: Boston moved our way: {boston}"
+        assert "disagrees" in newyork, f"pages: New York moved against us: {newyork}"
+        page.get_by_role("button", name="Menu").first.click()
+        page.get_by_role("tab", name="Overview").click()      # the elevator is in the office
+        page.get_by_role("button", name="Floor 1").click()
+        page.get_by_role("button", name="Menu").first.click()
+        names = [t.inner_text().strip() for t in page.get_by_role("tab").all() if t.is_visible()]
+        assert any(n.startswith("Portfolio") for n in names) and "Positions" not in names, f"pages: floor 1 menu: {names}"
+    srv.shutdown()
+    print("pages OK")
+
+
+def wall():
+    """Oct 27 live: Etsy agents kept asking desk agents about Etsy work they used to hold. Floor 1 can't pull a desk
+    agent back in by asking it directly; Jack (and the board) and other desks still can."""
+    h, muse, clock = new_hub("Cee", "Ada", "Nb", "Nf")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Nf nfl")
+    try:
+        h.ask("Ada", "Nb", "can you recheck the corn listing?")
+        raise AssertionError("wall: a floor-1 agent's ask reached a desk agent")
+    except ValueError as e:
+        assert "Cee" in str(e), f"wall: the refusal should say who to ask instead: {e}"
+    assert h.ask("jack", "Nb", "how is the NBA board?") and h.ask("Nf", "Nb", "seeing the same injury news?"), "wall: board and desks still reach a desk"
+    assert h.ask("Nb", "Ada", "fyi"), "wall: a desk agent can still answer or reach floor 1"
+    print("wall OK")
+
+
 if __name__ == "__main__":
-    {"book": book, "watch": watch, "board_speed": board_speed, "elevator": elevator}[sys.argv[1]]()
+    {"book": book, "watch": watch, "board_speed": board_speed, "elevator": elevator, "pages": pages, "wall": wall}[sys.argv[1]]()

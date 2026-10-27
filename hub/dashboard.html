@@ -246,6 +246,17 @@ textarea{resize:vertical;min-height:42px}textarea:focus,input:focus,select:focus
 .o-ph{color:#57606a;border-left:1px solid #d0d7de;padding-left:12px}
 .o-nj{font:inherit;font-weight:600;color:#9a6700;background:#fff8c5;border:1px solid #eac54f;border-radius:8px;padding:2px 9px;cursor:pointer}
 .obtns{position:absolute;right:12px;top:12px;display:flex;gap:8px}
+.ptab{width:100%;border-collapse:collapse;font-size:14px}.ptab th{text-align:left;font-weight:500;color:var(--faint);font-size:12px;padding:10px 12px;border-bottom:1px solid var(--line)}
+.ptab td{padding:10px 12px;border-top:1px solid var(--line);vertical-align:top}.ptab .why{color:var(--dim);font-size:13px;margin-top:4px}
+.vd{display:inline-block;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:600;white-space:nowrap}
+.vd.agrees,.vd.win{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.vd.disagrees,.vd.loss{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad)}
+.vd.flat,.vd.push,.vd.void{background:color-mix(in srgb,var(--idle) 22%,transparent);color:var(--dim)}
+.dgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}.dcard{padding:14px 16px}
+.dcard .big{font-size:22px;font-weight:700}.dcard .mu,.ptab .mu{color:var(--faint);font-size:13px}
+.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px}.kpi{border:1px solid #e5e7eb;border-radius:10px;padding:8px 10px}
+.kpi b{display:block;font-size:18px}.kpi span{font-size:12px;color:#57606a}
+@media(max-width:820px){.ptab .hide-s{display:none}}
 .obook{position:absolute;left:12px;top:64px;max-height:calc(100% - 120px);width:min(420px,calc(100% - 24px));overflow:auto;background:rgba(255,255,255,.95);color:#1f2933;
   border-radius:12px;padding:12px 14px;font-size:13px;box-shadow:0 2px 10px rgba(0,0,0,.18)}
 .obook h3{margin:0 0 8px;font-size:13px;letter-spacing:.08em;text-transform:uppercase}.obook .bd{display:grid;grid-template-columns:1fr auto;gap:2px 10px;margin-bottom:8px}
@@ -286,13 +297,17 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
   <div class="hero"><div class="lbl">Revenue · made so far</div><div class="big" id="money">$0.00</div><div class="chips" id="revchips"></div></div>
   <div class="tabs" id="tabs" role="tablist" aria-orientation="vertical">
     <button class="tab" role="tab" data-tab="overview" aria-selected="true">Overview</button>
-    <button class="tab" role="tab" data-tab="needs">Needs you <span id="njtab"></span></button>
-    <button class="tab" role="tab" data-tab="activity">Activity</button>
-    <button class="tab" role="tab" data-tab="portfolio">Portfolio</button>
-    <button class="tab" role="tab" data-tab="org">Org</button>
-    <button class="tab" role="tab" data-tab="suggestions">Suggestions <span id="sugn"></span></button>
-    <button class="tab" role="tab" data-tab="council">Council</button>
-    <button class="tab" role="tab" data-tab="images">Images</button>
+    <button class="tab f1" role="tab" data-tab="needs">Needs you <span id="njtab"></span></button>
+    <button class="tab f1" role="tab" data-tab="activity">Activity</button>
+    <button class="tab f1" role="tab" data-tab="portfolio">Portfolio</button>
+    <button class="tab f1" role="tab" data-tab="org">Org</button>
+    <button class="tab f1" role="tab" data-tab="suggestions">Suggestions <span id="sugn"></span></button>
+    <button class="tab f1" role="tab" data-tab="council">Council</button>
+    <button class="tab f1" role="tab" data-tab="images">Images</button>
+    <button class="tab f2" role="tab" data-tab="positions" hidden>Positions</button>
+    <button class="tab f2" role="tab" data-tab="results" hidden>Results</button>
+    <button class="tab f2" role="tab" data-tab="desks" hidden>Desks</button>
+    <button class="tab f2" role="tab" data-tab="deskact" hidden>Desk activity</button>
     <button class="tab" role="tab" data-tab="vault">Vault</button>
   </div>
   </nav>
@@ -384,6 +399,31 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <h2>Images</h2>
     <div class="hint">Every picture made on the hub machine's graphics card, newest first. Click one to open it full size. (Pictures agents made in Muse are in their listing packages.)</div>
     <div id="gallery" class="gallery"></div>
+  </section>
+  <section id="positions" hidden>
+    <h2>Positions</h2>
+    <div class="hint">Calls the desks would bet, before the game. Each is marked against DraftKings' line right now: if the
+      line moved toward the call since it was made, the market <b>agrees</b> — the best early sign of a good decision.
+      The game's result is mostly luck; the market moving your way usually isn't.</div>
+    <section class="card" id="poslist" role="region" aria-label="Open positions"></section>
+  </section>
+  <section id="results" hidden>
+    <h2>Results</h2>
+    <div class="hint">Settled calls, as if every one were a $10 bet. <b>Beat the close</b> means the desk got a better number
+      than DraftKings' final line before the game — over many calls, desks that keep beating the close tend to win.</div>
+    <div class="card" id="reschart"></div>
+    <section class="card" id="reslist" role="region" aria-label="Settled calls" style="margin-top:12px"></section>
+  </section>
+  <section id="desks" hidden>
+    <h2>Desks</h2>
+    <div class="hint">One agent per sport. How each is doing, and what it did last.</div>
+    <div id="deskcards" class="dgrid"></div>
+  </section>
+  <section id="deskact" hidden>
+    <h2>Desk activity</h2>
+    <div class="hint">The hub wakes a desk when its DraftKings lines move. Here is each wake, what the desk said back, and every call it logged.</div>
+    <label class="vh" for="actdesk">Desk</label><select id="actdesk" class="agentsel"><option value="">All desks</option></select>
+    <div class="card" id="actfeed" style="margin-top:10px"></div>
   </section>
   <section id="vault" hidden>
     <h2>Etsy shops</h2>
@@ -482,7 +522,9 @@ function paint(){
   $("elev").textContent = floor===1 ? "Floor 2" : "Floor 1";
   $("elev").title = floor===1 ? "Take the elevator to the sports desk" : "Take the elevator back to the Etsy company";
   $("floorname").textContent = floor===2 ? " · Sports desk" : "";
-  $("book").hidden = floor!==2; if(floor===2) renderBook(raw.book||{calls:[],desks:{}});
+  $("book").hidden = floor!==2 || tab!=="overview"; if(floor===2){ renderBook(raw.book||{calls:[],desks:{}}); renderFloor2(raw.book||{}); }
+  document.querySelectorAll(".tab").forEach(t=>t.hidden = floor===2 ? t.classList.contains("f1") : t.classList.contains("f2"));
+  const cur=document.querySelector(`.tab[data-tab="${tab}"]`); if(cur && cur.hidden) selectTab("overview");
   $("fresh").textContent = "updated " + new Date(b.now*1000).toLocaleTimeString();
   $("money").textContent = money(b.revenue && b.revenue.total);
   const by=(b.revenue&&b.revenue.by_product)||{};
@@ -988,7 +1030,7 @@ async function loadOlder(){
 $("feed").addEventListener("scroll",e=>{ const f=e.target; if(f.scrollHeight-f.scrollTop-f.clientHeight<200) loadOlder(); });
 $("customrange").onsubmit=e=>{ e.preventDefault(); const f=$("rng_from").value, t=$("rng_to").value; if(!f) return toast("Pick a start time");
   act.since=new Date(f).getTime()/1000; act.until=t?new Date(t).getTime()/1000:null; resetOlder(); renderActivity(); };
-function showOnly(id){ if(id!=="detail") shownFor=null; ["overview","needs","activity","portfolio","product","org","suggestions","council","images","vault","detail"].forEach(s=>$(s).hidden=s!==id); }
+function showOnly(id){ if(id!=="detail") shownFor=null; ["overview","needs","activity","portfolio","product","org","suggestions","council","images","vault","detail","positions","results","desks","deskact"].forEach(s=>$(s).hidden=s!==id); }
 function menu(open){ $("drawer").classList.toggle("open",open); $("scrim").hidden=!open;
   document.querySelectorAll(".menubtn").forEach(b=>b.setAttribute("aria-expanded",open));
   if(open) (document.querySelector('.tab[aria-selected="true"]')||document.querySelector(".tab")).focus(); }
@@ -998,7 +1040,7 @@ addEventListener("keydown",e=>{ if(e.key==="Escape"&&$("drawer").classList.conta
 function selectTab(name){ tab=name; openAgent=null; openProduct=null; menu(false); if(document.fullscreenElement) document.exitFullscreen();
   document.querySelectorAll(".tab").forEach(t=>t.setAttribute("aria-selected", t.dataset.tab===name));
   showOnly(name); if(name==="activity") renderActivity(); if(name==="council") renderCouncil(); if(name==="vault") renderVault(); if(name==="images") renderImages();
-  if(name==="org") renderOrg(); if(name==="suggestions") renderSuggestions(); }
+  if(name==="org") renderOrg(); if(name==="suggestions") renderSuggestions(); if(raw && floor===2) renderFloor2(raw.book||{}); }
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>selectTab(t.dataset.tab));
 document.querySelectorAll("[data-back]").forEach(b=>b.onclick=()=>selectTab(b.dataset.back));
 function paintTheme(){ const light=document.documentElement.dataset.theme==="light", b=$("theme");
@@ -1008,16 +1050,64 @@ $("theme").onclick=()=>{ const t=document.documentElement.dataset.theme==="light
 paintTheme();
 // the next refresh waits for this one: overlapping polls piled up on a slow hub and nothing ever arrived
 $("elev").onclick=()=>{ floor=floor===1?2:1; try{ localStorage.setItem("hub-floor",String(floor)); }catch(e){} if(raw) paint(); };
-function renderBook(bk){
-  const u=x=>x==null?"":`<span class="${x>0?"up":x<0?"dn":"mu"}">${x>0?"+":""}${x.toFixed(2)}u</span>`;
-  const pick=c=>c.market==="total"?`${esc(c.side)} ${c.line}`:c.market==="spread"?`${esc(c.side)} ${c.line>0?"+":""}${c.line}`:`${esc(c.side)} ML`;
-  const desks=Object.values(bk.desks||{}).filter(d=>d.agents.length||d.calls).map(d=>`<div class="bd"><b>${esc(d.name)}</b><span>${u(d.units)}</span>
-    <span class="mu">${esc(d.agents.join(", ")||"no agent")} · ${d.w}-${d.l}-${d.p}${d.open?` · ${d.open} open`:""} · watching ${d.watching||0}</span>
-    <span class="mu">${d.graded?`beat close ${d.beat_close}/${d.graded}`:"—"}</span></div>`).join("");
-  const calls=(bk.calls||[]).slice(0,40).map(c=>`<div class="bc"><b>${esc(c.game_name||c.game)}</b> · ${pick(c)} (${c.odds>0?"+":""}${c.odds})
-    <span style="float:right">${c.result?esc(c.result)+" "+u(c.units):"open"}</span>
-    <div class="mu">${esc((c.desk||"").toUpperCase())} · ${esc(c.agent)}${c.beat_close==null?"":c.beat_close?" · beat the close":" · missed the close"} — ${esc(c.reason||"")}</div></div>`).join("");
-  $("book").innerHTML=`<h3>Book · if every call were 1 unit</h3>${desks||`<div class="mu">No desks staffed yet.</div>`}${calls||`<div class="mu">No calls yet. Desks log them before each game.</div>`}`;
+const ten=u=>u==null?null:u*10, usd=x=>x==null?"":`${x>0?"+":x<0?"−":""}$${Math.abs(x).toFixed(2)}`;
+const pays=o=>(o>0?o/10:1000/-o).toFixed(2);       // profit on a $10 bet at American odds o
+const when=t=>t?new Date(t*1000).toLocaleString([], {weekday:"short", hour:"numeric", minute:"2-digit"}):"";
+const desk=k=>((raw&&raw.book&&raw.book.desks||{})[k]||{}).name||(k||"").toUpperCase();
+const odds=o=>o==null?"":(o>0?"+":"")+o;
+function verdict(c){ const v=c.since; if(!v) return `<span class="vd flat">no line yet</span>`;
+  const was=c.market==="moneyline"?odds(c.odds):`${c.line>0&&c.market==="spread"?"+":""}${c.line}`,
+        is=c.market==="moneyline"?odds(c.now_odds):`${c.now_line>0&&c.market==="spread"?"+":""}${c.now_line}`;
+  const txt={agrees:"▲ Market agrees",disagrees:"▼ Market disagrees",flat:"– No move yet"}[v.verdict];
+  return `<span class="vd ${v.verdict}">${txt}</span><div class="mu">${was===is?"same line":`${esc(was)} → ${esc(is)}`}</div>`; }
+function renderBook(bk){                              // the overview: the floor at a glance, over the office
+  const open=(bk.calls||[]).filter(c=>!c.result), done=(bk.calls||[]).filter(c=>c.result&&c.result!=="void");
+  const agree=open.filter(c=>c.since&&c.since.verdict==="agrees").length, money=done.reduce((a,c)=>a+(c.units||0)*10,0);
+  const beat=done.filter(c=>c.beat_close).length;
+  $("book").innerHTML=`<h3>Sports desk right now</h3><div class="kpis">
+    <div class="kpi"><b>${open.length}</b><span>open positions</span></div>
+    <div class="kpi"><b>${open.length?`${agree} of ${open.length}`:"—"}</b><span>market moved their way</span></div>
+    <div class="kpi"><b>${done.length}</b><span>settled · ${done.length?`beat the close ${beat}`:"none yet"}</span></div>
+    <div class="kpi"><b>${done.length?usd(money):"$0"}</b><span>if every call were a $10 bet</span></div></div>
+    ${open.slice(0,6).map(c=>`<div class="bc"><b>${esc(c.pick)}</b> · ${esc(c.game_name||"")} <span style="float:right">${verdict(c).split("<div")[0]}</span>
+      <div class="mu">${esc(desk(c.desk))} · ${when(c.start)}</div></div>`).join("")||`<div class="mu">No open positions. Desks log them before each game.</div>`}
+    <div style="margin-top:8px"><button class="btn sm" type="button" data-go="positions">All positions →</button> <button class="btn sm" type="button" data-go="desks">Desks →</button></div>`;
+  $("book").querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>selectTab(b.dataset.go)); }
+function renderFloor2(bk){
+  const calls=bk.calls||[], open=calls.filter(c=>!c.result).sort((a,b)=>(a.start||0)-(b.start||0)), done=calls.filter(c=>c.result);
+  if(tab==="positions") $("poslist").innerHTML=open.length?`<table class="ptab"><thead><tr><th>Starts</th><th>Pick</th><th class="hide-s">Price</th><th>Since the call</th><th class="hide-s">Desk</th></tr></thead><tbody>
+    ${open.map(c=>`<tr><td>${when(c.start)}</td><td><b>${esc(c.pick)}</b><div class="mu">${esc(c.game_name||"")}</div>
+      <details class="why"><summary>Why</summary>${esc(c.reason||"")}<br><i>Wrong if:</i> ${esc(c.kill||"")}</details></td>
+      <td class="hide-s">${odds(c.odds)}<div class="mu">pays $${pays(c.odds)} on $10</div></td><td>${verdict(c)}</td>
+      <td class="hide-s">${esc(desk(c.desk))}<div class="mu">${esc(c.agent)} · ${"●".repeat(c.confidence||1)}${"○".repeat(3-(c.confidence||1))}</div></td></tr>`).join("")}</tbody></table>`
+    :`<div class="row empty">No open positions. Desks log them before each game.</div>`;
+  if(tab==="results"){
+    const settled=done.filter(c=>c.result!=="void").sort((a,b)=>(a.graded_at||0)-(b.graded_at||0));
+    let run=0; const pts=[0,...settled.map(c=>run+=(c.units||0)*10)], W=600, H=120, mx=Math.max(1,...pts.map(Math.abs));
+    const line=pts.length>1?pts.map((v,i)=>`${(i/(pts.length-1)*W).toFixed(1)},${(H/2-v/mx*(H/2-8)).toFixed(1)}`).join(" "):"";
+    $("reschart").innerHTML=`<div style="padding:12px 14px"><b>${settled.length?usd(run):"$0.00"}</b> <span class="mu">if every settled call were a $10 bet · ${settled.length} settled · beat the close ${settled.filter(c=>c.beat_close).length} of ${settled.filter(c=>c.beat_close!=null).length}</span>
+      ${settled.length>1?`<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" role="img" aria-label="Running total"><line x1="0" x2="${W}" y1="${H/2}" y2="${H/2}" stroke="var(--line)"/><polyline fill="none" stroke="var(--accent)" stroke-width="2" points="${line}"/></svg>`:`<div class="mu" style="margin-top:6px">The running total appears after two settled calls.</div>`}</div>`;
+    $("reslist").innerHTML=done.length?`<table class="ptab"><thead><tr><th>Game</th><th>Pick</th><th>Result</th><th>Decision</th><th class="hide-s">Desk</th></tr></thead><tbody>
+      ${done.map(c=>`<tr><td>${esc(c.game_name||"")}<div class="mu">${when(c.start)}${c.home_score!=null?` · ${c.away} ${c.away_score} – ${c.home} ${c.home_score}`:""}</div></td>
+        <td><b>${esc(c.pick)}</b><div class="mu">${odds(c.odds)}</div></td>
+        <td><span class="vd ${c.result}">${{win:"Won",loss:"Lost",push:"Push",void:"Void"}[c.result]}</span><div class="mu">${usd(ten(c.units))}</div></td>
+        <td>${c.beat_close==null?"—":c.beat_close?`<span class="vd win">✓ Beat the close</span>`:`<span class="vd loss">✗ Missed the close</span>`}<div class="mu">closed ${c.market==="moneyline"?odds(c.close_odds):c.close_line}</div></td>
+        <td class="hide-s">${esc(desk(c.desk))}</td></tr>`).join("")}</tbody></table>`:`<div class="row empty">Nothing settled yet. The hub grades each call when its game ends.</div>`; }
+  if(tab==="desks") $("deskcards").innerHTML=Object.entries(bk.desks||{}).map(([k,d])=>{
+    const last=(bk.activity||[]).find(e=>e.desk===k), open=calls.filter(c=>c.desk===k&&!c.result), agree=open.filter(c=>c.since&&c.since.verdict==="agrees").length;
+    const settled=d.w+d.l+d.p;
+    return `<div class="card dcard"><div class="nm">${esc(d.name)} <span class="mu">· ${esc(d.agents.join(", ")||"no agent")}</span></div>
+      <div class="big">${settled?usd(d.units*10):"$0"}</div><div class="mu">if every call were a $10 bet</div>
+      <div style="margin-top:8px">${settled?`${d.w} won · ${d.l} lost${d.p?` · ${d.p} push`:""}`:"Nothing settled yet"} · beat the close ${d.graded?`${d.beat_close} of ${d.graded}`:"—"}</div>
+      <div>${d.open} open${d.open?` · market agrees on ${agree}`:""} · watching ${d.watching||0} game${d.watching===1?"":"s"}</div>
+      <div class="mu" style="margin-top:8px">${last?`Last: ${when(last.at)} · ${esc(last.kind==="woken"?"woken — "+last.text:last.kind==="called"?"logged a call":"said: "+last.text.slice(0,140))}`:"No activity yet"}</div>
+      <div class="mu" style="margin-top:6px">${settled<30?`Too early to judge: ${settled} settled. It takes about 50 before a record means much — watch "beat the close" first.`:""}</div></div>`; }).join("");
+  if(tab==="deskact"){
+    const sel=$("actdesk"); if(sel.options.length<2) Object.entries(bk.desks||{}).forEach(([k,d])=>sel.add(new Option(d.name,k)));
+    sel.onchange=()=>renderFloor2(raw.book||{});
+    const ev=(bk.activity||[]).filter(e=>!sel.value||e.desk===sel.value);
+    $("actfeed").innerHTML=ev.map(e=>`<div class="row"><span class="mu">${when(e.at)} · ${esc(desk(e.desk))} · ${esc(e.agent)}</span>
+      <div>${e.kind==="woken"?"🔔 "+esc(e.text):e.kind==="called"?"📝 Logged a call: "+esc(e.text):"💬 "+esc(e.text)}</div></div>`).join("")||`<div class="row empty">Nothing yet.</div>`; }
 }
 (async function poll(){ try { await load(); } catch(e) {} setTimeout(poll, 10000); })();
 </script>
