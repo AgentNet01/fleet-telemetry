@@ -410,6 +410,9 @@ class Hub:
                 raise ValueError(f"unknown agent: {to}")
             if to in self.reporters:                     # writes reports only (Jack, Oct 14); a message would sit unread
                 raise ValueError(f"{to} only writes reports and takes no messages; ask {self._chair() or 'the CEO'} instead")
+            t, f = self._agent(to), self._agent(frm)
+            if t["team"] in DESKS and f and f["kind"] in WORKERS and f["team"] not in DESKS:   # Oct 27: floor 1 kept pulling desks back
+                raise ValueError(f"{to} is on the sports desk now, not the Etsy company; ask {self._chair() or 'the CEO'} instead")
             parent = self._inflight(frm)
             depth = parent["depth"] + 1 if parent else 0
             status = "held" if depth > MAX_DEPTH else "queued"
