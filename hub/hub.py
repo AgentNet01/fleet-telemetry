@@ -149,6 +149,11 @@ create table if not exists changes(id integer primary key, by text, line text, r
 """
 # Columns added to agents/items after milestone 1; harmless on a fresh DB, needed on the PC's.
 MIGRATIONS = [
+    # Oct 26: per-agent lookups scanned all ~70k items on every board build and tick
+    "create index if not exists items_too_status on items(too, status)",
+    "create index if not exists tasks_owner on tasks(owner, status)",
+    "create index if not exists tasks_verifier on tasks(verifier, status)",
+    "create index if not exists work_agent on work(agent, at)",
     "alter table agents add column current_product text",
     "alter table agents add column current_role text",
     "alter table agents add column onboarded real",
@@ -264,6 +269,8 @@ def on_host(url, hosts):
 
 
 ALLOW = ("allow_always", "allow_today", "allow_session", "allow_once")     # broadest allow Muse offers, first
+# Oct 26: a board build takes ~10 s on the PC and every open dashboard polls it; one build serves every viewer for this long
+BOARD_TTL = 5
 ANY_FIT_AFTER = 15 * 60                 # Jack, Oct 16: a ready task nobody on its team is free for goes to any idle agent after this
 TASK_CAP = 2 * 3600                     # Jack, Oct 15: tasks held 5h+ on "still blocked" notes; past this it goes back to its PM
 NUDGE_AFTER = 3600                     # a task holder silent this long is reminded, then its PM an hour later
@@ -556,6 +563,7 @@ class Hub:
             self._guarded(a["name"], lambda a=a: self._poll_agent(a, now))
         for a in agents:
             self._guarded(a["name"], lambda a=a: self._deliver_agent(a["name"], a["kind"], now))
+        self.board_changed()
 
     FAIL_ESCALATE = 5                    # consecutive failures before an agent's trouble reaches Jack
 
@@ -2522,6 +2530,20 @@ class Hub:
             fresh = (self.clock() - (r["at"] or 0)) < 120
         return {"task": ({"id": t["id"], "title": t["title"]} if t else None), "doing": doing, "reporting": fresh}
 
+    _board_at, _board_lock = float("-inf"), threading.Lock()
+
+    def board_changed(self):
+        self._board_at = float("-inf")
+
+    def board_shared(self):
+        """Oct 26: with each build longer than the dashboard's poll, requests queued without end and every page stayed
+        blank. Viewers asking while a build runs wait for that one, then share it."""
+        with self._board_lock:
+            if self.clock() - self._board_at >= BOARD_TTL:
+                self._board = self.board()
+                self._board_at = self.clock()
+            return self._board
+
     def board(self):
         current_rev = fleet_rev()
         with self.lock:
@@ -2561,12 +2583,17 @@ class Hub:
 
     def portfolio(self):
         with self.lock:
-            out = []
+            out, by_project = [], {}
+            # one query for every task (Oct 26: two per task, ~19k, made the board 8-12 s on the PC); same rows as task()
+            for r in self.db.execute("select t.*, p.name as product from tasks t join projects pr on t.project=pr.id "
+                                     "join products p on pr.product=p.id order by t.id"):
+                d = dict(r)
+                d["blocked_by"] = json.loads(d["blocked_by"] or "[]")
+                by_project.setdefault(d["project"], []).append(d)
             for p in self.db.execute("select * from products where status != 'removed' order by id"):
                 projects = []
                 for pr in self.db.execute("select * from projects where product=? and status != 'removed' order by id", (p["id"],)):
-                    tasks = [self.task(t["id"]) for t in self.db.execute("select id from tasks where project=? order by id", (pr["id"],))]
-                    projects.append({"id": pr["id"], "name": pr["name"], "tasks": tasks})
+                    projects.append({"id": pr["id"], "name": pr["name"], "tasks": by_project.get(pr["id"], [])})
                 rev = self.db.execute("select coalesce(sum(amount),0) s from sales where product=?", (p["name"],)).fetchone()["s"]
                 out.append({"id": p["id"], "name": p["name"], "brief": p["brief"], "pm": p["pm"], "metric": p["metric"],
                             "budget": p["budget"], "kill_date": p["kill_date"], "status": p["status"], "kind": p["kind"] or "product",
@@ -2585,8 +2612,14 @@ def serve(hub, host, port, password, join_code=None, logins=None):
 
         def _json(self, code, obj):
             body = json.dumps(obj).encode()
+            # Oct 26: the board is ~13 MB and took ~17 s through Funnel; gzip makes it a quarter
+            gz = len(body) > 65536 and "gzip" in self.headers.get("Accept-Encoding", "")
+            if gz:
+                import gzip
+                body = gzip.compress(body, 5)
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
+            gz and self.send_header("Content-Encoding", "gzip")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -2731,7 +2764,7 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                 elif u.path == "/api/board":
                     if self._jack():
                         import etsy
-                        self._json(200, dict(hub.board(), etsy=etsy.shops(hub), you=self.who))
+                        self._json(200, dict(hub.board_shared(), etsy=etsy.shops(hub), you=self.who))
                 elif u.path in ("/etsy/connect", "/etsy/callback"):   # linking an Etsy shop (board login only)
                     if self._jack():
                         import etsy
@@ -2834,6 +2867,12 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                 self._json(500, {"error": str(e)})
 
         def do_POST(self):
+            try:
+                self._post()
+            finally:
+                hub.board_changed()                  # whatever this POST changed shows on the very next board
+
+        def _post(self):
             u = urlparse(self.path)
             try:
                 if u.path == "/mcp":

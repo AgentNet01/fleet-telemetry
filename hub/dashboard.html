@@ -991,7 +991,20 @@ function paintTheme(){ const light=document.documentElement.dataset.theme==="lig
 $("theme").onclick=()=>{ const t=document.documentElement.dataset.theme==="light"?"dark":"light";
   document.documentElement.dataset.theme=t; try{ localStorage.setItem("hub-theme",t); }catch(e){} paintTheme(); };
 paintTheme();
-load(); setInterval(load, 10000);
+// the next refresh waits for this one: overlapping polls piled up on a slow hub and nothing ever arrived
+$("elev").onclick=()=>{ floor=floor===1?2:1; try{ localStorage.setItem("hub-floor",String(floor)); }catch(e){} if(raw) paint(); };
+function renderBook(bk){
+  const u=x=>x==null?"":`<span class="${x>0?"up":x<0?"dn":"mu"}">${x>0?"+":""}${x.toFixed(2)}u</span>`;
+  const pick=c=>c.market==="total"?`${esc(c.side)} ${c.line}`:c.market==="spread"?`${esc(c.side)} ${c.line>0?"+":""}${c.line}`:`${esc(c.side)} ML`;
+  const desks=Object.values(bk.desks||{}).filter(d=>d.agents.length||d.calls).map(d=>`<div class="bd"><b>${esc(d.name)}</b><span>${u(d.units)}</span>
+    <span class="mu">${esc(d.agents.join(", ")||"no agent")} · ${d.w}-${d.l}-${d.p}${d.open?` · ${d.open} open`:""} · watching ${d.watching||0}</span>
+    <span class="mu">${d.graded?`beat close ${d.beat_close}/${d.graded}`:"—"}</span></div>`).join("");
+  const calls=(bk.calls||[]).slice(0,40).map(c=>`<div class="bc"><b>${esc(c.game_name||c.game)}</b> · ${pick(c)} (${c.odds>0?"+":""}${c.odds})
+    <span style="float:right">${c.result?esc(c.result)+" "+u(c.units):"open"}</span>
+    <div class="mu">${esc((c.desk||"").toUpperCase())} · ${esc(c.agent)}${c.beat_close==null?"":c.beat_close?" · beat the close":" · missed the close"} — ${esc(c.reason||"")}</div></div>`).join("");
+  $("book").innerHTML=`<h3>Book · if every call were 1 unit</h3>${desks||`<div class="mu">No desks staffed yet.</div>`}${calls||`<div class="mu">No calls yet. Desks log them before each game.</div>`}`;
+}
+(async function poll(){ try { await load(); } catch(e) {} setTimeout(poll, 10000); })();
 </script>
 <script src="office.js"></script>
 </body>

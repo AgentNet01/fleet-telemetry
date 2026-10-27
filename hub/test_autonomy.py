@@ -560,6 +560,25 @@ def scout():
     print("scout OK")
 
 
+def board_shared():
+    """Oct 26: a board build outlasted the dashboard's 10 s poll, requests queued without end and every page went
+    blank. Viewers asking at once share one build; a fresh one comes only after BOARD_TTL."""
+    import threading, time as _t
+    h, muse, clock = new_hub("Ada")
+    builds, real = [], h.board
+    def slow():
+        builds.append(1); _t.sleep(0.3); return real()
+    h.board = slow
+    ts = [threading.Thread(target=h.board_shared) for _ in range(5)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    assert len(builds) == 1, f"board_shared: 5 viewers at once, {len(builds)} builds"
+    h.board_shared()
+    assert len(builds) == 1, "board_shared: reused within BOARD_TTL"
+    clock.go(hub.BOARD_TTL + 1); h.board_shared()
+    assert len(builds) == 2, "board_shared: rebuilt after BOARD_TTL"
+    print("board_shared OK")
+
+
 if __name__ == "__main__":
     {"activity": activity, "truth": truth, "planning": planning, "standin": standin,
-     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "ask_up": ask_up, "overdue": overdue, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain, "unjoined": unjoined, "live_done": live_done, "scout": scout}[sys.argv[1]]()
+     "planner_not_asker": planner_not_asker, "pm_review": pm_review, "powers_told": powers_told, "approvals": approvals, "auto_approve": auto_approve, "paused": paused, "planner_silent": planner_silent, "pause_board_only": pause_board_only, "wait": wait, "ask_up": ask_up, "overdue": overdue, "pause_frees": pause_frees, "switch_edit": switch_edit, "chain": chain, "unjoined": unjoined, "live_done": live_done, "scout": scout, "board_shared": board_shared}[sys.argv[1]]()
