@@ -1141,6 +1141,9 @@ function want(a) {
   if (f.doing) return { mode: "work", key: "work:" + f.doing, card: short(f.doing) };
   if (dg.busy) return { mode: "work", key: "work:muse", card: "↻ " + short(dg.line || "working", 36) };
   if (a.current) return { mode: "call", key: "call#" + a.current.id, card: "↩ " + short(a.current.text, 34) };
+  const dk = a.floor === 2 && ((lastBoard && lastBoard.book && lastBoard.book.desks) || {})[a.team];
+  if (dk) return { mode: "work", key: "desk:" + a.team,       // a desk is on duty between rounds: the hub watches its board
+    card: `${dk.name} desk · ${dk.open} open · ${dk.watching} games` };
   return { mode: "idle", key: "idle", card: null };
 }
 let events = [], first = true, lastBoard = null, pmOfficeOf = null;

@@ -277,6 +277,30 @@ def research():
     print("research OK")
 
 
+def office():
+    """Jack, Oct 27: "make it so I can see what agents are doing… on floor 2 it seems like everyone is always not
+    working". Between hub rounds a desk agent is on duty: it sits at a desk working its sport's board, not on a break."""
+    from playwright.sync_api import sync_playwright
+    from test_ui import PASSWORD, seeded
+    h, srv, url = seeded()
+    h.add_agent("Nb", "muse"); h.manage("dot", "team Nb nba")
+    feed(h, nba=[event("g1", "BKN", "BOS", h.clock() + 3 * HOUR, spread=(-11.5, -110, -110))])
+    poll(h, h.clock)
+    with h.lock:
+        h.db.execute("update items set status='done' where too='Nb'")     # nothing in flight: between rounds
+    with sync_playwright() as pw:
+        page = pw.chromium.launch().new_page(viewport={"width": 1440, "height": 900},
+                                             http_credentials={"username": "jack", "password": PASSWORD})
+        page.goto(url)
+        page.wait_for_function("window.Office3D && Office3D.debug.state().ready", timeout=60000)
+        page.get_by_role("button", name="Floor 2").click()
+        page.wait_for_function("Office.debug.people.get('Nb')", timeout=20000)
+        nb = page.evaluate("(() => { const p = Office.debug.people.get('Nb'); return { mode: p.mode, card: p.card }; })()")
+        assert nb["mode"] == "work" and "NBA" in (nb["card"] or ""), f"office: the NBA desk agent looks off duty: {nb}"
+    srv.shutdown()
+    print("office OK")
+
+
 def local(day, hh, mm=0):
     """Epoch for a local wall-clock time on day `day` after a fixed base, so slate tests don't depend on today's date."""
     return time.mktime((2026, 11, 2 + day, hh, mm, 0, 0, 0, -1))
@@ -370,4 +394,4 @@ def review():
 
 
 if __name__ == "__main__":
-    {"book": book, "watch": watch, "board_speed": board_speed, "elevator": elevator, "pages": pages, "wall": wall, "research": research, "slate": slate, "sanity": sanity, "review": review}[sys.argv[1]]()
+    {"book": book, "watch": watch, "board_speed": board_speed, "elevator": elevator, "pages": pages, "wall": wall, "research": research, "slate": slate, "office": office, "sanity": sanity, "review": review}[sys.argv[1]]()
