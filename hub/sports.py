@@ -20,6 +20,10 @@ FEED = "https://site.api.espn.com/apis/site/v2/sports/"
 POLL, JITTER = 300, 90                  # Jack: every five minutes, give or take 90 seconds
 WAKE_GAP = 20 * 60                      # at most one wake per desk this often; moves in between are batched
 SWEEP = 45 * 60                         # Jack, Oct 27: a research round this often when nothing has moved, any hour
+FINAL_LOOK = 2 * 3600                   # a last look at each game this long before it starts: lineups and goalies are out
+REVIEW_GAP = 3 * 3600                   # another desk checks a desk's new calls' reasoning at most this often
+FIXED_SPREAD = ("nhl", "soccer")        # puck lines and goal lines sit at ±1.5/±0.5; the moneyline carries the moves
+MAX_EDGE = 0.10                         # a claimed edge past 10 points of implied probability is a mistake, not a bet
 MOVE_PTS = {"nhl": 0.5, "soccer": 0.5}  # a spread or total move worth a wake; 1 point everywhere else
 MOVE_PROB = 0.03                        # a moneyline move worth a wake: 3 points of implied probability
 FINAL = ("STATUS_FINAL", "STATUS_FULL_TIME", "STATUS_FINAL_OT", "STATUS_FINAL_PEN", "STATUS_FINAL_AET")
@@ -38,6 +42,7 @@ create table if not exists calls(id integer primary key, desk text, agent text, 
   line real, odds integer, fair_odds integer, confidence integer, reason text, kill text, made_at real,
   close_line real, close_odds integer, result text, graded_at real);
 create table if not exists desk_state(desk text primary key, next_poll real, last_wake real, last_sweep real, pending text);
+create table if not exists offered(game text, stage integer, at real, primary key(game, stage));
 """
 
 
@@ -129,6 +134,11 @@ def _urls(desk, path, now):
 def _ensure(h):
     if not getattr(h, "_sports_ready", False):
         h.db.executescript(SCHEMA)
+        for col in ("review text", "review_by text", "review_note text", "review_asked real"):
+            try:
+                h.db.execute(f"alter table calls add column {col}")
+            except Exception:                         # already there
+                pass
         h._sports_ready = True
 
 
@@ -201,6 +211,8 @@ def _record(h, desk, game, lines, now):
                          (game["id"], market, side, line, odds, now))
         if (market, side) not in (("spread", game["home"]), ("total", "over"), ("moneyline", game["home"])):
             continue                                      # one side per market says it; the other is its mirror
+        if market == "spread" and desk in FIXED_SPREAD:
+            continue                                      # Oct 27 live: the feed toggles CHI +1.5 / -1.5 all day
         ref = h.db.execute("select * from line_refs where game=? and market=? and side=?", (game["id"], market, side)).fetchone()
         if ref and market != "moneyline" and abs(line - ref["line"]) < MOVE_PTS.get(desk, 1.0):
             continue
@@ -228,32 +240,81 @@ def _wake(h, desk, now):
             h._deliver_to(n, f"{NAMES[desk]} lines moved", "DraftKings lines on your board changed:\n" + body + "\n\n" + NEXT)
         h.db.execute("update desk_state set pending='[]', last_wake=? where desk=?", (now, desk))
     elif not pending and now - last >= SWEEP:
-        games = h.db.execute("select g.*, (select line from lines l where l.game=g.id and l.market='spread' and l.side=g.home "
-                             "order by at desc limit 1) as sp, (select line from lines l where l.game=g.id and l.market='total' "
-                             "and l.side='over' order by at desc limit 1) as tot from games g where desk=? and "
-                             "status='STATUS_SCHEDULED' and start > ? order by start limit 12", (desk, now)).fetchall()
-        if not games:
-            return
-        board = "\n".join(f"- {g['id']} {g['name']} {time.strftime('%a %H:%M', time.localtime(g['start']))}"
-                          + (f" · {g['home']} {g['sp']:+g}" if g["sp"] is not None else "")
-                          + (f" · total {g['tot']:g}" if g["tot"] is not None else "") for g in games)
+        first = h.db.execute("select min(start) from games where desk=? and status='STATUS_SCHEDULED' and start > ?",
+                             (desk, now)).fetchone()[0]
+        if first:
+            d = time.localtime(first - 6 * 3600)          # a slate runs to 6am: late West Coast games belong to it
+            end = time.mktime((d.tm_year, d.tm_mon, d.tm_mday + 1, 6, 0, 0, 0, 0, -1))
+            games = _open_games(h, desk, now, end, 1)
+            if games:
+                for n in staff:
+                    h._deliver_to(n, f"{NAMES[desk]} slate · research round", SLATE + _board(games) + "\n\n" + NEXT)
+                h.db.executemany("insert or ignore into offered(game, stage, at) values(?,1,?)", [(g["id"], now) for g in games])
+                h.db.execute("update desk_state set last_sweep=? where desk=?", (now, desk))
+    soon = _open_games(h, desk, now, now + FINAL_LOOK, 2)
+    if soon and staff:
         for n in staff:
-            h._deliver_to(n, f"{NAMES[desk]} research round", "Nothing big has moved since your last look. Pick one or two of "
-                          "these and dig in properly: injuries and lineups, rest and travel, weather, matchups, recent form, "
-                          "what the market might be missing. Then log a position or pass, and say why in one line.\n"
-                          + board + "\n\n" + NEXT)
-        h.db.execute("update desk_state set last_sweep=? where desk=?", (now, desk))
+            h._deliver_to(n, f"{NAMES[desk]} final look", LOOK + _board(soon) + "\n\n" + NEXT)
+        h.db.executemany("insert or ignore into offered(game, stage, at) values(?,2,?)", [(g["id"], now) for g in soon])
+    _review_round(h, desk, staff, now)
+
+
+SLATE = ("Your slate: the games on your next day of play that you haven't called yet. Price every one. Work out your own "
+         "fair line (injuries and lineups, rest and travel, weather, matchups, form), then log a call on each game where "
+         "you have a view, including leans: confidence 1 is a lean, 2 solid, 3 strong. Skip a game only when you think the "
+         "price is right, and say so in one line. Be honest about size: on a spread or total a real edge is usually 1 to 4 "
+         "points of win probability, so a fair price of about -115 to -125 against -110, not -140.\n")
+LOOK = ("Final look: these start within two hours and you haven't called them. Lineups, goalies and late injury news are out "
+        "now. Check them, and log a call on any game where you now have a view (leans count).\n")
+
+
+def _open_games(h, desk, now, end, stage):
+    """Scheduled games starting before `end` that the desk hasn't called and hasn't been handed at this stage yet."""
+    return h.db.execute(
+        "select g.*, (select line from lines l where l.game=g.id and l.market='spread' and l.side=g.home order by at desc "
+        "limit 1) as sp, (select line from lines l where l.game=g.id and l.market='total' and l.side='over' order by at desc "
+        "limit 1) as tot from games g where desk=? and status='STATUS_SCHEDULED' and start > ? and start <= ? and not exists "
+        "(select 1 from calls c where c.game=g.id) and not exists (select 1 from offered o where o.game=g.id and o.stage=?) "
+        "order by start limit 40", (desk, now, end, stage)).fetchall()
+
+
+def _board(games):
+    return "\n".join(f"- {g['id']} {g['name']} {time.strftime('%a %H:%M', time.localtime(g['start']))}"
+                     + (f" · {g['home']} {g['sp']:+g}" if g["sp"] is not None else "")
+                     + (f" · total {g['tot']:g}" if g["tot"] is not None else "") for g in games)
+
+
+def _review_round(h, desk, staff, now):
+    """Hand this desk's newest unreviewed calls to the next staffed desk, at most every REVIEW_GAP."""
+    staffed = [k for k in LEAGUES if h.db.execute("select 1 from agents where team=? and state='active'", (k,)).fetchone()]
+    if not staff or len(staffed) < 2:
+        return
+    peer = staffed[(staffed.index(desk) + 1) % len(staffed)]
+    last = h.db.execute("select max(review_asked) from calls where desk=?", (desk,)).fetchone()[0]
+    calls = h.db.execute("select c.*, g.name as game_name, g.home, g.away, g.home_name, g.away_name from calls c join games g "
+                         "on g.id=c.game where c.desk=? and c.review_asked is null order by c.id limit 15", (desk,)).fetchall()
+    if not calls or (last and now - last < REVIEW_GAP):
+        return
+    body = "\n".join(f"- #{c['id']} {c['game_name']}: {_pick(c)} at {c['odds']:+d}, fair {c['fair_odds']:+d}, confidence "
+                     f"{c['confidence']}. Why: {c['reason']} Wrong if: {c['kill']}" for c in calls)
+    for n in [r["name"] for r in h.db.execute("select name from agents where team=? and state='active'", (peer,))]:
+        h._deliver_to(n, f"Check the {NAMES[desk]} desk's reasoning",
+                      f"A second pair of eyes on the {NAMES[desk]} desk's new calls. For each, does the reasoning actually "
+                      "support that side at that price? Look for reasons that argue the other way, facts that are wrong or "
+                      "made up, a fair price far from anything the reasons justify, or filler. Then mark each one:\n"
+                      "`fleet call review <id> ok \"<one line>\"` or `fleet call review <id> flag \"<what's wrong>\"`\n" + body)
+    h.db.executemany("update calls set review_asked=? where id=?", [(now, c["id"]) for c in calls])
 
 
 NEXT = ("Confirm the exact price on DraftKings (logged out) before you log anything. If it's worth a position: "
         "`fleet call add <game id> spread|total|moneyline <side> <line, or - for moneyline> <DraftKings odds> <your fair odds> "
-        "<confidence 1-3> \"<why>\" \"<what would make it wrong>\"`. Game ids: `fleet call games`. Passing is fine.")
+        "<confidence 1-3> \"<why>\" \"<what would make it wrong>\"`. Game ids: `fleet call games`. Leans count (confidence 1).")
 
 
 def _grade(h, game):
     for c in h.db.execute("select * from calls where game=? and result is null", (game["id"],)).fetchall():
-        close = h.db.execute("select line, odds from lines where game=? and market=? and side=? order by at desc limit 1",
-                             (game["id"], c["market"], c["side"])).fetchone()
+        close = h.db.execute("select line, odds from lines where game=? and market=? and side=? and (market!='spread' or "
+                             "line*?>0) order by at desc limit 1", (game["id"], c["market"], c["side"], c["line"] or 0)).fetchone()
         res = "void" if game["status"] in VOID else _result(c, game)
         h.db.execute("update calls set result=?, close_line=?, close_odds=?, graded_at=? where id=?",
                      (res, close and close["line"], close and close["odds"], h.clock(), c["id"]))
@@ -308,13 +369,16 @@ def _pick(c):
     return "Draw" if c["side"] == "draw" else f"{name} to win"
 
 
+SAME = "and (l.market!='spread' or l.line*c.line>0)"    # a spread call follows its own side of the line, not the alternate
+
+
 def _calls(h, desk=None, limit=500):
     """Every call with its game and the market's latest line for it: the one query the book and `call list` share."""
     rows = h.db.execute(
         "select c.*, g.name as game_name, g.start, g.status, g.home, g.away, g.home_name, g.away_name, g.home_score, "
         "g.away_score, (select line from lines l where l.game=c.game and l.market=c.market and l.side=c.side "
-        "order by at desc limit 1) as now_line, (select odds from lines l where l.game=c.game and l.market=c.market "
-        "and l.side=c.side order by at desc limit 1) as now_odds from calls c left join games g on g.id=c.game "
+        f"{SAME} order by at desc limit 1) as now_line, (select odds from lines l where l.game=c.game and l.market=c.market "
+        f"and l.side=c.side {SAME} order by at desc limit 1) as now_odds from calls c left join games g on g.id=c.game "
         "where ? is null or c.desk=? order by c.id desc limit ?", (desk, desk, limit))
     return [dict(_graded(c), pick=_pick(c)) for c in rows]
 
@@ -331,9 +395,15 @@ def book(h):
                     "p": sum(c["result"] == "push" for c in mine),
                     "units": sum(c["units"] or 0 for c in mine),
                     "graded": sum(c["beat_close"] is not None for c in mine), "beat_close": sum(bool(c["beat_close"]) for c in mine),
+                    "by_conf": {str(n): _tally([c for c in mine if c["confidence"] == n]) for n in (1, 2, 3)},
                     "watching": h.db.execute("select count(*) from games where desk=? and status='STATUS_SCHEDULED' and start > ?",
                                              (k, h.clock())).fetchone()[0]}
     return {"calls": calls, "desks": desks, "activity": _activity(h)}
+
+
+def _tally(cs):
+    return {"calls": len(cs), "units": sum(c["units"] or 0 for c in cs), "graded": sum(c["beat_close"] is not None for c in cs),
+            "beat_close": sum(bool(c["beat_close"]) for c in cs), "flagged": sum(c["review"] == "flag" for c in cs)}
 
 
 def _wake_text(text):
@@ -351,8 +421,7 @@ def _activity(h, limit=80):
     q = ",".join("?" * len(staff))
     out = [{"at": r["created"], "agent": r["too"], "desk": staff[r["too"]], "kind": "woken",
             "text": _wake_text(r["text"] or "")}
-           for r in h.db.execute(f"select too, text, created from items where too in ({q}) and frm='hub' and (text like '% lines moved%' "
-                                 "or text like '% sweep%') order by id desc limit ?",
+           for r in h.db.execute(f"select too, text, created from items where too in ({q}) and frm='hub' order by id desc limit ?",
                                  (*staff, limit))]
     out += [{"at": r["at"], "agent": r["agent"], "desk": staff[r["agent"]], "kind": "said", "text": (r["text"] or "")[:400]}
             for r in h.db.execute(f"select agent, text, at from events where agent in ({q}) and dir='out' order by id desc limit ?",
@@ -382,6 +451,14 @@ def manage(h, by, a):
                          f"{c['result'] or 'open'}" + (f" {c['units']:+.2f}u" if c["units"] is not None else "") +
                          ("" if c["beat_close"] is None else " · beat the close" if c["beat_close"] else " · missed the close")
                          for c in rows) or "no calls yet"
+    if a[1:2] == ["review"] and len(a) == 5 and a[3] in ("ok", "flag"):
+        c = h.db.execute("select * from calls where id=?", (a[2].lstrip("#"),)).fetchone()
+        if not c:
+            raise ValueError(f"no call {a[2]}")
+        if c["desk"] == desk:
+            raise ValueError("another desk reviews your calls; you review theirs")
+        h.db.execute("update calls set review=?, review_by=?, review_note=? where id=?", (a[3], by, a[4], c["id"]))
+        return f"call #{c['id']} marked {a[3]}"
     if a[1:2] != ["add"] or len(a) != 11:
         raise ValueError('use: fleet call add <game id> spread|total|moneyline <side> <line|-> <odds> <fair odds> '
                          '<confidence 1-3> "<why>" "<what would make it wrong>" | fleet call list | fleet call games')
@@ -402,6 +479,16 @@ def manage(h, by, a):
     o, f = _odds(odds), _odds(fair)
     if not o or not f or conf not in ("1", "2", "3"):
         raise ValueError("odds and fair odds are American (-110, +150); confidence is 1, 2 or 3")
+    edge = implied(f) - implied(o)
+    if edge <= 0:
+        raise ValueError(f"your fair price {f:+d} says {o:+d} is no bargain: log a call only where you think the price beats it")
+    if edge > MAX_EDGE:
+        raise ValueError(f"fair {f:+d} against {o:+d} claims a {edge:.0%} edge: real edges are a few points. Recheck your numbers")
+    feed = h.db.execute("select line, odds from lines where game=? and market=? and side=? and (market!='spread' or line*?>0) "
+                        "order by at desc limit 1", (gid, market, side, ln or 0)).fetchone()
+    if feed and ((ln is not None and abs(ln - feed["line"]) > 0.5) or abs(implied(o) - implied(feed["odds"])) > 0.04):
+        raise ValueError(f"DraftKings shows {_show(market, side, feed['line'], feed['odds'])} on the hub's feed (read every "
+                         "5 minutes): log the price you can actually get")
     cid = h.db.execute("insert into calls(desk, agent, game, market, side, line, odds, fair_odds, confidence, reason, kill, made_at) "
                        "values(?,?,?,?,?,?,?,?,?,?,?,?)", (desk, by, gid, market, side, ln, o, f, int(conf), why, kill, now)).lastrowid
     return f"call #{cid} logged: {g['name']} {_show(market, side, ln, o)}. The hub records the close and grades it."

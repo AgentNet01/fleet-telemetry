@@ -17,8 +17,7 @@ for a in db.execute("select name, team, state, fleet_rev, last_out from agents w
                     "('nba','nfl','cfb','nhl','cbb','soccer') order by team"):
     st = db.execute("select * from desk_state where desk=?", (a["team"],)).fetchone()
     watching = db.execute("select count(*) from games where desk=? and status='STATUS_SCHEDULED' and start>?", (a["team"], now)).fetchone()[0]
-    wakes = db.execute("select count(*) from items where too=? and created>? and (text like '%lines moved%' or text like '%sweep%' "
-                       "or text like '%research round%')", (a["name"], since)).fetchone()[0]
+    wakes = db.execute("select count(*) from items where too=? and created>? and frm='hub'", (a["name"], since)).fetchone()[0]
     stuck = db.execute("select count(*) from items where too=? and status in ('queued','sent') and created < ?", (a["name"], now - 3600)).fetchone()[0]
     calls = db.execute("select count(*), sum(result is not null) from calls where desk=?", (a["team"],)).fetchone()
     new = db.execute("select count(*) from calls where desk=? and made_at>?", (a["team"], since)).fetchone()[0]

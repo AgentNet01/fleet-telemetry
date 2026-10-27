@@ -58,6 +58,8 @@
                                      log a position before the game starts. It's never edited; the hub records the
                                      closing line and the result and grades it
     fleet call list                  your calls: open or settled, units won or lost, and whether each beat the close
+    fleet call review <id> ok|flag "<one line>"
+                                     mark another desk's call: does its reasoning support that side at that price?
 
   Running the company. The CEO can do all of this; a product's PM can manage that product's tasks.
   Parking agents is for Jack and Darragh. Every change is logged and shown on the dashboard.

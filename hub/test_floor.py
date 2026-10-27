@@ -109,6 +109,11 @@ def book():
     assert (ny["result"], ny["units"]) == ("push", 0.0), ny
     d = b["desks"]["nba"]
     assert (d["w"], d["l"], d["p"], round(d["units"], 3), d["beat_close"], d["graded"]) == (2, 1, 1, 0.818, 2, 4), d
+    # Jack, Oct 27: judge the desk's judgment. Its one confidence-2 call won and beat the close; of its three leans, one
+    # won (+0.909), one lost, one pushed, and one (the under) beat the close
+    by = d["by_conf"]
+    assert (by["2"]["calls"], round(by["2"]["units"], 3), by["2"]["beat_close"]) == (1, 0.909, 1), by
+    assert (by["1"]["calls"], round(by["1"]["units"], 3), by["1"]["beat_close"], by["1"]["graded"]) == (3, -0.091, 1, 3), by
     print("book OK")
 
 
@@ -263,7 +268,7 @@ def research():
     clock.t = 1_000_000.0 - (1_000_000 % 86400) + 86400 + 3 * HOUR - time.timezone     # 03:00 local: the old pause
     feed(h, nba=[event("g1", "BKN", "BOS", clock() + 10 * HOUR, spread=(-11.5, -110, -110))])
     poll(h, clock)                                     # the opener wake
-    rounds = lambda: [m for m in muse.sent.get("Nb", []) if "research round" in m.lower()]
+    rounds = lambda: [m for m in muse.sent.get("Nb", []) if "lines moved" not in m]
     clock.go(30 * 60); poll(h, clock)                  # 36.7 min after the wake
     assert not rounds(), "research: a round came before 45 minutes passed"
     clock.go(5 * 60); poll(h, clock)                   # 48 min
@@ -272,5 +277,97 @@ def research():
     print("research OK")
 
 
+def local(day, hh, mm=0):
+    """Epoch for a local wall-clock time on day `day` after a fixed base, so slate tests don't depend on today's date."""
+    return time.mktime((2026, 11, 2 + day, hh, mm, 0, 0, 0, -1))
+
+
+def slate():
+    """Jack, Oct 27: "I would have liked them to have a bunch of positions on games for today… my friend puts on 15-20
+    a day". A desk is handed tonight's whole slate (not the weekend), each game once, with leans welcome, then a final
+    look shortly before each game; a puck line toggling between its two sides wakes nobody."""
+    h, muse, clock = new_hub("Cee", "Nb", "Nh")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Nh nhl")
+    clock.t = local(0, 9)
+    feed(h, nba=[event("g1", "BKN", "BOS", local(0, 19), spread=(-11.5, -110, -110)),
+                 event("g2", "POR", "LAL", local(0, 22, 30), spread=(-1.5, -110, -110)),
+                 event("g3", "MIA", "ATL", local(1, 19), spread=(-4, -110, -110))],
+         nhl=[event("h1", "LA", "CHI", local(0, 20), spread=(1.5, -250, 200), ml=(120, -140))])
+    poll(h, clock)
+    h.manage("Nb", 'call add g2 spread LAL -1.5 -110 -125 2 "Portland on the road" "LeBron sits"')
+    rounds = lambda n: [m for m in muse.sent.get(n, []) if "lines moved" not in m]
+    clock.go(45 * 60); poll(h, clock)
+    r = rounds("Nb")
+    assert len(r) == 1 and "BKN at BOS" in r[0], f"slate: tonight's uncalled game wasn't handed to the desk: {r}"
+    assert "MIA at ATL" not in r[0], f"slate: tomorrow's game crowded tonight's slate: {r[0]}"
+    assert "POR at LAL" not in r[0], f"slate: a game the desk already called came back: {r[0]}"
+    assert "one or two" not in r[0].lower(), f"slate: the round still caps the desk at one or two games: {r[0]}"
+    clock.go(50 * 60); poll(h, clock)
+    assert len(rounds("Nb")) == 1, f"slate: the same game was handed over again with nothing new: {rounds('Nb')[1:]}"
+    clock.t = local(0, 17, 30); poll(h, clock)              # 90 minutes before Boston tips
+    last = rounds("Nb")[-1]
+    assert len(rounds("Nb")) == 2 and "BKN at BOS" in last and "POR at LAL" not in last, \
+        f"slate: no final look at the game about to start: {rounds('Nb')[1:]}"
+    # Chicago's puck line seen live Oct 27: the feed toggles between CHI +1.5 (-250) and CHI -1.5 (+225) all day
+    before = len(muse.sent.get("Nh", []))
+    feed(h, nhl=[event("h1", "LA", "CHI", local(0, 20), spread=(-1.5, 225, -278), ml=(120, -140))])
+    clock.go(25 * 60); poll(h, clock)
+    feed(h, nhl=[event("h1", "LA", "CHI", local(0, 20), spread=(1.5, -250, 200), ml=(120, -140))])
+    clock.go(25 * 60); poll(h, clock)
+    woke = [m for m in muse.sent.get("Nh", [])[before:] if "lines moved" in m]
+    assert not woke, f"slate: a puck line toggling sides woke the desk: {woke}"
+    print("slate OK")
+
+
+def sanity():
+    """Jack, Oct 27: "make sure their reasoning actually makes sense… I don't know enough to evaluate". The hub refuses
+    calls whose own numbers contradict them: a fair price worse than the bet, a price DraftKings isn't showing, or an
+    edge too big to be real."""
+    h, muse, clock = new_hub("Cee", "Nb")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba")
+    feed(h, nba=[event("g1", "BKN", "BOS", clock() + 3 * HOUR, spread=(-11.5, -110, -110), ml=(-900, 600))])
+    poll(h, clock)
+    bad = {"fair worse than the price": 'call add g1 spread BOS -11.5 -110 +105 2 "Boston rolls" "Tatum sits"',
+           "a line DraftKings isn't showing": 'call add g1 spread BOS -8.5 -110 -130 2 "Boston rolls" "Tatum sits"',
+           "odds DraftKings isn't showing": 'call add g1 spread BOS -11.5 +140 -110 2 "Boston rolls" "Tatum sits"',
+           "an edge too big to be real": 'call add g1 moneyline BKN - 600 -150 3 "upset special" "Boston shows up"'}
+    for what, line in bad.items():
+        try:
+            h.manage("Nb", line)
+            raise AssertionError(f"sanity: the hub logged a call with {what}")
+        except ValueError:
+            pass
+    assert "logged" in h.manage("Nb", 'call add g1 spread BOS -11.5 -108 -125 2 "Boston rolls" "Tatum sits"'), \
+        "sanity: a sound call two cents off the feed's price was refused"
+    print("sanity OK")
+
+
+def review():
+    """Jack, Oct 27: "ensure they aren't being nonsensical". Another desk reads each call's reasoning and marks it sound or
+    flags it, and the book shows that verdict beside the call. Nobody reviews their own calls."""
+    h, muse, clock = new_hub("Cee", "Ada", "Nb", "Nh")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Nh nhl")
+    feed(h, nba=[event("g1", "BKN", "BOS", clock() + 30 * HOUR, spread=(-11.5, -110, -110))])
+    poll(h, clock)
+    h.manage("Nb", 'call add g1 spread BOS -11.5 -110 -125 2 "Brooklyn on a back-to-back" "Tatum sits"')
+    cid = h.board()["book"]["calls"][0]["id"]
+    clock.go(3 * HOUR); poll(h, clock)
+    asked = [m for m in muse.sent.get("Nh", []) if "Brooklyn on a back-to-back" in m]
+    assert asked, f"review: no other desk was asked to check the call's reasoning: {muse.sent.get('Nh')}"
+    for who in ("Nb", "Ada"):
+        try:
+            h.manage(who, f'call review {cid} ok "fine"')
+            raise AssertionError(f"review: {who} reviewed a call it may not")
+        except ValueError:
+            pass
+    h.manage("Nh", f'call review {cid} flag "a back-to-back is already priced into an 11.5 line"')
+    c = h.board()["book"]["calls"][0]
+    assert (c["review"], c["review_by"]) == ("flag", "Nh") and "already priced" in c["review_note"], c
+    print("review OK")
+
+
 if __name__ == "__main__":
-    {"book": book, "watch": watch, "board_speed": board_speed, "elevator": elevator, "pages": pages, "wall": wall, "research": research}[sys.argv[1]]()
+    {"book": book, "watch": watch, "board_speed": board_speed, "elevator": elevator, "pages": pages, "wall": wall, "research": research, "slate": slate, "sanity": sanity, "review": review}[sys.argv[1]]()
