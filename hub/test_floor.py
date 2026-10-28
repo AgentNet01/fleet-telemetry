@@ -469,6 +469,51 @@ def strategy():
     print("strategy OK")
 
 
+def explore():
+    """Jack, Oct 27: "one that just goes off and tries to find a strategy of its own… tracking the same way… should just
+    kinda always be working". The explorer adds any league the feed carries, its calls are checked and graded like every
+    desk's, it keeps a notebook, and the hub hands it its next step whenever it finishes one, never two at once."""
+    h, muse, clock = new_hub("Cee", "Nb", "Lx")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Lx lab")
+    start = clock() + 5 * HOUR
+    games = {"baseball/mlb": [event("m1", "NYY", "LAD", start, ml=(-130, 110), total=(8.5, -110, -110))]}
+    h.sports_fetch = lambda url: {"events": next((v for k, v in games.items() if "/" + k + "/" in url), [])}
+    for bad in ("../../admin", "baseball/mlb?x=1", "x"):
+        try:
+            h.manage("Lx", f"call watch {bad}")
+            raise AssertionError(f"explore: the hub took a league path it can't trust: {bad}")
+        except ValueError:
+            pass
+    h.manage("Lx", "call watch baseball/mlb")
+    poll(h, clock)
+    assert "m1" in h.manage("Lx", "call games"), "explore: the league the explorer added never reached its board"
+    h.manage("Lx", 'call note "MLB totals drift under after 1pm wind reports; testing on 40 past games"')
+    h.manage("Lx", 'call add m1 total under 8.5 -110 -122 1 "wind blowing in at 15 mph per the afternoon report" "wind dies"')
+    confirm(h, "Nb")
+    # always working: whenever it has nothing in flight, the hub hands it the next step with its notebook
+    nudges = lambda: [m for m in muse.sent.get("Lx", []) if "lines moved" not in m and "Check the" not in m]
+    with h.lock:
+        h.db.execute("update items set status='done' where too='Lx'")
+    clock.go(15 * 60); poll(h, clock)
+    assert nudges() and "wind reports" in nudges()[-1], f"explore: the explorer sat idle, or lost its notebook: {nudges()}"
+    n = len(nudges())
+    muse.acts["Lx"] = {"busy": True, "at": clock(), "line": "Downloading 2024 MLB weather and totals"}
+    h.observe()                                            # the hub's activity reader (its own thread live)
+    clock.go(15 * 60); poll(h, clock)                      # still working on the last step: nothing more piles on
+    assert len(nudges()) == n, f"explore: a second step landed while the first was still in flight: {nudges()[n:]}"
+    muse.acts["Lx"] = {"busy": False, "at": clock(), "line": "Wrote mlb-wind.csv"}
+    h.observe()                                            # the hub's activity reader (its own thread live)
+    clock.go(15 * 60); poll(h, clock)
+    assert len(nudges()) == n + 1, f"explore: the explorer finished a step and wasn't handed the next: {nudges()[n:]}"
+    games["baseball/mlb"] = [event("m1", "NYY", "LAD", start, status="STATUS_FINAL", score=(3, 2))]
+    clock.go(5 * HOUR); poll(h, clock)
+    st = h.board()["book"]["strategies"]
+    # worked by hand: under 8.5 at -110 with 5 runs wins +0.909
+    assert (st["explore"]["calls"], round(st["explore"]["units"], 3)) == (1, 0.909), st
+    print("explore OK")
+
+
 def confirm(h, by):
     """Another desk confirms every call waiting for review (the tests that aren't about review)."""
     for c in h.board()["book"]["calls"]:
@@ -477,4 +522,4 @@ def confirm(h, by):
 
 
 if __name__ == "__main__":
-    {"book": book, "watch": watch, "board_speed": board_speed, "elevator": elevator, "pages": pages, "wall": wall, "research": research, "slate": slate, "office": office, "strategy": strategy, "sanity": sanity, "review": review}[sys.argv[1]]()
+    {"book": book, "watch": watch, "board_speed": board_speed, "elevator": elevator, "pages": pages, "wall": wall, "research": research, "slate": slate, "office": office, "strategy": strategy, "explore": explore, "sanity": sanity, "review": review}[sys.argv[1]]()

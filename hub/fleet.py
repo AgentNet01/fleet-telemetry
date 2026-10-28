@@ -58,6 +58,8 @@
                                      propose a position before the game starts. Another desk checks it; it counts once
                                      they confirm it. Never edited; the hub records the close and the result and grades it
     fleet call list                  your calls: open or settled, units won or lost, and whether each beat the close
+    fleet call watch <sport/league>  explorer: add an ESPN league to your board (baseball/mlb, soccer/ger.1, …)
+    fleet call note "<finding>"      explorer: write your notebook (Jack reads it)
     fleet call review <id> ok|flag "<one line>"
                                      mark another desk's call: does its reasoning support that side at that price?
 

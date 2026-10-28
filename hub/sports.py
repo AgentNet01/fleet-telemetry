@@ -8,20 +8,24 @@ whether following the desk would have made money. Nothing here ever requests Dra
 """
 import calendar
 import json
+import re
 import random
 import time
 import urllib.request
 
 LEAGUES = {"nba": ["basketball/nba"], "nfl": ["football/nfl"], "cfb": ["football/college-football?groups=80"],
            "nhl": ["hockey/nhl"], "cbb": ["basketball/mens-college-basketball?groups=50"],
-           "soccer": ["soccer/eng.1", "soccer/uefa.champions"]}
-NAMES = {"nba": "NBA", "nfl": "NFL", "cfb": "College football", "nhl": "NHL", "cbb": "College basketball", "soccer": "Soccer"}
+           "soccer": ["soccer/eng.1", "soccer/uefa.champions"],
+           "lab": []}                    # the explorer adds its own leagues: `fleet call watch <sport/league>`
+NAMES = {"nba": "NBA", "nfl": "NFL", "cfb": "College football", "nhl": "NHL", "cbb": "College basketball", "soccer": "Soccer",
+         "lab": "Explorer"}
 FEED = "https://site.api.espn.com/apis/site/v2/sports/"
 POLL, JITTER = 300, 90                  # Jack: every five minutes, give or take 90 seconds
 WAKE_GAP = 20 * 60                      # at most one wake per desk this often; moves in between are batched
 SWEEP = 45 * 60                         # Jack, Oct 27: a research round this often when nothing has moved, any hour
 FINAL_LOOK = 2 * 3600                   # a last look at each game this long before it starts: lineups and goalies are out
 EARLY = ("nfl", "soccer", "nhl")       # Jack, Oct 27: half the desks bet openers and news; the rest price game day
+LAB_GAP = 10 * 60                       # Jack, Oct 27: the explorer "should just kinda always be working"
 FIXED_SPREAD = ("nhl", "soccer")        # puck lines and goal lines sit at ±1.5/±0.5; the moneyline carries the moves
 MAX_EDGE = 0.10                         # a claimed edge past 10 points of implied probability is a mistake, not a bet
 MOVE_PTS = {"nhl": 0.5, "soccer": 0.5}  # a spread or total move worth a wake; 1 point everywhere else
@@ -43,6 +47,8 @@ create table if not exists calls(id integer primary key, desk text, agent text, 
   close_line real, close_odds integer, result text, graded_at real);
 create table if not exists desk_state(desk text primary key, next_poll real, last_wake real, last_sweep real, pending text);
 create table if not exists offered(game text, stage integer, at real, primary key(game, stage));
+create table if not exists lab_paths(path text primary key, at real);
+create table if not exists lab_notes(id integer primary key, agent text, text text, at real);
 """
 
 
@@ -157,11 +163,12 @@ def tick(h):
             staff = [r["name"] for r in h.db.execute("select name from agents where team=? and state='active'", (desk,))]
             st = h.db.execute("select * from desk_state where desk=?", (desk,)).fetchone()
             if staff and (not st or now >= (st["next_poll"] or 0)):
-                due.append(desk)
+                due.append((desk, LEAGUES[desk] + [r["path"] for r in h.db.execute("select path from lab_paths")]
+                            if desk == "lab" else LEAGUES[desk]))
     got = {}
-    for desk in due:
+    for desk, paths in due:
         events = []
-        for path in LEAGUES[desk]:
+        for path in paths:
             for url in _urls(desk, path, now):
                 try:
                     events += (h.sports_fetch(url) or {}).get("events", [])
@@ -242,7 +249,7 @@ def _wake(h, desk, now):
         for n in staff:
             h._deliver_to(n, f"{NAMES[desk]} lines moved", "DraftKings lines on your board changed:\n" + body + early + "\n\n" + NEXT)
         h.db.execute("update desk_state set pending='[]', last_wake=? where desk=?", (now, desk))
-    elif not pending and now - last >= SWEEP:
+    elif not pending and now - last >= SWEEP and desk != "lab":
         first = h.db.execute("select min(start) from games where desk=? and status='STATUS_SCHEDULED' and start > ?",
                              (desk, now)).fetchone()[0]
         if first:
@@ -260,8 +267,36 @@ def _wake(h, desk, now):
         for n in staff:
             h._deliver_to(n, f"{NAMES[desk]} final look", LOOK + _board(soon) + "\n\n" + NEXT)
         h.db.executemany("insert or ignore into offered(game, stage, at) values(?,2,?)", [(g["id"], now) for g in soon])
+    if desk == "lab":
+        _lab(h, staff, now, st)
     _review_round(h, desk, staff, now)
 
+
+LAB = ("You're the explorer desk. Find an edge anywhere: any sport or league ESPN's scoreboard carries with DraftKings odds "
+       "(baseball/mlb, basketball/wnba, soccer/ger.1, football/ufl…; team-vs-team events only for now), or a pattern in timing, "
+       "line movement or information. Find datasets, do deep research, and test a hypothesis against past results before you "
+       "bet on it. Your calls get the same price check, another desk's review and grading as every desk's.\n"
+       "`fleet call watch <sport/league>` adds a league to your board · `fleet call games` lists it · `fleet call add …` "
+       "logs a call · `fleet call note \"<finding or hypothesis>\"` writes your notebook, which Jack reads.\n"
+       "Pick up where you left off and take the next concrete step.")
+
+
+def _lab(h, staff, now, st):
+    """Hand the explorer its next step whenever it has nothing in flight (at most every LAB_GAP), with its notebook."""
+    if not staff or now - ((st and st["last_sweep"]) or 0) < LAB_GAP:
+        return
+    q = ",".join("?" * len(staff))
+    busy = h.db.execute(f"select 1 from items where too in ({q}) and status in ('queued','sent') union all "
+                        f"select 1 from agents where name in ({q}) and busy=1", staff + staff).fetchone()
+    if busy:
+        return
+    notes = h.db.execute("select text, at from lab_notes order by id desc limit 8").fetchall()
+    paths = [r["path"] for r in h.db.execute("select path from lab_paths order by at")]
+    body = LAB + "\n\nWatching: " + (", ".join(paths) or "nothing yet") + "\nYour notebook, newest first:\n" + (
+        "\n".join(f"- {time.strftime('%a %H:%M', time.localtime(n['at']))} {n['text']}" for n in notes) or "- (empty)")
+    for n in staff:
+        h._deliver_to(n, "Explorer: next step", body)
+    h.db.execute("update desk_state set last_sweep=? where desk='lab'", (now,))
 
 SLATE = ("Your slate: the games on your next day of play that you haven't called yet. Price every one. Work out your own "
          "fair line (injuries and lineups, rest and travel, weather, matchups, form), then log a call on each game where "
@@ -413,11 +448,13 @@ def book(h):
                     "watching": h.db.execute("select count(*) from games where desk=? and status='STATUS_SCHEDULED' and start > ?",
                                              (k, h.clock())).fetchone()[0]}
     real = [c for c in calls if c["review"] == "ok"]
-    strategies = {k: dict(_tally([c for c in real if (c["desk"] in EARLY) == (k == "early")]),
-                          desks=[d for d in LEAGUES if (d in EARLY) == (k == "early")]) for k in ("early", "gameday")}
+    group = lambda d: "explore" if d == "lab" else "early" if d in EARLY else "gameday"
+    strategies = {k: dict(_tally([c for c in real if group(c["desk"]) == k]), desks=[d for d in LEAGUES if group(d) == k])
+                  for k in ("early", "gameday", "explore")}
     for k, d in desks.items():
-        d["strategy"] = "early" if k in EARLY else "gameday"
-    return {"calls": calls, "desks": desks, "strategies": strategies, "activity": _activity(h)}
+        d["strategy"] = group(k)
+    notes = [dict(r) for r in h.db.execute("select agent, text, at from lab_notes order by id desc limit 30")]
+    return {"calls": calls, "desks": desks, "strategies": strategies, "notes": notes, "activity": _activity(h)}
 
 
 def _tally(cs):
@@ -466,6 +503,15 @@ def manage(h, by, a):
                             (desk, now)).fetchall()
         return "\n".join(f"{g['id']}  {time.strftime('%a %m-%d %H:%M', time.localtime(g['start']))}  {g['name']}" for g in rows) \
             or "no upcoming games with lines yet"
+    if a[1:2] == ["watch"] and desk == "lab" and len(a) == 3:
+        if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9.-]+", a[2]) or ".." in a[2]:
+            raise ValueError("give an ESPN sport/league path, e.g. baseball/mlb or soccer/ger.1")
+        h.db.execute("insert or ignore into lab_paths(path, at) values(?,?)", (a[2], now))
+        h.db.execute("update desk_state set next_poll=0 where desk='lab'")
+        return f"watching {a[2]}: its games with DraftKings lines show in `fleet call games` after the next poll (~1 min)"
+    if a[1:2] == ["note"] and desk == "lab" and len(a) == 3:
+        h.db.execute("insert into lab_notes(agent, text, at) values(?,?,?)", (by, a[2], now))
+        return "noted"
     if a[1:2] == ["list"]:
         rows = _calls(h, desk, 30)
         return "\n".join(f"#{c['id']} {c['game_name']} {_show(c['market'], c['side'], c['line'], c['odds'])} · "
@@ -506,7 +552,7 @@ def manage(h, by, a):
         raise ValueError(f"no {NAMES[desk]} game {gid}: see `fleet call games`")
     if g["status"] != "STATUS_SCHEDULED" or now >= g["start"]:
         raise ValueError(f"{g['name']} has started: calls are logged before the game only")
-    if desk in ("cfb", "cbb") and any(n in (g["home_name"] or "") + "|" + (g["away_name"] or "") for n in ILLINOIS):
+    if any(n in (g["home_name"] or "") + "|" + (g["away_name"] or "") for n in ILLINOIS):
         raise ValueError("DraftKings Illinois takes no online bets on Illinois college teams")
     sides = {"spread": (g["home"], g["away"]), "moneyline": (g["home"], g["away"], "draw"), "total": ("over", "under")}
     if market not in sides or side not in sides[market] or (side == "draw" and desk != "soccer"):

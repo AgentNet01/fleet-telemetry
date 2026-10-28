@@ -14,7 +14,7 @@ db.row_factory = sqlite3.Row
 now = time.time()
 print(time.strftime("%F %T"), f"window since {time.strftime('%H:%M', time.localtime(since))}")
 for a in db.execute("select name, team, state, fleet_rev, last_out from agents where team in "
-                    "('nba','nfl','cfb','nhl','cbb','soccer') order by team"):
+                    "('nba','nfl','cfb','nhl','cbb','soccer','lab') order by team"):
     st = db.execute("select * from desk_state where desk=?", (a["team"],)).fetchone()
     watching = db.execute("select count(*) from games where desk=? and status='STATUS_SCHEDULED' and start>?", (a["team"], now)).fetchone()[0]
     wakes = db.execute("select count(*) from items where too=? and created>? and frm='hub'", (a["name"], since)).fetchone()[0]
