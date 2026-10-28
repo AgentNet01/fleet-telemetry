@@ -21,7 +21,7 @@ POLL, JITTER = 300, 90                  # Jack: every five minutes, give or take
 WAKE_GAP = 20 * 60                      # at most one wake per desk this often; moves in between are batched
 SWEEP = 45 * 60                         # Jack, Oct 27: a research round this often when nothing has moved, any hour
 FINAL_LOOK = 2 * 3600                   # a last look at each game this long before it starts: lineups and goalies are out
-REVIEW_GAP = 3 * 3600                   # another desk checks a desk's new calls' reasoning at most this often
+REVIEW_GAP = 30 * 60                    # another desk checks new calls this often, so a flag lands before the game
 FIXED_SPREAD = ("nhl", "soccer")        # puck lines and goal lines sit at ±1.5/±0.5; the moneyline carries the moves
 MAX_EDGE = 0.10                         # a claimed edge past 10 points of implied probability is a mistake, not a bet
 MOVE_PTS = {"nhl": 0.5, "soccer": 0.5}  # a spread or total move worth a wake; 1 point everywhere else
@@ -392,7 +392,7 @@ def book(h):
         desks[k] = {"name": NAMES[k], "agents": [r["name"] for r in h.db.execute("select name from agents where team=?", (k,))],
                     "calls": len(mine), "open": sum(c["result"] is None for c in mine),
                     "w": sum(c["result"] == "win" for c in mine), "l": sum(c["result"] == "loss" for c in mine),
-                    "p": sum(c["result"] == "push" for c in mine),
+                    "p": sum(c["result"] == "push" for c in mine), "pulled": sum(c["result"] == "pulled" for c in mine),
                     "units": sum(c["units"] or 0 for c in mine),
                     "graded": sum(c["beat_close"] is not None for c in mine), "beat_close": sum(bool(c["beat_close"]) for c in mine),
                     "by_conf": {str(n): _tally([c for c in mine if c["confidence"] == n]) for n in (1, 2, 3)},
@@ -458,6 +458,16 @@ def manage(h, by, a):
         if c["desk"] == desk:
             raise ValueError("another desk reviews your calls; you review theirs")
         h.db.execute("update calls set review=?, review_by=?, review_note=? where id=?", (a[3], by, a[4], c["id"]))
+        g = h.db.execute("select * from games where id=?", (c["game"],)).fetchone()
+        if a[3] == "flag" and c["result"] is None and g and g["status"] == "STATUS_SCHEDULED" and now < g["start"]:
+            # Jack, Oct 27: a call built on wrong facts isn't tracked. Only before the game: a flag in hindsight can't
+            # erase a loss
+            h.db.execute("update calls set result='pulled', graded_at=? where id=?", (now, c["id"]))
+            h._deliver_to(c["agent"], f"Call #{c['id']} pulled", f"{by} flagged your call #{c['id']} on {g['name']} "
+                          f"({_pick(dict(c, home=g['home'], away=g['away'], home_name=g['home_name'], away_name=g['away_name']))}): "
+                          f"{a[4]}\nIt's out of the book. If the corrected facts still give you a view, log a new call before "
+                          "the game.")
+            return f"call #{c['id']} flagged and pulled from the book"
         return f"call #{c['id']} marked {a[3]}"
     if a[1:2] != ["add"] or len(a) != 11:
         raise ValueError('use: fleet call add <game id> spread|total|moneyline <side> <line|-> <odds> <fair odds> '

@@ -1061,7 +1061,7 @@ function verdict(c){ const v=c.since; if(!v) return `<span class="vd flat">no li
   const txt={agrees:"▲ Market agrees",disagrees:"▼ Market disagrees",flat:"– No move yet"}[v.verdict];
   return `<span class="vd ${v.verdict}">${txt}</span><div class="mu">${was===is?"same line":`${esc(was)} → ${esc(is)}`}</div>`; }
 function renderBook(bk){                              // the overview: the floor at a glance, over the office
-  const open=(bk.calls||[]).filter(c=>!c.result), done=(bk.calls||[]).filter(c=>c.result&&c.result!=="void");
+  const open=(bk.calls||[]).filter(c=>!c.result), done=(bk.calls||[]).filter(c=>c.result&&c.result!=="void"&&c.result!=="pulled");
   const agree=open.filter(c=>c.since&&c.since.verdict==="agrees").length, money=done.reduce((a,c)=>a+(c.units||0)*10,0);
   const beat=done.filter(c=>c.beat_close).length;
   $("book").innerHTML=`<h3>Sports desk right now</h3><div class="kpis">
@@ -1074,7 +1074,7 @@ function renderBook(bk){                              // the overview: the floor
     <div style="margin-top:8px"><button class="btn sm" type="button" data-go="positions">All positions →</button> <button class="btn sm" type="button" data-go="desks">Desks →</button></div>`;
   $("book").querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>selectTab(b.dataset.go)); }
 function renderFloor2(bk){
-  const calls=bk.calls||[], open=calls.filter(c=>!c.result).sort((a,b)=>(a.start||0)-(b.start||0)), done=calls.filter(c=>c.result);
+  const calls=bk.calls||[], open=calls.filter(c=>!c.result).sort((a,b)=>(a.start||0)-(b.start||0)), done=calls.filter(c=>c.result&&c.result!=="pulled");
   if(tab==="positions") $("poslist").innerHTML=open.length?`<table class="ptab"><thead><tr><th>Starts</th><th>Pick</th><th class="hide-s">Price</th><th>Since the call</th><th class="hide-s">Desk</th></tr></thead><tbody>
     ${open.map(c=>`<tr><td>${when(c.start)}</td><td><b>${esc(c.pick)}</b><div class="mu">${esc(c.game_name||"")}</div>
       <details class="why"><summary>Why</summary>${esc(c.reason||"")}<br><i>Wrong if:</i> ${esc(c.kill||"")}</details>${c.review?`<div class="mu">${c.review==="flag"?"⚑ Flagged":"✓ Checked"} by ${esc(c.review_by)}: ${esc(c.review_note||"")}</div>`:""}</td>
@@ -1100,7 +1100,7 @@ function renderFloor2(bk){
       <div class="big">${settled?usd(d.units*10):"$0"}</div><div class="mu">if every call were a $10 bet</div>
       <div style="margin-top:8px">${settled?`${d.w} won · ${d.l} lost${d.p?` · ${d.p} push`:""}`:"Nothing settled yet"} · beat the close ${d.graded?`${d.beat_close} of ${d.graded}`:"—"}</div>
       <div class="mu" style="margin-top:6px">By confidence: ${["3","2","1"].map(n=>{const b=(d.by_conf||{})[n]||{};return `${"●".repeat(+n)}${"○".repeat(3-n)} ${b.calls||0} call${b.calls===1?"":"s"}${b.graded?` · beat the close ${b.beat_close}/${b.graded}`:""}${b.flagged?` · ⚑ ${b.flagged}`:""}`}).join(" &nbsp; ")}</div>
-      <div>${d.open} open${d.open?` · market agrees on ${agree}`:""} · watching ${d.watching||0} game${d.watching===1?"":"s"}</div>
+      <div>${d.open} open${d.open?` · market agrees on ${agree}`:""}${d.pulled?` · ${d.pulled} pulled after another desk flagged them`:""} · watching ${d.watching||0} game${d.watching===1?"":"s"}</div>
       <div class="mu" style="margin-top:8px">${last?`Last: ${when(last.at)} · ${esc(last.kind==="woken"?"woken — "+last.text:last.kind==="called"?"logged a call":"said: "+last.text.slice(0,140))}`:"No activity yet"}</div>
       <div class="mu" style="margin-top:6px">${settled<30?`Too early to judge: ${settled} settled. It takes about 50 before a record means much — watch "beat the close" first.`:""}</div></div>`; }).join("");
   if(tab==="deskact"){

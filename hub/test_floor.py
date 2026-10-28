@@ -390,6 +390,23 @@ def review():
     h.manage("Nh", f'call review {cid} flag "a back-to-back is already priced into an 11.5 line"')
     c = h.board()["book"]["calls"][0]
     assert (c["review"], c["review_by"]) == ("flag", "Nh") and "already priced" in c["review_note"], c
+    # Jack, Oct 27: "why are we tracking a position made with wrong goalie information". Flagged before the game, the
+    # call is pulled: no longer an open position, never graded, no money either way, and its desk hears why
+    assert c["result"] == "pulled" and c["units"] == 0, f"review: a call flagged before the game is still in the book: {c}"
+    poll(h, clock)                                          # the hub delivers on its next tick
+    told = [m for m in muse.sent.get("Nb", []) if "already priced" in m]
+    assert told, f"review: the desk never heard its call was pulled: {muse.sent.get('Nb')}"
+    # flagged after the game started, it stands: a flag in hindsight can't erase a loss
+    h.manage("Nb", 'call add g1 total over 222.5 -110 -120 1 "two fast offenses" "pace dies"')
+    late = [x for x in h.board()["book"]["calls"] if x["market"] == "total"][0]["id"]
+    clock.go(28 * HOUR)
+    feed(h, nba=[event("g1", "BKN", "BOS", clock() - HOUR, status="STATUS_IN_PROGRESS")])
+    poll(h, clock)
+    h.manage("Nh", f'call review {late} flag "pace argument is thin"')
+    feed(h, nba=[event("g1", "BKN", "BOS", clock() - HOUR, status="STATUS_FINAL", score=(100, 90))])
+    poll(h, clock)
+    x = [x for x in h.board()["book"]["calls"] if x["id"] == late][0]
+    assert x["result"] == "loss", f"review: a flag after tip-off voided a graded loss: {x}"
     print("review OK")
 
 
