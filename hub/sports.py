@@ -481,7 +481,8 @@ def manage(h, by, a):
         return f"call #{c['id']} marked {a[3]}"
     if a[1:2] != ["add"] or len(a) != 11:
         raise ValueError('use: fleet call add <game id> spread|total|moneyline <side> <line|-> <odds> <fair odds> '
-                         '<confidence 1-3> "<why>" "<what would make it wrong>" | fleet call list | fleet call games')
+                         '<confidence 1-3> "<why>" "<what would make it wrong>" | fleet call review <id> ok|flag "<one line>" | '
+                         'fleet call list | fleet call games')
     gid, market, side, line, odds, fair, conf, why, kill = a[2:]
     g = h.db.execute("select * from games where id=? and desk=?", (gid, desk)).fetchone()
     if not g:
