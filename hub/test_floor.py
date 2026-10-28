@@ -489,6 +489,7 @@ def explore():
     poll(h, clock)
     assert "m1" in h.manage("Lx", "call games"), "explore: the league the explorer added never reached its board"
     h.manage("Lx", 'call note "MLB totals drift under after 1pm wind reports; testing on 40 past games"')
+    h.manage("Lx", "call note unquoted: Bundesliga openers overshoot by 0.25 goals")   # live Oct 28: an unquoted note was refused
     h.manage("Lx", 'call add m1 total under 8.5 -110 -122 1 "wind blowing in at 15 mph per the afternoon report" "wind dies"')
     confirm(h, "Nb")
     # always working: whenever it has nothing in flight, the hub hands it the next step with its notebook
@@ -496,7 +497,8 @@ def explore():
     with h.lock:
         h.db.execute("update items set status='done' where too='Lx'")
     clock.go(15 * 60); poll(h, clock)
-    assert nudges() and "wind reports" in nudges()[-1], f"explore: the explorer sat idle, or lost its notebook: {nudges()}"
+    assert nudges() and "wind reports" in nudges()[-1] and "overshoot by 0.25" in nudges()[-1], \
+        f"explore: the explorer sat idle, or lost its notebook: {nudges()}"
     n = len(nudges())
     muse.acts["Lx"] = {"busy": True, "at": clock(), "line": "Downloading 2024 MLB weather and totals"}
     h.observe()                                            # the hub's activity reader (its own thread live)

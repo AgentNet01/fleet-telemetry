@@ -515,8 +515,8 @@ def manage(h, by, a):
         h.db.execute("insert or ignore into lab_paths(path, at) values(?,?)", (a[2], now))
         h.db.execute("update desk_state set next_poll=0 where desk='lab'")
         return f"watching {a[2]}: its games with DraftKings lines show in `fleet call games` after the next poll (~1 min)"
-    if a[1:2] == ["note"] and desk == "lab" and len(a) == 3:
-        h.db.execute("insert into lab_notes(agent, text, at) values(?,?,?)", (by, a[2], now))
+    if a[1:2] == ["note"] and desk == "lab" and len(a) >= 3:
+        h.db.execute("insert into lab_notes(agent, text, at) values(?,?,?)", (by, " ".join(a[2:]), now))
         return "noted"
     if a[1:2] == ["list"]:
         rows = _calls(h, desk, 30)
@@ -551,6 +551,7 @@ def manage(h, by, a):
     if a[1:2] != ["add"] or len(a) != 11:
         raise ValueError('use: fleet call add <game id> spread|total|moneyline <side> <line|-> <odds> <fair odds> '
                          '<confidence 1-3> "<why>" "<what would make it wrong>" | fleet call review <id> ok|flag "<one line>" | '
+                         'fleet call watch <sport/league> | fleet call note "<finding>" (explorer) | '
                          'fleet call list | fleet call games')
     gid, market, side, line, odds, fair, conf, why, kill = a[2:]
     g = h.db.execute("select * from games where id=? and desk=?", (gid, desk)).fetchone()
