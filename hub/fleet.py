@@ -55,8 +55,8 @@
     fleet call games                 your sport's upcoming games with lines, and their ids
     fleet call add <game id> spread|total|moneyline <side> <line, or - for moneyline> <DraftKings odds> <your fair odds>
                      <confidence 1-3> "<why>" "<what would make it wrong>"
-                                     log a position before the game starts. It's never edited; the hub records the
-                                     closing line and the result and grades it
+                                     propose a position before the game starts. Another desk checks it; it counts once
+                                     they confirm it. Never edited; the hub records the close and the result and grades it
     fleet call list                  your calls: open or settled, units won or lost, and whether each beat the close
     fleet call review <id> ok|flag "<one line>"
                                      mark another desk's call: does its reasoning support that side at that price?

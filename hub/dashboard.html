@@ -402,7 +402,7 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
   </section>
   <section id="positions" hidden>
     <h2>Positions</h2>
-    <div class="hint">Calls the desks would bet, before the game. Each is marked against DraftKings' line right now: if the
+    <div class="hint">Calls the desks would bet, before the game, each confirmed by a second desk that checked the facts and reasoning. Each is marked against DraftKings' line right now: if the
       line moved toward the call since it was made, the market <b>agrees</b> — the best early sign of a good decision.
       The game's result is mostly luck; the market moving your way usually isn't.</div>
     <section class="card" id="poslist" role="region" aria-label="Open positions"></section>
@@ -1061,7 +1061,7 @@ function verdict(c){ const v=c.since; if(!v) return `<span class="vd flat">no li
   const txt={agrees:"▲ Market agrees",disagrees:"▼ Market disagrees",flat:"– No move yet"}[v.verdict];
   return `<span class="vd ${v.verdict}">${txt}</span><div class="mu">${was===is?"same line":`${esc(was)} → ${esc(is)}`}</div>`; }
 function renderBook(bk){                              // the overview: the floor at a glance, over the office
-  const open=(bk.calls||[]).filter(c=>!c.result), done=(bk.calls||[]).filter(c=>c.result&&c.result!=="void"&&c.result!=="pulled");
+  const open=(bk.calls||[]).filter(c=>!c.result&&c.review==="ok"), done=(bk.calls||[]).filter(c=>["win","loss","push"].includes(c.result));
   const agree=open.filter(c=>c.since&&c.since.verdict==="agrees").length, money=done.reduce((a,c)=>a+(c.units||0)*10,0);
   const beat=done.filter(c=>c.beat_close).length;
   $("book").innerHTML=`<h3>Sports desk right now</h3><div class="kpis">
@@ -1074,13 +1074,15 @@ function renderBook(bk){                              // the overview: the floor
     <div style="margin-top:8px"><button class="btn sm" type="button" data-go="positions">All positions →</button> <button class="btn sm" type="button" data-go="desks">Desks →</button></div>`;
   $("book").querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>selectTab(b.dataset.go)); }
 function renderFloor2(bk){
-  const calls=bk.calls||[], open=calls.filter(c=>!c.result).sort((a,b)=>(a.start||0)-(b.start||0)), done=calls.filter(c=>c.result&&c.result!=="pulled");
+  const calls=bk.calls||[], open=calls.filter(c=>!c.result&&c.review==="ok").sort((a,b)=>(a.start||0)-(b.start||0)), done=calls.filter(c=>["win","loss","push","void"].includes(c.result));
+  const checking=calls.filter(c=>!c.result&&!c.review);
   if(tab==="positions") $("poslist").innerHTML=open.length?`<table class="ptab"><thead><tr><th>Starts</th><th>Pick</th><th class="hide-s">Price</th><th>Since the call</th><th class="hide-s">Desk</th></tr></thead><tbody>
     ${open.map(c=>`<tr><td>${when(c.start)}</td><td><b>${esc(c.pick)}</b><div class="mu">${esc(c.game_name||"")}</div>
       <details class="why"><summary>Why</summary>${esc(c.reason||"")}<br><i>Wrong if:</i> ${esc(c.kill||"")}</details>${c.review?`<div class="mu">${c.review==="flag"?"⚑ Flagged":"✓ Checked"} by ${esc(c.review_by)}: ${esc(c.review_note||"")}</div>`:""}</td>
       <td class="hide-s">${odds(c.odds)}<div class="mu">pays $${pays(c.odds)} on $10</div></td><td>${verdict(c)}</td>
       <td class="hide-s">${esc(desk(c.desk))}<div class="mu">${esc(c.agent)} · ${"●".repeat(c.confidence||1)}${"○".repeat(3-(c.confidence||1))}</div></td></tr>`).join("")}</tbody></table>`
     :`<div class="row empty">No open positions. Desks log them before each game.</div>`;
+  if(tab==="positions"&&checking.length) $("poslist").insertAdjacentHTML("beforeend",`<div class="row mu">${checking.length} more proposed call${checking.length===1?"":"s"} being checked by another desk: ${checking.map(c=>esc(c.pick)).join(", ")}. They count once confirmed before the game.</div>`);
   if(tab==="results"){
     const settled=done.filter(c=>c.result!=="void").sort((a,b)=>(a.graded_at||0)-(b.graded_at||0));
     let run=0; const pts=[0,...settled.map(c=>run+=(c.units||0)*10)], W=600, H=120, mx=Math.max(1,...pts.map(Math.abs));

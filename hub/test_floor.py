@@ -62,9 +62,10 @@ def poll(h, clock):
 def book():
     """Jack, Oct 26: "tracking them so I can see whether or not it would have made money regardless of whether I take
     it". A call is logged before the game only; the hub keeps the closing line and grades it from the final score."""
-    h, muse, clock = new_hub("Cee", "Ada", "Nb")
+    h, muse, clock = new_hub("Cee", "Ada", "Nb", "Nh")
     h.seat("ceo", "Cee")
     assert "nba" in h.manage("Cee", "team Nb nba")
+    h.manage("Cee", "team Nh nhl")                          # the desk that checks Nb's calls
     start = clock() + 3 * HOUR
     feed(h, nba=[event("g1", "BKN", "BOS", start, spread=(-11.5, -110, -110), total=(222.5, -110, -110)),
                  event("g2", "DET", "NY", start, spread=(-15, -110, -110))])
@@ -76,6 +77,7 @@ def book():
         h.manage("Nb", 'call add g2 spread NY -15 -110 -120 1 "Detroit is cold" "garbage time"')
     except (ValueError, KeyError, PermissionError) as e:
         raise AssertionError(f"book: unknown command ({e})")
+    confirm(h, "Nh")
     try:
         h.manage("Ada", 'call add g1 spread BOS -11.5 -110 -125 2 "x" "y"')
         raise AssertionError("book: a floor-1 agent logged a sports call")
@@ -212,6 +214,7 @@ def pages():
     poll(h, clock)
     h.manage("Nb", 'call add g1 spread BOS -11.5 -110 -125 2 "Brooklyn on a back-to-back" "Tatum sits"')
     h.manage("Nb", 'call add g2 spread NY -3.5 -110 -120 1 "Pistons travel" "Brunson out"')
+    h.add_agent("Nh", "muse"); h.manage("dot", "team Nh nhl"); confirm(h, "Nh")
     # after the calls: Boston's number grows (the market agrees), New York's shrinks (it disagrees)
     feed(h, nba=[event("g1", "BKN", "BOS", start, spread=(-13, -110, -110)), event("g2", "DET", "NY", start, spread=(-2, -110, -110))])
     poll(h, clock)
@@ -369,45 +372,72 @@ def sanity():
 
 
 def review():
-    """Jack, Oct 27: "ensure they aren't being nonsensical". Another desk reads each call's reasoning and marks it sound or
-    flags it, and the book shows that verdict beside the call. Nobody reviews their own calls."""
+    """Jack, Oct 27: "why can't they just actually talk about it and do research and validate the positions". A call is a
+    proposal until another desk confirms it: it reaches a reviewer on the hub's next pass (no timer), it isn't a position
+    until confirmed, a flag sends it back to its desk with the reason (and the reviewer can reinstate it after they talk),
+    and a call nobody confirmed by tip-off is never tracked. Nobody reviews their own calls; a flag after tip-off can't
+    erase a result."""
     h, muse, clock = new_hub("Cee", "Ada", "Nb", "Nh")
     h.seat("ceo", "Cee")
     h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Nh nhl")
-    feed(h, nba=[event("g1", "BKN", "BOS", clock() + 30 * HOUR, spread=(-11.5, -110, -110))])
+    start = clock() + 3 * HOUR
+    feed(h, nba=[event("g1", "BKN", "BOS", start, spread=(-11.5, -110, -110), total=(222.5, -110, -110)),
+                 event("g2", "DET", "NY", start, spread=(-3.5, -110, -110))])
     poll(h, clock)
+    calls = lambda: {(c["game"], c["market"], c["side"]): c for c in h.board()["book"]["calls"]}
     h.manage("Nb", 'call add g1 spread BOS -11.5 -110 -125 2 "Brooklyn on a back-to-back" "Tatum sits"')
-    cid = h.board()["book"]["calls"][0]["id"]
-    clock.go(3 * HOUR); poll(h, clock)
-    asked = [m for m in muse.sent.get("Nh", []) if "Brooklyn on a back-to-back" in m]
-    assert asked, f"review: no other desk was asked to check the call's reasoning: {muse.sent.get('Nh')}"
+    sp = calls()[("g1", "spread", "BOS")]["id"]
+    h.tick()                                                # the hub's next pass, no waiting
+    assert [m for m in muse.sent.get("Nh", []) if "Brooklyn on a back-to-back" in m], \
+        f"review: the call didn't go straight to another desk to check: {muse.sent.get('Nh')}"
+    assert h.board()["book"]["desks"]["nba"]["open"] == 0, "review: an unchecked call already counts as a position"
     for who in ("Nb", "Ada"):
         try:
-            h.manage(who, f'call review {cid} ok "fine"')
+            h.manage(who, f'call review {sp} ok "fine"')
             raise AssertionError(f"review: {who} reviewed a call it may not")
         except ValueError:
             pass
-    h.manage("Nh", f'call review {cid} flag "a back-to-back is already priced into an 11.5 line"')
-    c = h.board()["book"]["calls"][0]
-    assert (c["review"], c["review_by"]) == ("flag", "Nh") and "already priced" in c["review_note"], c
-    # Jack, Oct 27: "why are we tracking a position made with wrong goalie information". Flagged before the game, the
-    # call is pulled: no longer an open position, never graded, no money either way, and its desk hears why
-    assert c["result"] == "pulled" and c["units"] == 0, f"review: a call flagged before the game is still in the book: {c}"
-    poll(h, clock)                                          # the hub delivers on its next tick
-    told = [m for m in muse.sent.get("Nb", []) if "already priced" in m]
-    assert told, f"review: the desk never heard its call was pulled: {muse.sent.get('Nb')}"
-    # flagged after the game started, it stands: a flag in hindsight can't erase a loss
-    h.manage("Nb", 'call add g1 total over 222.5 -110 -120 1 "two fast offenses" "pace dies"')
-    late = [x for x in h.board()["book"]["calls"] if x["market"] == "total"][0]["id"]
-    clock.go(28 * HOUR)
-    feed(h, nba=[event("g1", "BKN", "BOS", clock() - HOUR, status="STATUS_IN_PROGRESS")])
+    h.manage("Nh", f'call review {sp} ok "back-to-back and the rest edge both check out"')
+    assert h.board()["book"]["desks"]["nba"]["open"] == 1, "review: a confirmed call isn't a position"
+    # flagged: out of the book, its desk hears why; after they talk the reviewer can put it back before the game
+    h.manage("Nb", 'call add g2 spread NY -3.5 -110 -120 1 "Pistons on the road" "Brunson sits"')
+    ny = calls()[("g2", "spread", "NY")]["id"]
+    h.manage("Nh", f'call review {ny} flag "Detroit is at home in this game, not on the road"')
+    c = calls()[("g2", "spread", "NY")]
+    assert c["result"] == "pulled" and c["units"] == 0, f"review: a flagged call is still in the book: {c}"
     poll(h, clock)
-    h.manage("Nh", f'call review {late} flag "pace argument is thin"')
-    feed(h, nba=[event("g1", "BKN", "BOS", clock() - HOUR, status="STATUS_FINAL", score=(100, 90))])
+    assert [m for m in muse.sent.get("Nb", []) if "not on the road" in m], "review: the desk never heard why its call was pulled"
+    h.manage("Nh", f'call review {ny} ok "fair: they meant the Pistons\' road trip before this, which is real"')
+    assert calls()[("g2", "spread", "NY")]["result"] is None, "review: the reviewer couldn't reinstate the call after talking"
+    # never confirmed by tip-off: never tracked
+    h.manage("Nb", 'call add g1 total under 222.5 -110 -120 1 "two slow defenses" "pace spikes"')
+    # confirmed, then flagged in hindsight after tip-off: it stands
+    h.manage("Nb", 'call add g1 total over 222.5 -110 -118 1 "the other read" "pace dies"')
+    over = calls()[("g1", "total", "over")]["id"]
+    h.manage("Nh", f'call review {over} ok "fine"')
+    clock.go(3 * HOUR)
+    feed(h, nba=[event("g1", "BKN", "BOS", start, status="STATUS_IN_PROGRESS"), event("g2", "DET", "NY", start, status="STATUS_IN_PROGRESS")])
     poll(h, clock)
-    x = [x for x in h.board()["book"]["calls"] if x["id"] == late][0]
-    assert x["result"] == "loss", f"review: a flag after tip-off voided a graded loss: {x}"
+    try:
+        h.manage("Nh", f'call review {over} flag "pace argument is thin"')    # refused or ignored: either keeps the result
+    except ValueError:
+        pass
+    feed(h, nba=[event("g1", "BKN", "BOS", start, status="STATUS_FINAL", score=(120, 105)),
+                 event("g2", "DET", "NY", start, status="STATUS_FINAL", score=(110, 100))])
+    poll(h, clock)
+    c = calls()
+    assert c[("g1", "spread", "BOS")]["result"] == "win" and c[("g2", "spread", "NY")]["result"] == "win", c
+    assert c[("g1", "total", "under")]["result"] == "unreviewed" and c[("g1", "total", "under")]["units"] == 0, \
+        f"review: a call nobody confirmed was graded: {c[('g1', 'total', 'under')]}"
+    assert c[("g1", "total", "over")]["result"] == "win", f"review: a flag after tip-off changed a result: {c[('g1', 'total', 'over')]}"
     print("review OK")
+
+
+def confirm(h, by):
+    """Another desk confirms every call waiting for review (the tests that aren't about review)."""
+    for c in h.board()["book"]["calls"]:
+        if c["review"] is None and c["result"] is None:
+            h.manage(by, f'call review {c["id"]} ok "checks out"')
 
 
 if __name__ == "__main__":

@@ -21,7 +21,6 @@ POLL, JITTER = 300, 90                  # Jack: every five minutes, give or take
 WAKE_GAP = 20 * 60                      # at most one wake per desk this often; moves in between are batched
 SWEEP = 45 * 60                         # Jack, Oct 27: a research round this often when nothing has moved, any hour
 FINAL_LOOK = 2 * 3600                   # a last look at each game this long before it starts: lineups and goalies are out
-REVIEW_GAP = 30 * 60                    # another desk checks new calls this often, so a flag lands before the game
 FIXED_SPREAD = ("nhl", "soccer")        # puck lines and goal lines sit at ±1.5/±0.5; the moneyline carries the moves
 MAX_EDGE = 0.10                         # a claimed edge past 10 points of implied probability is a mistake, not a bet
 MOVE_PTS = {"nhl": 0.5, "soccer": 0.5}  # a spread or total move worth a wake; 1 point everywhere else
@@ -285,24 +284,28 @@ def _board(games):
 
 
 def _review_round(h, desk, staff, now):
-    """Hand this desk's newest unreviewed calls to the next staffed desk, at most every REVIEW_GAP."""
+    """Hand this desk's new calls to the next staffed desk on the hub's next pass: a call counts only once confirmed."""
     staffed = [k for k in LEAGUES if h.db.execute("select 1 from agents where team=? and state='active'", (k,)).fetchone()]
     if not staff or len(staffed) < 2:
         return
     peer = staffed[(staffed.index(desk) + 1) % len(staffed)]
-    last = h.db.execute("select max(review_asked) from calls where desk=?", (desk,)).fetchone()[0]
-    calls = h.db.execute("select c.*, g.name as game_name, g.home, g.away, g.home_name, g.away_name from calls c join games g "
-                         "on g.id=c.game where c.desk=? and c.review_asked is null order by c.id limit 15", (desk,)).fetchall()
-    if not calls or (last and now - last < REVIEW_GAP):
+    calls = h.db.execute("select c.*, g.name as game_name, g.home, g.away, g.home_name, g.away_name, g.start from calls c "
+                         "join games g on g.id=c.game where c.desk=? and c.review_asked is null and c.result is null and "
+                         "g.start > ? order by c.id limit 15", (desk, now)).fetchall()
+    if not calls:
         return
-    body = "\n".join(f"- #{c['id']} {c['game_name']}: {_pick(c)} at {c['odds']:+d}, fair {c['fair_odds']:+d}, confidence "
-                     f"{c['confidence']}. Why: {c['reason']} Wrong if: {c['kill']}" for c in calls)
+    body = "\n".join(f"- #{c['id']} {c['game_name']} {time.strftime('%a %H:%M', time.localtime(c['start']))} ({c['agent']}): "
+                     f"{_pick(c)} at {c['odds']:+d}, fair {c['fair_odds']:+d}, confidence {c['confidence']}. Why: {c['reason']} "
+                     f"Wrong if: {c['kill']}" for c in calls)
     for n in [r["name"] for r in h.db.execute("select name from agents where team=? and state='active'", (peer,))]:
         h._deliver_to(n, f"Check the {NAMES[desk]} desk's reasoning",
-                      f"A second pair of eyes on the {NAMES[desk]} desk's new calls. For each, does the reasoning actually "
-                      "support that side at that price? Look for reasons that argue the other way, facts that are wrong or "
-                      "made up, a fair price far from anything the reasons justify, or filler. Then mark each one:\n"
-                      "`fleet call review <id> ok \"<one line>\"` or `fleet call review <id> flag \"<what's wrong>\"`\n" + body)
+                      f"The {NAMES[desk]} desk proposed these calls. None counts until you confirm it, and anything not "
+                      "confirmed before its game starts is never tracked, so check them now. Research each one: are the "
+                      "facts right (players, goalies, injuries, who's home), does the reasoning support that side at that "
+                      "price, and is the fair price honest? If something's unclear, ask the desk: `fleet ask \"<agent>\" "
+                      "\"<question>\"`. Then mark each one:\n`fleet call review <id> ok \"<what you checked>\"` or "
+                      "`fleet call review <id> flag \"<what's wrong>\"`. You can confirm a flagged call later if the desk "
+                      "shows you were wrong.\n" + body)
     h.db.executemany("update calls set review_asked=? where id=?", [(now, c["id"]) for c in calls])
 
 
@@ -315,7 +318,7 @@ def _grade(h, game):
     for c in h.db.execute("select * from calls where game=? and result is null", (game["id"],)).fetchall():
         close = h.db.execute("select line, odds from lines where game=? and market=? and side=? and (market!='spread' or "
                              "line*?>0) order by at desc limit 1", (game["id"], c["market"], c["side"], c["line"] or 0)).fetchone()
-        res = "void" if game["status"] in VOID else _result(c, game)
+        res = "void" if game["status"] in VOID else _result(c, game) if c["review"] == "ok" else "unreviewed"
         h.db.execute("update calls set result=?, close_line=?, close_odds=?, graded_at=? where id=?",
                      (res, close and close["line"], close and close["odds"], h.clock(), c["id"]))
 
@@ -390,7 +393,8 @@ def book(h):
     for k in LEAGUES:
         mine = [c for c in calls if c["desk"] == k]
         desks[k] = {"name": NAMES[k], "agents": [r["name"] for r in h.db.execute("select name from agents where team=?", (k,))],
-                    "calls": len(mine), "open": sum(c["result"] is None for c in mine),
+                    "calls": len(mine), "open": sum(c["result"] is None and c["review"] == "ok" for c in mine),
+                    "checking": sum(c["result"] is None and c["review"] is None for c in mine),
                     "w": sum(c["result"] == "win" for c in mine), "l": sum(c["result"] == "loss" for c in mine),
                     "p": sum(c["result"] == "push" for c in mine), "pulled": sum(c["result"] == "pulled" for c in mine),
                     "units": sum(c["units"] or 0 for c in mine),
@@ -457,16 +461,22 @@ def manage(h, by, a):
             raise ValueError(f"no call {a[2]}")
         if c["desk"] == desk:
             raise ValueError("another desk reviews your calls; you review theirs")
-        h.db.execute("update calls set review=?, review_by=?, review_note=? where id=?", (a[3], by, a[4], c["id"]))
         g = h.db.execute("select * from games where id=?", (c["game"],)).fetchone()
-        if a[3] == "flag" and c["result"] is None and g and g["status"] == "STATUS_SCHEDULED" and now < g["start"]:
+        if not g or g["status"] != "STATUS_SCHEDULED" or now >= g["start"]:
+            raise ValueError("that game has started: reviews count only before it")       # hindsight can't change a result
+        h.db.execute("update calls set review=?, review_by=?, review_note=? where id=?", (a[3], by, a[4], c["id"]))
+        if a[3] == "ok" and c["result"] == "pulled":
+            h.db.execute("update calls set result=null, graded_at=null where id=?", (c["id"],))
+            return f"call #{c['id']} confirmed and back in the book"
+        if a[3] == "flag" and c["result"] is None:
             # Jack, Oct 27: a call built on wrong facts isn't tracked. Only before the game: a flag in hindsight can't
             # erase a loss
             h.db.execute("update calls set result='pulled', graded_at=? where id=?", (now, c["id"]))
             h._deliver_to(c["agent"], f"Call #{c['id']} pulled", f"{by} flagged your call #{c['id']} on {g['name']} "
                           f"({_pick(dict(c, home=g['home'], away=g['away'], home_name=g['home_name'], away_name=g['away_name']))}): "
-                          f"{a[4]}\nIt's out of the book. If the corrected facts still give you a view, log a new call before "
-                          "the game.")
+                          f"{a[4]}\nIt's out of the book. If you think {by} is wrong, make your case: `fleet ask \"{by}\" "
+                          "\"<why>\"`; they can confirm it again. Or, if the corrected facts still give you a view, log a "
+                          "new call before the game.")
             return f"call #{c['id']} flagged and pulled from the book"
         return f"call #{c['id']} marked {a[3]}"
     if a[1:2] != ["add"] or len(a) != 11:
@@ -501,4 +511,5 @@ def manage(h, by, a):
                          "5 minutes): log the price you can actually get")
     cid = h.db.execute("insert into calls(desk, agent, game, market, side, line, odds, fair_odds, confidence, reason, kill, made_at) "
                        "values(?,?,?,?,?,?,?,?,?,?,?,?)", (desk, by, gid, market, side, ln, o, f, int(conf), why, kill, now)).lastrowid
-    return f"call #{cid} logged: {g['name']} {_show(market, side, ln, o)}. The hub records the close and grades it."
+    return (f"call #{cid} logged as a proposal: {g['name']} {_show(market, side, ln, o)}. Another desk checks it now; it "
+            "counts once they confirm it, before the game.")
