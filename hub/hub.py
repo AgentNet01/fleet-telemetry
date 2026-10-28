@@ -154,6 +154,10 @@ MIGRATIONS = [
     "create index if not exists tasks_owner on tasks(owner, status)",
     "create index if not exists tasks_verifier on tasks(verifier, status)",
     "create index if not exists work_agent on work(agent, at)",
+    # Oct 28: _dry's per-product task lookups scanned every task (~15 s a pass live, the board waiting behind it)
+    "create index if not exists projects_product on projects(product)",
+    "create index if not exists tasks_project_status on tasks(project, status)",
+    "create index if not exists tasks_project_created on tasks(project, created)",
     "alter table agents add column current_product text",
     "alter table agents add column current_role text",
     "alter table agents add column onboarded real",
@@ -543,30 +547,58 @@ class Hub:
     def tick(self):
         now = self.clock()
         with self.lock:
+            # Oct 28: the board sometimes waited 15-20 s on this lock; log any step slow enough to explain it
+            slow, t = [], time.monotonic()
+            def lap(name):
+                nonlocal t
+                if time.monotonic() - t > 2:
+                    slow.append(f"{name} {time.monotonic() - t:.1f}s")
+                t = time.monotonic()
             # plan first (DB only), so newly-assigned task items are visible to the agents below
             self._assign_tasks()
+            lap("assign_tasks")
             self._switch_to_fill()
+            lap("switch_to_fill")
             self._close_councils()
+            lap("close_councils")
             self._assign_verifiers()
+            lap("assign_verifiers")
             self._track_free()
+            lap("track_free")
             self._overdue()                 # before _nudge: a task being parked isn't also nudged
+            lap("overdue")
             self._nudge()
+            lap("nudge")
             self._ceo_idle()
+            lap("ceo_idle")
             self._watch_chair()
+            lap("watch_chair")
             self._watch_powers()
+            lap("watch_powers")
             self._watch_fleet()
+            lap("watch_fleet")
             self._watch_jobs()
+            lap("watch_jobs")
             self._reviews()
+            lap("reviews")
             self._dry()
+            lap("dry")
             self._scout()
+            lap("scout")
             self._screen_timeouts()
+            lap("screen_timeouts")
             agents = [dict(a) for a in self.db.execute(
                 "select * from agents where kind in ('muse','poll','slack') and state != 'parked' order by name")]
+        if slow:
+            print(time.strftime("%F %T"), "slow tick:", ", ".join(slow), flush=True)
+        t = time.monotonic()
         try:
             sports.tick(self)                    # floor 2: its feed is read outside the lock; wakes land before delivery
         except Exception:
             import traceback
             print(time.strftime("%F %T"), "sports:", traceback.format_exc(), flush=True)
+        if time.monotonic() - t > 5:
+            print(time.strftime("%F %T"), f"slow tick: sports {time.monotonic() - t:.1f}s", flush=True)
         # Two passes so cross-agent effects (a reply that queues a note for someone else) land in
         # the same tick regardless of agent order. One bad account can't starve the rest — each
         # agent is serviced independently and the muse-cli I/O runs outside the lock, so a slow or

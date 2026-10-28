@@ -163,6 +163,22 @@ def board_speed():
     print(f"board_speed OK ({took:.2f}s)")
 
 
+def tick_speed():
+    """Oct 28 live: every hub pass held the lock ~15 s in its "no work lined up" check, and the board waited behind it
+    (15-20 s loads). On live-sized data a pass's planning checks finish well under a second."""
+    import shutil
+    from test_autonomy import ActiveMuse
+    from test_hub import Clock
+    work = os.path.join(tempfile.mkdtemp(), "hub.db")
+    shutil.copy(DEBUG_DB, work)
+    h = hub.Hub(work, ActiveMuse(), Clock(), evidence_ok=lambda link: True)
+    with h.lock:
+        h._dry()                                # warm the page cache
+        t = time.time(); h._dry(); took = time.time() - t
+    assert took < 0.3, f"tick_speed: the no-work check took {took:.2f}s"
+    print(f"tick_speed OK ({took:.2f}s)")
+
+
 def elevator():
     """Jack, Oct 26: "click an elevator button and go to the other floor… overview page/office would be the exact same"."""
     import threading
@@ -524,4 +540,4 @@ def confirm(h, by):
 
 
 if __name__ == "__main__":
-    {"book": book, "watch": watch, "board_speed": board_speed, "elevator": elevator, "pages": pages, "wall": wall, "research": research, "slate": slate, "office": office, "strategy": strategy, "explore": explore, "sanity": sanity, "review": review}[sys.argv[1]]()
+    {"book": book, "watch": watch, "board_speed": board_speed, "tick_speed": tick_speed, "elevator": elevator, "pages": pages, "wall": wall, "research": research, "slate": slate, "office": office, "strategy": strategy, "explore": explore, "sanity": sanity, "review": review}[sys.argv[1]]()
