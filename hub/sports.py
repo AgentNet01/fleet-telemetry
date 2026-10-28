@@ -272,6 +272,12 @@ def _wake(h, desk, now):
     _review_round(h, desk, staff, now)
 
 
+LAB_START = ("This is your assigned work: you're on the explorer desk (team lab), and nothing else is queued for you. "
+             "First task, since your notebook is empty: run `fleet call watch soccer/ger.1` and `fleet call watch "
+             "soccer/esp.1` (Bundesliga and La Liga; no other desk covers them). Get last season's results with opening and "
+             "closing odds (football-data.co.uk has free CSVs) and test one hypothesis, e.g. whether opening totals move "
+             "toward the close in a predictable direction. Write what you find with `fleet call note`, then bet only what "
+             "the data supports.\n\n")
 LAB = ("You're the explorer desk. Find an edge anywhere: any sport or league ESPN's scoreboard carries with DraftKings odds "
        "(baseball/mlb, basketball/wnba, soccer/ger.1, football/ufl…; team-vs-team events only for now), or a pattern in timing, "
        "line movement or information. Find datasets, do deep research, and test a hypothesis against past results before you "
@@ -292,7 +298,7 @@ def _lab(h, staff, now, st):
         return
     notes = h.db.execute("select text, at from lab_notes order by id desc limit 8").fetchall()
     paths = [r["path"] for r in h.db.execute("select path from lab_paths order by at")]
-    body = LAB + "\n\nWatching: " + (", ".join(paths) or "nothing yet") + "\nYour notebook, newest first:\n" + (
+    body = ("" if notes or paths else LAB_START) + LAB + "\n\nWatching: " + (", ".join(paths) or "nothing yet") + "\nYour notebook, newest first:\n" + (
         "\n".join(f"- {time.strftime('%a %H:%M', time.localtime(n['at']))} {n['text']}" for n in notes) or "- (empty)")
     for n in staff:
         h._deliver_to(n, "Explorer: next step", body)

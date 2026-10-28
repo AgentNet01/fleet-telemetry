@@ -16,7 +16,7 @@ assert all(len(v) == 1 for v in staffed.values()), f"each desk has one agent: {s
 watching = {k: d["watching"] for k, d in desks.items()}
 assert sum(1 for v in watching.values() if v) >= 4, f"the watcher should see games for most desks: {watching}"
 floor2 = sorted(a["name"] for a in b["agents"] if a.get("floor") == 2)
-assert len(floor2) == 6, f"six agents on floor 2: {floor2}"
+assert len(floor2) == len(desks), f"one agent per desk on floor 2: {floor2} vs {list(desks)}"
 assert took < 15, f"board took {took:.1f}s"
 print(f"floor 2 live: {staffed} watching {watching}; board {took:.1f}s")
 PY
