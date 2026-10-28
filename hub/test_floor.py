@@ -177,6 +177,7 @@ def elevator():
     poll(h, clock)
     try:
         h.manage("Nb", 'call add g1 spread BOS -11.5 -110 -125 2 "back-to-back" "Tatum sits"')
+        confirm(h, "Nf")
     except (ValueError, KeyError, PermissionError) as e:
         raise AssertionError(f"elevator: no Floor 2 button (no sports desk yet: {e})")
     with sync_playwright() as pw:
@@ -433,6 +434,41 @@ def review():
     print("review OK")
 
 
+def strategy():
+    """Jack, Oct 27: "shift three of them to [moving early] and have three on the other strategy so we can evaluate them
+    against each other". An early desk is handed every posted game as soon as it can price it, days ahead; a game-day
+    desk gets its next day only. The book compares the two groups side by side."""
+    h, muse, clock = new_hub("Cee", "Nb", "Nh")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Nh nhl")
+    clock.t = local(0, 9)
+    feed(h, nba=[event("g1", "BKN", "BOS", local(0, 19), spread=(-11.5, -110, -110)),
+                 event("g2", "MIA", "ATL", local(3, 19), spread=(-4, -110, -110))],
+         nhl=[event("h1", "LA", "CHI", local(0, 20), total=(5.5, -110, -110)),
+              event("h2", "TOR", "SEA", local(3, 22), total=(6.5, -110, -110))])
+    poll(h, clock)
+    clock.go(45 * 60); poll(h, clock)
+    rounds = lambda n: " ".join(m for m in muse.sent.get(n, []) if "lines moved" not in m)
+    assert "LA at CHI" in rounds("Nh") and "TOR at SEA" in rounds("Nh"), \
+        f"strategy: the early NHL desk wasn't handed the game three days out: {rounds('Nh')}"
+    assert "BKN at BOS" in rounds("Nb") and "MIA at ATL" not in rounds("Nb"), \
+        f"strategy: the game-day NBA desk got games beyond its next day: {rounds('Nb')}"
+    st = h.board()["book"]["strategies"]
+    assert "nhl" in st["early"]["desks"] and "nba" in st["gameday"]["desks"], st
+    h.manage("Nh", 'call add h2 total under 6.5 -110 -120 1 "two rested starting goalies" "both backups start"')
+    confirm(h, "Nb")
+    feed(h, nhl=[event("h1", "LA", "CHI", local(0, 20), total=(5.5, -110, -110)),
+                 event("h2", "TOR", "SEA", local(3, 22), total=(5.5, -110, -110))])
+    clock.go(HOUR); poll(h, clock)
+    clock.t = local(4, 2); feed(h, nhl=[event("h2", "TOR", "SEA", local(3, 22), status="STATUS_FINAL", score=(3, 2))])
+    poll(h, clock)
+    st = h.board()["book"]["strategies"]
+    # worked by hand: under 6.5 at -110 with 5 goals scored wins (+0.909); the total closed 5.5, so 6.5 beat it
+    assert (st["early"]["calls"], round(st["early"]["units"], 3), st["early"]["beat_close"]) == (1, 0.909, 1), st
+    assert st["gameday"]["calls"] == 0, st
+    print("strategy OK")
+
+
 def confirm(h, by):
     """Another desk confirms every call waiting for review (the tests that aren't about review)."""
     for c in h.board()["book"]["calls"]:
@@ -441,4 +477,4 @@ def confirm(h, by):
 
 
 if __name__ == "__main__":
-    {"book": book, "watch": watch, "board_speed": board_speed, "elevator": elevator, "pages": pages, "wall": wall, "research": research, "slate": slate, "office": office, "sanity": sanity, "review": review}[sys.argv[1]]()
+    {"book": book, "watch": watch, "board_speed": board_speed, "elevator": elevator, "pages": pages, "wall": wall, "research": research, "slate": slate, "office": office, "strategy": strategy, "sanity": sanity, "review": review}[sys.argv[1]]()

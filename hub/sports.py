@@ -21,6 +21,7 @@ POLL, JITTER = 300, 90                  # Jack: every five minutes, give or take
 WAKE_GAP = 20 * 60                      # at most one wake per desk this often; moves in between are batched
 SWEEP = 45 * 60                         # Jack, Oct 27: a research round this often when nothing has moved, any hour
 FINAL_LOOK = 2 * 3600                   # a last look at each game this long before it starts: lineups and goalies are out
+EARLY = ("nfl", "soccer", "nhl")       # Jack, Oct 27: half the desks bet openers and news; the rest price game day
 FIXED_SPREAD = ("nhl", "soccer")        # puck lines and goal lines sit at ±1.5/±0.5; the moneyline carries the moves
 MAX_EDGE = 0.10                         # a claimed edge past 10 points of implied probability is a mistake, not a bet
 MOVE_PTS = {"nhl": 0.5, "soccer": 0.5}  # a spread or total move worth a wake; 1 point everywhere else
@@ -235,19 +236,23 @@ def _wake(h, desk, now):
     if pending and now - (st["last_wake"] or 0) >= WAKE_GAP:
         news, rest = [m for m in pending if "new on the board" in m], [m for m in pending if "new on the board" not in m]
         body = "\n".join(f"- {m}" for m in (rest + news)[:40]) + (f"\n- …and {len(pending) - 40} more" if len(pending) > 40 else "")
+        early = ("\n\nYou move early: new lines are softest right after they post, so price new games now. A move you "
+                 "didn't call means the market already knows something; bet it only if the new number still beats your fair."
+                 if desk in EARLY else "")
         for n in staff:
-            h._deliver_to(n, f"{NAMES[desk]} lines moved", "DraftKings lines on your board changed:\n" + body + "\n\n" + NEXT)
+            h._deliver_to(n, f"{NAMES[desk]} lines moved", "DraftKings lines on your board changed:\n" + body + early + "\n\n" + NEXT)
         h.db.execute("update desk_state set pending='[]', last_wake=? where desk=?", (now, desk))
     elif not pending and now - last >= SWEEP:
         first = h.db.execute("select min(start) from games where desk=? and status='STATUS_SCHEDULED' and start > ?",
                              (desk, now)).fetchone()[0]
         if first:
             d = time.localtime(first - 6 * 3600)          # a slate runs to 6am: late West Coast games belong to it
-            end = time.mktime((d.tm_year, d.tm_mon, d.tm_mday + 1, 6, 0, 0, 0, 0, -1))
+            end = now + 30 * 86400 if desk in EARLY else time.mktime((d.tm_year, d.tm_mon, d.tm_mday + 1, 6, 0, 0, 0, 0, -1))
             games = _open_games(h, desk, now, end, 1)
             if games:
                 for n in staff:
-                    h._deliver_to(n, f"{NAMES[desk]} slate · research round", SLATE + _board(games) + "\n\n" + NEXT)
+                    h._deliver_to(n, f"{NAMES[desk]} slate · research round", (OPENERS if desk in EARLY else SLATE)
+                                  + _board(games) + "\n\n" + NEXT)
                 h.db.executemany("insert or ignore into offered(game, stage, at) values(?,1,?)", [(g["id"], now) for g in games])
                 h.db.execute("update desk_state set last_sweep=? where desk=?", (now, desk))
     soon = _open_games(h, desk, now, now + FINAL_LOOK, 2)
@@ -263,6 +268,11 @@ SLATE = ("Your slate: the games on your next day of play that you haven't called
          "you have a view, including leans: confidence 1 is a lean, 2 solid, 3 strong. Skip a game only when you think the "
          "price is right, and say so in one line. Be honest about size: on a spread or total a real edge is usually 1 to 4 "
          "points of win probability, so a fair price of about -115 to -125 against -110, not -140.\n")
+OPENERS = ("Your board: every posted game you haven't called, as far ahead as lines go. You bet early: opening lines "
+           "are the softest of the week, and the money comes from being there before the market corrects. Start with "
+           "breaking news (injuries, lineups, suspensions, coaching changes) the line may not have absorbed yet, then "
+           "price each game. Log a call wherever you have a view, leans included (confidence 1). Skip a game only when "
+           "you think the price is right. Be honest about size: a real edge is a few points of win probability.\n")
 LOOK = ("Final look: these start within two hours and you haven't called them. Lineups, goalies and late injury news are out "
         "now. Check them, and log a call on any game where you now have a view (leans count).\n")
 
@@ -402,11 +412,18 @@ def book(h):
                     "by_conf": {str(n): _tally([c for c in mine if c["confidence"] == n]) for n in (1, 2, 3)},
                     "watching": h.db.execute("select count(*) from games where desk=? and status='STATUS_SCHEDULED' and start > ?",
                                              (k, h.clock())).fetchone()[0]}
-    return {"calls": calls, "desks": desks, "activity": _activity(h)}
+    real = [c for c in calls if c["review"] == "ok"]
+    strategies = {k: dict(_tally([c for c in real if (c["desk"] in EARLY) == (k == "early")]),
+                          desks=[d for d in LEAGUES if (d in EARLY) == (k == "early")]) for k in ("early", "gameday")}
+    for k, d in desks.items():
+        d["strategy"] = "early" if k in EARLY else "gameday"
+    return {"calls": calls, "desks": desks, "strategies": strategies, "activity": _activity(h)}
 
 
 def _tally(cs):
+    lead = [(c["start"] - c["made_at"]) / 3600 for c in cs if c.get("start")]
     return {"calls": len(cs), "units": sum(c["units"] or 0 for c in cs), "graded": sum(c["beat_close"] is not None for c in cs),
+            "lead_h": sum(lead) / len(lead) if lead else None, "settled": sum(c["result"] in ("win", "loss", "push") for c in cs),
             "beat_close": sum(bool(c["beat_close"]) for c in cs), "flagged": sum(c["review"] == "flag" for c in cs)}
 
 

@@ -1087,7 +1087,9 @@ function renderFloor2(bk){
     const settled=done.filter(c=>c.result!=="void").sort((a,b)=>(a.graded_at||0)-(b.graded_at||0));
     let run=0; const pts=[0,...settled.map(c=>run+=(c.units||0)*10)], W=600, H=120, mx=Math.max(1,...pts.map(Math.abs));
     const line=pts.length>1?pts.map((v,i)=>`${(i/(pts.length-1)*W).toFixed(1)},${(H/2-v/mx*(H/2-8)).toFixed(1)}`).join(" "):"";
-    $("reschart").innerHTML=`<div style="padding:12px 14px"><b>${settled.length?usd(run):"$0.00"}</b> <span class="mu">if every settled call were a $10 bet · ${settled.length} settled · beat the close ${settled.filter(c=>c.beat_close).length} of ${settled.filter(c=>c.beat_close!=null).length}</span>
+    const SN={early:"Early: openers and breaking news",gameday:"Game day: prices each day's games"};
+    const vs=Object.entries(bk.strategies||{}).map(([k,g])=>`<div class="kpi"><b>${g.settled?usd(g.units*10):"$0"}</b><span>${esc(SN[k]||k)}<br>${(g.desks||[]).map(desk).join(", ")}<br>${g.calls} calls · ${g.settled} settled · beat the close ${g.graded?`${g.beat_close} of ${g.graded} (${Math.round(100*g.beat_close/g.graded)}%)`:"—"}${g.lead_h!=null?` · bet ${Math.round(g.lead_h)} h before the game on average`:""}</span></div>`).join("");
+    $("reschart").innerHTML=`${vs?`<div style="padding:12px 14px 0"><b>Strategy test</b> <span class="mu">— the higher "beat the close" share is the better strategy; dollars take many more games to mean anything</span><div class="kpis">${vs}</div></div>`:""}<div style="padding:12px 14px"><b>${settled.length?usd(run):"$0.00"}</b> <span class="mu">if every settled call were a $10 bet · ${settled.length} settled · beat the close ${settled.filter(c=>c.beat_close).length} of ${settled.filter(c=>c.beat_close!=null).length}</span>
       ${settled.length>1?`<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" role="img" aria-label="Running total"><line x1="0" x2="${W}" y1="${H/2}" y2="${H/2}" stroke="var(--line)"/><polyline fill="none" stroke="var(--accent)" stroke-width="2" points="${line}"/></svg>`:`<div class="mu" style="margin-top:6px">The running total appears after two settled calls.</div>`}</div>`;
     $("reslist").innerHTML=done.length?`<table class="ptab"><thead><tr><th>Game</th><th>Pick</th><th>Result</th><th>Decision</th><th class="hide-s">Desk</th></tr></thead><tbody>
       ${done.map(c=>`<tr><td>${esc(c.game_name||"")}<div class="mu">${when(c.start)}${c.home_score!=null?` · ${c.away} ${c.away_score} – ${c.home} ${c.home_score}`:""}</div></td>
@@ -1098,7 +1100,7 @@ function renderFloor2(bk){
   if(tab==="desks") $("deskcards").innerHTML=Object.entries(bk.desks||{}).map(([k,d])=>{
     const last=(bk.activity||[]).find(e=>e.desk===k), open=calls.filter(c=>c.desk===k&&!c.result), agree=open.filter(c=>c.since&&c.since.verdict==="agrees").length;
     const settled=d.w+d.l+d.p;
-    return `<div class="card dcard"><div class="nm">${esc(d.name)} <span class="mu">· ${esc(d.agents.join(", ")||"no agent")}</span></div>
+    return `<div class="card dcard"><div class="nm">${esc(d.name)} <span class="mu">· ${esc(d.agents.join(", ")||"no agent")} · ${d.strategy==="early"?"bets early":"bets game day"}</span></div>
       <div class="big">${settled?usd(d.units*10):"$0"}</div><div class="mu">if every call were a $10 bet</div>
       <div style="margin-top:8px">${settled?`${d.w} won · ${d.l} lost${d.p?` · ${d.p} push`:""}`:"Nothing settled yet"} · beat the close ${d.graded?`${d.beat_close} of ${d.graded}`:"—"}</div>
       <div class="mu" style="margin-top:6px">By confidence: ${["3","2","1"].map(n=>{const b=(d.by_conf||{})[n]||{};return `${"●".repeat(+n)}${"○".repeat(3-n)} ${b.calls||0} call${b.calls===1?"":"s"}${b.graded?` · beat the close ${b.beat_close}/${b.graded}`:""}${b.flagged?` · ⚑ ${b.flagged}`:""}`}).join(" &nbsp; ")}</div>
