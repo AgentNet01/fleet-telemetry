@@ -416,7 +416,7 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
   </section>
   <section id="desks" hidden>
     <h2>Desks</h2>
-    <div class="hint">One agent per sport. How each is doing, and what it did last.</div>
+    <div class="hint">Each sport has an early agent and a game-day agent. How each desk is doing, and what it did last.</div>
     <div id="deskcards" class="dgrid"></div>
   </section>
   <section id="deskact" hidden>
@@ -429,6 +429,9 @@ textarea[name=soul]{field-sizing:content;min-height:84px}
     <h2>Etsy shops</h2>
     <div class="hint">Link a shop once and the hub pulls its paid orders every hour into Revenue. The link is read-only and stays in the vault, where no agent can read it.</div>
     <div class="card" id="etsy"></div>
+    <h2>eBay</h2>
+    <div class="hint">Resale items go here, shipped by CJdropshipping. The hub prices every listing itself and places each paid order with CJ, inside the $50 a day cap.</div>
+    <div class="card" id="ebay"></div>
     <h2>Add a secret</h2>
     <div class="hint">Agents read these instead of Muse's keychain. Scope limits who can read it; every read is logged below.</div>
     <div class="card"><form class="form" id="secretform">
@@ -821,8 +824,32 @@ async function renderEtsy(){
   $("etsy").querySelectorAll(".what").forEach(el=>el.style.whiteSpace="normal");
   if(e.app) $("etsyconnect").onsubmit=ev=>{ ev.preventDefault(); location.href="etsy/connect?product="+encodeURIComponent($("ek_prod").value); };
 }
+async function renderEbay(){
+  const b=await jget("api/board"); if(!b) return;
+  const e=b.ebay||{}, accept=location.origin+"/ebay/callback", del=e.endpoint||location.origin+"/ebay/deletion";
+  const state=e.connected?`<div class="row vrow"><div><b>eBay linked</b> ${ago(e.connected)}</div>
+      <div class="what">${e.policies.length===3?"shipping, payment and return policies found":`<span style="color:var(--warn)">${3-e.policies.length} business policies missing: add them in eBay's seller settings, then Connect eBay again</span>`}</div></div>`
+      :`<div class="row muted">No eBay account linked yet.</div>`;
+  const keys=`<form class="form" id="ebayapp">
+      <div class="what">1. At <a href="https://developer.ebay.com/my/keys" target="_blank" rel="noopener">developer.ebay.com</a>, make a Production keyset. Under User Tokens, add a RuName whose <b>auth accepted URL</b> is <code>${esc(accept)}</code>.</div>
+      <div class="what">2. Under Alerts &amp; Notifications, set Marketplace Account Deletion to endpoint <code>${esc(del)}</code>${e.verify_token?` and verification token <code>${esc(e.verify_token)}</code>`:" (the verification token shows here once the keys are saved)"}.</div>
+      <div class="what">3. Paste the App ID, Cert ID and RuName:</div>
+      <div class="r2"><input id="eb_id" placeholder="App ID (client ID)" autocomplete="off" aria-label="eBay App ID"><input id="eb_secret" placeholder="Cert ID (client secret)" autocomplete="off" aria-label="eBay Cert ID"></div>
+      <div class="r2"><input id="eb_runame" placeholder="RuName" autocomplete="off" aria-label="eBay RuName"></div>
+      <div><button class="btn${e.app?"":" primary"}" type="submit">${e.app?"Replace app keys":"Save app keys"}</button></div></form>`;
+  const connect=e.app?`<form class="form" id="ebayconnect"><div><button class="btn primary" type="submit">Connect eBay</button></div>
+      <div class="what">Sign in as the seller and approve. The hub reads your business policies and adds CJ's US warehouse as the ship-from location.</div></form>`:"";
+  $("ebay").innerHTML=state+connect+(e.app?`<details><summary class="what">eBay app keys</summary>${keys}</details>`:keys);
+  $("ebay").querySelectorAll(".what").forEach(el=>el.style.whiteSpace="normal");
+  $("ebayapp").onsubmit=async ev=>{ ev.preventDefault();
+    const client_id=$("eb_id").value.trim(), client_secret=$("eb_secret").value.trim(), runame=$("eb_runame").value.trim();
+    if(!client_id||!client_secret||!runame) return toast("App ID, Cert ID and RuName are all needed");
+    try{ await jpost("api/jack/ebay/app",{client_id,client_secret,runame}); toast("eBay app saved"); renderEbay(); }catch(err){ toast(err.message); }};
+  if(e.app) $("ebayconnect").onsubmit=ev=>{ ev.preventDefault(); location.href="ebay/connect"; };
+}
 async function renderVault(){
   renderEtsy();
+  renderEbay();
   $("sk_scope").innerHTML=scopeOptions();
   const d=await jget("api/vault"); if(!d) return;
   // each secret: who can read it now, and a picker (⌘/Ctrl-click for several) to change that without re-entering the value
@@ -1052,10 +1079,10 @@ paintTheme();
 $("elev").onclick=()=>{ floor=floor===1?2:1; try{ localStorage.setItem("hub-floor",String(floor)); }catch(e){} if(raw) paint(); };
 const ten=u=>u==null?null:u*10, usd=x=>x==null?"":`${x>0?"+":x<0?"−":""}$${Math.abs(x).toFixed(2)}`;
 const pays=o=>(o>0?o/10:1000/-o).toFixed(2);       // profit on a $10 bet at American odds o
-const when=t=>t?new Date(t*1000).toLocaleString([], {weekday:"short", hour:"numeric", minute:"2-digit"}):"";
+const when=t=>t?new Date(t*1000).toLocaleString([], {weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit"}):"";
 const desk=k=>((raw&&raw.book&&raw.book.desks||{})[k]||{}).name||(k||"").toUpperCase();
 const odds=o=>o==null?"":(o>0?"+":"")+o;
-function verdict(c){ const v=c.since; if(!v) return `<span class="vd flat">no line yet</span>`;
+function verdict(c){ const v=c.since; if(!v) return `<span class="vd flat">${c.market==="prop"?"prop · graded from the box score":c.soft?"softened line":"no line yet"}</span>`;
   const was=c.market==="moneyline"?odds(c.odds):`${c.line>0&&c.market==="spread"?"+":""}${c.line}`,
         is=c.market==="moneyline"?odds(c.now_odds):`${c.now_line>0&&c.market==="spread"?"+":""}${c.now_line}`;
   const txt={agrees:"▲ Market agrees",disagrees:"▼ Market disagrees",flat:"– No move yet"}[v.verdict];
@@ -1088,22 +1115,25 @@ function renderFloor2(bk){
     let run=0; const pts=[0,...settled.map(c=>run+=(c.units||0)*10)], W=600, H=120, mx=Math.max(1,...pts.map(Math.abs));
     const line=pts.length>1?pts.map((v,i)=>`${(i/(pts.length-1)*W).toFixed(1)},${(H/2-v/mx*(H/2-8)).toFixed(1)}`).join(" "):"";
     const SN={early:"Early: openers and breaking news",gameday:"Game day: prices each day's games",explore:"Explorer: finds its own edge"};
-    const vs=Object.entries(bk.strategies||{}).map(([k,g])=>`<div class="kpi"><b>${g.settled?usd(g.units*10):"$0"}</b><span>${esc(SN[k]||k)}<br>${(g.desks||[]).map(desk).join(", ")}<br>${g.calls} calls · ${g.settled} settled · beat the close ${g.graded?`${g.beat_close} of ${g.graded} (${Math.round(100*g.beat_close/g.graded)}%)`:"—"}${g.lead_h!=null?` · bet ${Math.round(g.lead_h)} h before the game on average`:""}</span></div>`).join("");
-    $("reschart").innerHTML=`${vs?`<div style="padding:12px 14px 0"><b>Strategy test</b> <span class="mu">— the higher "beat the close" share is the better strategy; dollars take many more games to mean anything</span><div class="kpis">${vs}</div></div>`:""}<div style="padding:12px 14px"><b>${settled.length?usd(run):"$0.00"}</b> <span class="mu">if every settled call were a $10 bet · ${settled.length} settled · beat the close ${settled.filter(c=>c.beat_close).length} of ${settled.filter(c=>c.beat_close!=null).length}</span>
+    const clv=o=>o&&o.graded?`${o.beat}/${o.graded}`:"—";
+    const cell=t=>t&&t.calls?`<b>${t.settled?usd(t.units*10):"$0"}</b> <span class="mu">${t.settled}/${t.calls} settled · close: lines ${clv(t.clv_game)}, props ${clv(t.clv_prop)}</span>`:`<span class="mu">no calls</span>`;
+    const sxs=Object.keys(bk.by_sport_strategy||{}).length?`<table class="ptab" style="margin-top:10px"><thead><tr><th>Sport</th><th>Early</th><th>Game day</th></tr></thead><tbody>${Object.entries(bk.by_sport_strategy).map(([k,v])=>`<tr><td>${esc(desk(k))}</td><td>${cell(v.early)}</td><td>${cell(v.gameday)}</td></tr>`).join("")}</tbody></table>`:"";
+    const vs=Object.entries(bk.strategies||{}).map(([k,g])=>`<div class="kpi"><b>${g.settled?usd(g.units*10):"$0"}</b><span>${esc(SN[k]||k)}<br>${g.calls} calls · ${g.settled} settled · beat the close ${g.graded?`${g.beat_close} of ${g.graded} (${Math.round(100*g.beat_close/g.graded)}%)`:"—"}${g.lead_h!=null?` · bet ${Math.round(g.lead_h)} h before the game on average`:""}</span></div>`).join("");
+    $("reschart").innerHTML=`${vs?`<div style="padding:12px 14px 0"><b>Strategy test</b> <span class="mu">— profit decides. "Beat the close" is an early sign while the sample is small; the desks never see it</span><div class="kpis">${vs}</div>${sxs}</div>`:""}<div style="padding:12px 14px"><b>${settled.length?usd(run):"$0.00"}</b> <span class="mu">if every settled call were a $10 bet · ${settled.length} settled · beat the close ${settled.filter(c=>c.beat_close).length} of ${settled.filter(c=>c.beat_close!=null).length}</span>
       ${settled.length>1?`<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" role="img" aria-label="Running total"><line x1="0" x2="${W}" y1="${H/2}" y2="${H/2}" stroke="var(--line)"/><polyline fill="none" stroke="var(--accent)" stroke-width="2" points="${line}"/></svg>`:`<div class="mu" style="margin-top:6px">The running total appears after two settled calls.</div>`}</div>`;
     $("reslist").innerHTML=done.length?`<table class="ptab"><thead><tr><th>Game</th><th>Pick</th><th>Result</th><th>Decision</th><th class="hide-s">Desk</th></tr></thead><tbody>
       ${done.map(c=>`<tr><td>${esc(c.game_name||"")}<div class="mu">${when(c.start)}${c.home_score!=null?` · ${c.away} ${c.away_score} – ${c.home} ${c.home_score}`:""}</div></td>
         <td><b>${esc(c.pick)}</b><div class="mu">${odds(c.odds)}</div>${c.review?`<div class="mu">${c.review==="flag"?"⚑ Flagged":"✓ Checked"} by ${esc(c.review_by)}: ${esc(c.review_note||"")}</div>`:""}</td>
         <td><span class="vd ${c.result}">${{win:"Won",loss:"Lost",push:"Push",void:"Void"}[c.result]}</span><div class="mu">${usd(ten(c.units))}</div></td>
-        <td>${c.beat_close==null?"—":c.beat_close?`<span class="vd win">✓ Beat the close</span>`:`<span class="vd loss">✗ Missed the close</span>`}<div class="mu">closed ${c.market==="moneyline"?odds(c.close_odds):c.close_line}</div></td>
+        <td>${c.beat_close==null?"—":c.beat_close?`<span class="vd win">✓ Beat the close</span>`:`<span class="vd loss">✗ Missed the close</span>`}${c.close_odds==null?"":`<div class="mu">closed ${c.market==="moneyline"?odds(c.close_odds):c.close_line}</div>`}</td>
         <td class="hide-s">${esc(desk(c.desk))}</td></tr>`).join("")}</tbody></table>`:`<div class="row empty">Nothing settled yet. The hub grades each call when its game ends.</div>`; }
   if(tab==="desks") $("deskcards").innerHTML=Object.entries(bk.desks||{}).map(([k,d])=>{
     const last=(bk.activity||[]).find(e=>e.desk===k), open=calls.filter(c=>c.desk===k&&!c.result), agree=open.filter(c=>c.since&&c.since.verdict==="agrees").length;
     const settled=d.w+d.l+d.p;
-    return `<div class="card dcard"><div class="nm">${esc(d.name)} <span class="mu">· ${esc(d.agents.join(", ")||"no agent")} · ${{early:"bets early",gameday:"bets game day",explore:"finds its own edge"}[d.strategy]||""}</span></div>
+    return `<div class="card dcard"><div class="nm">${esc(d.name)} <span class="mu">· ${esc(d.agents.map(n=>`${n} (${{early:"early",gameday:"game day",explore:"explorer"}[(d.strategies||{})[n]]||""})`).join(", ")||"no agent")}</span></div>
       <div class="big">${settled?usd(d.units*10):"$0"}</div><div class="mu">if every call were a $10 bet</div>
       <div style="margin-top:8px">${settled?`${d.w} won · ${d.l} lost${d.p?` · ${d.p} push`:""}`:"Nothing settled yet"} · beat the close ${d.graded?`${d.beat_close} of ${d.graded}`:"—"}</div>
-      <div class="mu" style="margin-top:6px">By confidence: ${["3","2","1"].map(n=>{const b=(d.by_conf||{})[n]||{};return `${"●".repeat(+n)}${"○".repeat(3-n)} ${b.calls||0} call${b.calls===1?"":"s"}${b.graded?` · beat the close ${b.beat_close}/${b.graded}`:""}${b.flagged?` · ⚑ ${b.flagged}`:""}`}).join(" &nbsp; ")}</div>
+      <div class="mu" style="margin-top:6px">By confidence: ${["3","2","1"].map(n=>{const b=(d.by_conf||{})[n]||{};return `${"●".repeat(+n)}${"○".repeat(3-n)} ${b.calls||0} call${b.calls===1?"":"s"}${b.settled?` · ${usd(b.units*10)}`:""}${b.graded?` · beat the close ${b.beat_close}/${b.graded}`:""}${b.flagged?` · ⚑ ${b.flagged}`:""}`}).join(" &nbsp; ")}</div>
       <div>${d.open} open${d.open?` · market agrees on ${agree}`:""}${d.pulled?` · ${d.pulled} pulled after another desk flagged them`:""} · watching ${d.watching||0} game${d.watching===1?"":"s"}</div>
       <div class="mu" style="margin-top:8px">${last?`Last: ${when(last.at)} · ${esc(last.kind==="woken"?"woken — "+last.text:last.kind==="called"?"logged a call":"said: "+last.text.slice(0,140))}`:"No activity yet"}</div>
       ${k==="lab"?`<details style="margin-top:8px"><summary>Notebook (${(bk.notes||[]).length})</summary>${(bk.notes||[]).map(n=>`<div class="mu" style="margin-top:4px">${when(n.at)} · ${esc(n.text)}</div>`).join("")||`<div class="mu">Nothing yet.</div>`}</details>`:""}

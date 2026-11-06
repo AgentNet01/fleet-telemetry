@@ -113,6 +113,7 @@ def truth():
 
 
 def planning():
+    hub.GROWTH = True              # floor 1 growth is off live since Nov 1; these test it working
     hub.TASK_CAP = 10 ** 9        # its tasks sit held for hours by design; the cap is tested in overdue
     h, muse, clock = new_hub("Pat", "Ada", "Bo", "Cy")
     pid = h.add_product("Gifts", brief="personalized pet portraits on Etsy", metric="first sale")
@@ -170,6 +171,7 @@ def standin():
 
 def planner_not_asker():
     """A product with no PM asks the chair first; when the chair stays silent, someone else plans — not the chair."""
+    hub.GROWTH = True              # floor 1 growth is off live since Nov 1; these test it working
     h, muse, clock = new_hub("Cee", "W1", "W2")
     h.seat("ceo", "Cee")
     h.add_project(h.add_product("Shop", brief="planners"), "launch")
@@ -314,6 +316,7 @@ def paused():
 def planner_silent():
     """Oct 13 live: Boboe 1 was made planner for Kids' storybooks, added nothing, and 10+ agents sat idle for
     hours because the next round only came 12 h after the PM was asked. A silent planner gets PLAN_WAIT too."""
+    hub.GROWTH = True              # floor 1 growth is off live since Nov 1; these test it working
     h, muse, clock = new_hub("Pm", "W1", "W2", "W3")
     h.add_project(h.add_product("Shop", brief="planners", pm="Pm"), "launch")
     h.tick(); clock.go(PLAN_WAIT + 1); h.tick()
@@ -501,6 +504,7 @@ def unjoined():
 def chain():
     """Oct 13 live: each product was one chain (scan → concept → designs → package); with only the current step
     takeable, most agents sat free and no planning ran because the chain's later steps counted as queued."""
+    hub.GROWTH = True              # floor 1 growth is off live since Nov 1; these test it working
     h, muse, clock = new_hub("Pm", "Ada", "Bo", "Cy")
     prj = h.add_project(h.add_product("Cups", brief="cups", pm="Pm"), "launch")
     scan = h.add_task(prj, "scan", "optimizer", "doc", owner="Ada")
@@ -514,6 +518,7 @@ def chain():
 def live_done():
     """Jack, Oct 20: every product with a live listing was planned again every 2 h, so agents filled them with docs,
     audits and Pinterest batch 31. A live listing gets one ask to start a NEW product, and never an acting planner."""
+    hub.GROWTH = True              # floor 1 growth is off live since Nov 1; these test it working
     h, muse, clock = new_hub("Pm", "Ada", "Bo")
     pid = h.add_product("Cups", brief="cups", pm="Pm")
     h.add_project(pid, "launch")
@@ -543,6 +548,7 @@ def live_done():
 def scout():
     """Jack, Oct 20: "if they're blocked like that why don't they go research and discover new products?" A free
     agent with nothing to take is sent to find and post one, once per PLAN_WAIT; a busy agent and the chair aren't."""
+    hub.GROWTH = True              # floor 1 growth is off live since Nov 1; these test it working
     h, muse, clock = new_hub("Cee", "Ada", "Bo")
     h.seat("ceo", "Cee")
     prj = h.add_project(h.add_product("Cups", brief="cups", pm="Cee"), "launch")

@@ -51,12 +51,29 @@
                                      "title", "description", "tags", ...}. Its PM, the CEO, or whoever has a task on that
                                      product may change it; the product's task messages show whether it's live.
 
+  eBay: resale items (never Etsy). Supplier is CJdropshipping only, from its US warehouse; the hub sets the price.
+    fleet ebay post <listing.json>  {"product": "<product>", "vid": "<CJ variant id>", "title": "<up to 80 chars>",
+                                     "description", "keywords": "<3-5 words buyers search>", "images": ["https://..." CJ's
+                                     product photos are fine, up to 12], "quantity": 10, "aspects": {"Brand": ["Unbranded"]}}
+                                     The hub quotes CJ, reads similar eBay listings and lists just under the cheapest,
+                                     only if that clears $1.50 and 10% after every fee; otherwise it says why.
+
+  Amazon (FBA): we buy stock up front, so every buy is Jack's yes. Pick items that already have an Amazon page.
+    fleet amazon propose <ASIN> <CJ variant id> "<product>"   the hub checks we may sell it, reads the Buy Box and
+                                     Amazon's fees, quotes CJ to an FBA warehouse, and sends Jack the full costs, or tells
+                                     you why it fails ($1.50 and 10% profit after every fee and 3 months' storage).
+    fleet amazon list <proposal id>  after Jack's stock reaches Amazon: lists it just under the Buy Box, never under floor.
+
   Sports desk (floor 2, desk agents only): the hub watches your sport's DraftKings lines and wakes you when they move.
     fleet call games                 your sport's upcoming games with lines, and their ids
     fleet call add <game id> spread|total|moneyline <side> <line, or - for moneyline> <DraftKings odds> <your fair odds>
-                     <confidence 1-3> "<why>" "<what would make it wrong>"
+                     <confidence 0-3> "<why>" "<what would make it wrong>"
                                      propose a position before the game starts. Another desk checks it; it counts once
                                      they confirm it. Never edited; the hub records the close and the result and grades it
+    fleet call prop <game id> "<player>" <stat> over|under <line> <DraftKings odds> <your fair odds>
+                     <confidence 0-3> "<why>" "<what would make it wrong>"
+                                     propose a player prop; the hub grades it from ESPN's box score
+    fleet call props <game id>       DraftKings' player props with prices, where ESPN carries them (NBA, NHL, soccer; NFL lines)
     fleet call list                  your calls: open or settled, units won or lost, and whether each beat the close
     fleet call watch <sport/league>  explorer: add an ESPN league to your board (baseball/mlb, soccer/ger.1, …)
     fleet call note "<finding>"      explorer: write your notebook (Jack reads it)
@@ -354,6 +371,15 @@ def main(args):
     elif cmd == "etsy" and len(args) == 4 and args[1] == "update":
         r = call("POST", "/api/etsy/update", dict(json.load(open(args[3])), listing_id=args[2]), timeout=300)
         print(f"Updated {', '.join(r['changed']) or 'nothing'}: {r['live']}")
+    elif cmd == "amazon" and len(args) == 5 and args[1] == "propose":
+        r = call("POST", "/api/amazon/propose", {"asin": args[2], "vid": args[3], "product": args[4]}, timeout=300)
+        print(f"Proposal #{r['proposal']} is on Jack's list with every cost.")
+    elif cmd == "amazon" and len(args) == 3 and args[1] == "list":
+        r = call("POST", "/api/amazon/list", {"proposal": args[2]}, timeout=300)
+        print(f"Listed {r['sku']} at ${r['price']:.2f} (floor ${r['floor']:.2f}).")
+    elif cmd == "ebay" and len(args) == 3 and args[1] == "post":
+        r = call("POST", "/api/ebay/post", json.load(open(args[2])), timeout=300)
+        print(f"Live on eBay at ${r['price']:.2f} (floor ${r['floor']:.2f}): {r['live']}")
     elif cmd == "etsy" and len(args) == 3 and args[1] in ("post", "draft"):
         r = call("POST", "/api/etsy/post", json.load(open(args[2])), timeout=300)
         print(f"Live on Etsy: {r['live']}\nEdit: {r['edit']}")

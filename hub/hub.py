@@ -132,6 +132,18 @@ create table if not exists secret_reads(id integer primary key, secret text, age
 create table if not exists sales(
   id integer primary key, source text, external_id text, product text, amount real,
   currency text, at real, unique(source, external_id));
+create table if not exists supplier_orders(
+  id integer primary key, channel text, order_id text, product text, vid text, qty integer, sale real, tax real,
+  cost real, state text, cj_id text, carrier text, tracking text, address text, ship_by text, link text, note text,
+  created real, placed real, shipped real, unique(channel, order_id));
+create table if not exists ebay_listings(
+  sku text primary key, product text, vid text, title text, keywords text, offer_id text, listing_id text,
+  price real, offer text, state text, updated real);
+create table if not exists amazon_proposals(
+  id integer primary key, asin text, vid text, product text, title text, units integer, unit real, storage real,
+  price real, state text, who text, created real);
+create table if not exists amazon_listings(
+  sku text primary key, asin text, product text, unit real, storage real, price real, state text, updated real);
 create table if not exists switches(
   agent text primary key, product text, role text, expect text, issued real, status text);
 create table if not exists telemetry(agent text primary key, blob text, at real);
@@ -158,6 +170,8 @@ MIGRATIONS = [
     "create index if not exists projects_product on projects(product)",
     "create index if not exists tasks_project_status on tasks(project, status)",
     "create index if not exists tasks_project_created on tasks(project, created)",
+    "alter table agents add column capped_until real",          # Nov 1: out of Muse usage until then
+    "alter table agents add column strategy text",              # Nov 1: early | gameday on a sport desk
     "alter table agents add column current_product text",
     "alter table agents add column current_role text",
     "alter table agents add column onboarded real",
@@ -287,6 +301,9 @@ STANDIN_AFTER = 3 * 3600              # a CEO silent this long is stood in for b
 # tasks in an active product: a paused (or removed) product is kept, but nobody is handed its work
 LIVE_TASKS = "from tasks t join projects j on t.project=j.id join products p on j.product=p.id where p.status='active'"
 REVIEW_WAIT = 2 * 3600                # a PM's company change the CEO hasn't answered goes ahead after this
+# Jack, Nov 1: everyone but Pericles bets; floor 1 is kept alive (orders, buyers, live listings), not grown. False stops
+# the planning asks (_dry) and the new-product scouts (_scout)
+GROWTH = False
 SCOUT_AFTER = 30 * 60                # free this long with nothing to take: sent to find a new product
 PLAN_WAIT = 2 * 3600                  # a PM silent this long on an unplanned product: a free agent plans it
 CEO_IDLE_COUNT = 3                    # more than this many idle workers → the CEO hears about it
@@ -521,7 +538,9 @@ class Hub:
         if parts:
             text += (f"\n\n[also: {len(parts)} update{'s' if len(parts) > 1 else ''} that came in meanwhile, oldest first — no reply needed]\n\n"
                      + "\n\n".join(p.removesuffix(bare) for p in parts))
-        mark = self.transport.deliver(it["too"], text)          # muse-cli I/O — never under the lock
+        mark = self._transport_send(it["too"], text)
+        if mark is None:
+            return
         with self.lock:
             self._set("items", it["id"], status="sent", sent_at=self.clock(), tries=it["tries"] + 1, mark=mark)
             self._log(it["id"], it["too"], "in", text)
@@ -581,10 +600,11 @@ class Hub:
             lap("watch_jobs")
             self._reviews()
             lap("reviews")
-            self._dry()
-            lap("dry")
-            self._scout()
-            lap("scout")
+            if GROWTH:
+                self._dry()
+                lap("dry")
+                self._scout()
+                lap("scout")
             self._screen_timeouts()
             lap("screen_timeouts")
             agents = [dict(a) for a in self.db.execute(
@@ -700,6 +720,8 @@ class Hub:
             lk.release()
 
     def _deliver_one(self, name, kind, now):
+        if (self._agent(name)["capped_until"] or 0) > now:
+            return
         with self.lock:
             it = self._inflight(name)
             nextitem = None
@@ -725,6 +747,21 @@ class Hub:
         elif nextitem is not None:
             self._send(nextitem, notes=[b for b in batch if b["id"] != nextitem["id"]])
 
+    def _transport_send(self, name, text):
+        """muse-cli I/O, never under the lock. None = Muse refused it for usage; it stays queued until the reset."""
+        import muse
+        try:
+            mark = self.transport.deliver(name, text)
+        except muse.Capped as e:
+            with self.lock:
+                self._set("agents", name, capped_until=e.until)
+                self.db.execute("insert into events(agent, dir, text, at) values(?,'err',?,?)", (name, str(e), self.clock()))
+            return None
+        if self._agent(name)["capped_until"]:
+            with self.lock:
+                self._set("agents", name, capped_until=None)
+        return mark
+
     def _waiting_notes(self, name):
         """The agent's queued FYIs, oldest first, as many as fit in one message (always at least the first)."""
         out, size = [], 0
@@ -742,7 +779,9 @@ class Hub:
         parts = [self._format(it) for it in items]
         text = (f"[fleet · {len(items)} updates, oldest first]\n\n" + "\n\n".join(p.removesuffix(bare) for p in parts)
                 + "\n\n— No reply needed for any of these.")
-        mark = self.transport.deliver(items[0]["too"], text)     # muse-cli I/O — never under the lock
+        mark = self._transport_send(items[0]["too"], text)
+        if mark is None:
+            return
         with self.lock:
             for it, part in zip(items, parts):                   # each FYI keeps its own line in the timeline
                 self._set("items", it["id"], status="answered", sent_at=self.clock(), tries=it["tries"] + 1, mark=mark)
@@ -789,10 +828,25 @@ class Hub:
         # ponytail: listed in status so agents on an older fleet.py find their logins with no update
         logins = (f"\nYour logins and keys in the vault: {', '.join(mine)}. Read one with: fleet secret get <name> "
                   "(JSON with the email, password and username).") if mine else ""
-        return {"agent": name, "product": a["current_product"], "role": a["current_role"], "can": self.powers(name) + logins,
+        product, role = a["current_product"], a["current_role"]
+        if a["team"] in DESKS:                  # read by every fleet.py as "You are on <product> as <role>."
+            product, role = f"the {sports.NAMES[a['team']]} desk (floor 2)", {"early": "early bettor", "gameday": "game-day bettor",
+                            "explore": "explorer"}[sports.strategy_of(self, name, a["team"])]
+        return {"agent": name, "product": product, "role": role, "can": self.powers(name) + logins,
                 "tasks": [{k: t[k] for k in ("id", "title", "status", "product", "role")} for t in tasks],
                 "queue": [{k: i[k] for k in ("id", "frm", "text", "status")}
                           for i in self.items_for(name) if i["status"] in ("queued", "sent")]}
+
+    def _to_desk(self, name):
+        """Nov 1: Boboe 2 and 7 refused their desk while `fleet status` still showed an Etsy seat, PM slots and pinned
+        tasks. A desk agent is off floor 1 entirely; its floor-1 work goes back to the pool."""
+        now = self.clock()
+        self._set("agents", name, current_product=None, current_role=None)
+        self.db.execute("update products set pm=null where pm=?", (name,))
+        self.db.execute("update tasks set owner=null, verifier=null, status='ready', touched=? where owner=? and status='working'",
+                        (now, name))
+        self.db.execute("update tasks set verifier=null, touched=? where verifier=? and status='verifying'", (now, name))
+        self.db.execute("update tasks set pin=null where pin=? and status not in ('done','cancelled')", (name,))
 
     def reply(self, agent, item_id, text):
         with self.lock:
@@ -1454,14 +1508,18 @@ class Hub:
             if self.db.execute("select 1 from items where too=? and kind='scout' and created > ?", (n, now - PLAN_WAIT)).fetchone():
                 continue
             self.db.execute("insert into items(kind, frm, too, text, depth, status, created) values('scout','hub',?,?,0,'queued',?)",
-                            (n, f"{self.SCOUT}\nNothing is waiting for you, so research and launch a NEW product: a cheap item "
-                                "under $10 (AliExpress or similar dropship suppliers are fine, free US shipping, good reviews) "
-                                f"that is not already in the shop. Already in the shop: {shop}. Also check the live shop, "
-                                "https://www.etsy.com/shop/QuietLedgerStudioUS: posting an item it already sells is refused.\n"
-                                "Add it with `fleet product add \"<name>\" \"<brief with supplier, cost, price, margin>\"`, then post "
-                                "the listing live with `fleet etsy post` (real supplier photos, title, 13 tags, price). Don't add "
-                                "docs, audits or promo tasks for listings that are already live. Anything only Jack can do goes on "
-                                "his list; no purchase before a customer pays.", now))
+                            (n, f"{self.SCOUT}\nNothing is waiting for you, so research and launch a NEW product that is not already in "
+                                f"the shop. Already in the shop: {shop}.\n"
+                                "Etsy only takes items we design: Printify prints, engraved or personalised pieces, generated "
+                                "art, digital downloads. Etsy removed our resold AliExpress items for breaking its Creativity "
+                                "Standards, and the hub now refuses them. For a designed item: `fleet product add \"<name>\" "
+                                "\"<brief with maker, cost, price, margin>\"`, then `fleet etsy post` (real photos, title, 13 "
+                                "tags, price); check https://www.etsy.com/shop/QuietLedgerStudioUS first, a duplicate is refused.\n"
+                                "Plain resale finds (under $10, from a wholesale dropship supplier such as CJdropshipping, never "
+                                "AliExpress) go to eBay, not Etsy: add them with `fleet product add` and a brief naming the "
+                                "supplier, its cost and US shipping; the hub prices and posts them to eBay once eBay is linked.\n"
+                                "Don't add docs, audits or promo tasks for listings that are already live. Anything only Jack "
+                                "can do goes on his list; no purchase before a customer pays.", now))
 
     def _projects_line(self, pid):
         return ", ".join(f"#{j['id']} {j['name']}" for j in self.db.execute(
@@ -1868,7 +1926,13 @@ class Hub:
             g = agent(by_name if a[1] == "me" else a[1])
             team = None if a[2] == "none" else a[2] if a[2] in ("generalist",) + DESKS else role(a[2])
             self._set("agents", g["name"], team=team)
+            if team in DESKS:
+                self._to_desk(g["name"])
             return f"{g['name']} is on the {team or 'generalist'} team"
+        if a[0] == "strategy" and len(a) == 3 and a[2] in ("early", "gameday"):
+            g = agent(a[1])
+            self._set("agents", g["name"], strategy=a[2])
+            return f"{g['name']} bets {'early' if a[2] == 'early' else 'on game day'}"
         if a[0] == "grant" and len(a) == 3 and a[2] in ("ceo", "none"):
             g = agent(a[1])
             if a[2] == "ceo":
@@ -2568,8 +2632,9 @@ class Hub:
 
     def _focus(self, name):
         """What an agent is doing right now: its active task, and its live activity title if reporting."""
-        t = self.db.execute("select id, title from tasks where owner=? and status in ('working','verifying') "
-                            "order by touched desc limit 1", (name,)).fetchone()
+        # Nov 1: work it handed in and someone else is checking isn't what it's doing (desk agents showed Etsy tasks)
+        t = self.db.execute("select id, title from tasks where (owner=? and status='working') or (verifier=? and status='verifying') "
+                            "order by touched desc limit 1", (name, name)).fetchone()
         r = self.db.execute("select blob, at from telemetry where agent=?", (name,)).fetchone()
         doing, fresh = None, False
         if r:
@@ -2606,7 +2671,7 @@ class Hub:
                             "last_in": a["last_in"], "last_out": a["last_out"], "login_expires": a["login_expires"],
                             "product": a["current_product"], "role": a["current_role"], "onboarded": a["onboarded"], "team": a["team"] or "generalist",
                             "floor": 2 if a["team"] in DESKS else 1,
-                            "focus": self._focus(a["name"]), "free_since": a["free_since"], "fleet_rev": a["fleet_rev"],
+                            "focus": self._focus(a["name"]), "free_since": a["free_since"], "fleet_rev": a["fleet_rev"], "capped_until": a["capped_until"], "strategy": a["strategy"],
                             "fleet_old": a["kind"] == "muse" and a["fleet_rev"] != current_rev,
                             "doing": {"busy": bool(a["busy"]), "line": a["doing"], "at": a["doing_at"]}
                                      if a["doing"] is not None or a["busy"] else None,
@@ -2814,8 +2879,29 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                         self._json(200, {"approvals": hub.approvals()})
                 elif u.path == "/api/board":
                     if self._jack():
+                        import ebay
                         import etsy
-                        self._json(200, dict(hub.board_shared(), etsy=etsy.shops(hub), you=self.who))
+                        self._json(200, dict(hub.board_shared(), etsy=etsy.shops(hub), ebay=ebay.status(hub), you=self.who))
+                elif u.path == "/ebay/deletion":             # eBay's account-deletion check: public, answers a hash only
+                    import ebay
+                    self._json(200, {"challengeResponse": ebay.deletion_answer(hub, q.get("challenge_code", ""))})
+                elif u.path in ("/ebay/connect", "/ebay/callback"):   # linking the eBay seller account (board login only)
+                    if self._jack():
+                        import ebay
+                        try:
+                            if u.path == "/ebay/connect":
+                                self.send_response(302)
+                                self.send_header("Location", ebay.start(hub))
+                                self.send_header("Content-Length", "0")
+                                self.end_headers()
+                            else:
+                                rec = ebay.finish(hub, q.get("state", ""), q.get("code", ""))
+                                missing = 3 - len(rec["policies"])
+                                self._page(200, "Linked the eBay account. " + (
+                                    f"{missing} business policies are missing (shipping, payment, returns): add them in eBay's "
+                                    "seller settings, then press Connect eBay again." if missing else "Agents can post now."))
+                        except (ValueError, RuntimeError) as e:
+                            self._page(400, f"eBay link didn't work: {e}")
                 elif u.path in ("/etsy/connect", "/etsy/callback"):   # linking an Etsy shop (board login only)
                     if self._jack():
                         import etsy
@@ -3034,6 +3120,29 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                     if name:
                         b = self._body()
                         self._json(200, {"job": hub.tool_run(name, b["tool"], b.get("args") or [], b.get("timeout"))})
+                elif u.path == "/ebay/deletion":             # eBay tells us an account was deleted: we keep no eBay user data
+                    self._body()
+                    self._json(200, {"ok": True})
+                elif u.path in ("/api/amazon/propose", "/api/amazon/list"):   # FBA: a costed pick to Jack; stock in -> listed
+                    name = self._agent()
+                    if name:
+                        import amazon
+                        b = self._body()
+                        try:
+                            if u.path == "/api/amazon/propose":
+                                self._json(200, {"proposal": amazon.propose(hub, name, b["asin"], b["vid"], b["product"])})
+                            else:
+                                self._json(200, amazon.list_stock(hub, int(b["proposal"])))
+                        except (ValueError, RuntimeError, KeyError, TypeError) as e:
+                            self._json(400, {"error": str(e)})
+                elif u.path == "/api/ebay/post":             # an agent's resale item, live on eBay at the hub's price
+                    name = self._agent()
+                    if name:
+                        import ebay
+                        try:
+                            self._json(200, ebay.post(hub, name, self._body()))
+                        except (ValueError, RuntimeError) as e:
+                            self._json(400, {"error": str(e)})
                 elif u.path in ("/api/etsy/post", "/api/etsy/draft"):   # an agent's Etsy listing, put live (draft: older fleet.py)
                     name = self._agent()
                     if name:
@@ -3109,6 +3218,13 @@ def serve(hub, host, port, password, join_code=None, logins=None):
                             self._json(200, {"ok": True})
                         except KeyError:
                             self._json(404, {"error": f"no secret called {b['name']!r}"})
+                elif u.path == "/api/jack/ebay/app":
+                    if self._jack():
+                        import ebay
+                        b = self._body()
+                        end = ebay.set_app(hub, b["client_id"], b["client_secret"], b["runame"], self._base() + "/ebay/deletion")
+                        self._json(200, {"deletion_endpoint": end, "verify_token": ebay.status(hub)["verify_token"],
+                                         "accept_url": self._base() + "/ebay/callback"})
                 elif u.path == "/api/jack/etsy/app":
                     if self._jack():
                         import etsy
@@ -3226,7 +3342,15 @@ def _revenue_fetch(h, cfg):
                                      "product": (c.get("metadata") or {}).get("product"), "at": c["created"]})
     except Exception:
         pass
+    import amazon
+    import ebay
     import etsy                                   # every shop linked on the dashboard (Vault → Etsy)
+    for ch in (ebay, amazon):
+        try:
+            rows += ch.sales(h)
+        except Exception as e:                    # one channel's outage must not stop the others' sales landing
+            with h.lock:
+                h._log(None, "hub", "out", f"{ch.__name__} sales unreadable: {e}")
     return rows + etsy.sales(h)
 
 
@@ -3273,7 +3397,12 @@ def main(cfg_path, *args):
     log = open(cfg.get("log", os.path.join(os.path.dirname(cfg["db"]), "hub.log")), "a", buffering=1)
 
     def loop():
-        last_renew = last_rev = last_list = 0
+        last_renew = last_rev = last_list = last_quote = 0
+        import amazon
+        import ebay
+        import etsy
+        import orders
+        orders.CHANNELS = {"ebay": ebay}
         while True:
             try:
                 if time.time() - last_renew > 86400:
@@ -3284,11 +3413,23 @@ def main(cfg_path, *args):
                     last_rev = time.time()
                 if time.time() - last_list > 600:
                     last_list = time.time()
-                    import etsy
-                    try:
-                        etsy.sync_listings(h)
-                    except ValueError:                    # no shop linked
-                        pass
+                    # each on its own: an Etsy 429 must not stop eBay orders reaching CJ
+                    for job in (etsy.sync_listings, orders.tick, orders.track):   # PLAN8: paid orders -> CJ, tracking back
+                        try:
+                            job(h)
+                        except ValueError:                # that channel isn't linked yet
+                            pass
+                        except Exception:
+                            log.write(time.strftime("%F %T ") + traceback.format_exc())
+                if time.time() - last_quote > 86400:      # PLAN9: every eBay listing re-priced from a fresh CJ quote
+                    last_quote = time.time()
+                    for job in (ebay.requote, amazon.reprice):   # PLAN10: FBA listings follow the Buy Box, never under floor
+                        try:
+                            job(h)
+                        except ValueError:
+                            pass
+                        except Exception:
+                            log.write(time.strftime("%F %T ") + traceback.format_exc())
                 h.tick()
             except Exception:
                 log.write(time.strftime("%F %T ") + traceback.format_exc())
