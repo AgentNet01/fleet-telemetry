@@ -34,6 +34,7 @@ class ActiveMuse(FakeMuse):
 
 def new_hub(*agents):
     h = hub.Hub(os.path.join(tempfile.mkdtemp(), "hub.db"), ActiveMuse(), Clock(), evidence_ok=lambda link: True)
+    h.dk_fetch = lambda url: {}                 # never DraftKings from a test
     for n in agents:
         h.add_agent(n, "muse")
     return h, h.transport, h.clock

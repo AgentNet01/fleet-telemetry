@@ -914,27 +914,30 @@ def passes():
 
 
 def prop_board():
-    """Jack, Nov 6: "why would they not have the live feed?" The hub reads DraftKings' player props with prices off ESPN
-    (NBA, NHL and soccer priced, NFL lines only), lists them with `fleet call props`, and holds a prop call to the
-    listed line and price the way it holds game lines, so no browser check is needed for those."""
+    """Jack, Nov 6: "write a script for DraftKings". The hub reads DraftKings' own player props for every desk (main O/U
+    where it has one, "N+" ladders read as Over N-0.5 where it doesn't), matches each DraftKings game to the hub's,
+    lists them with `fleet call props`, and holds a prop call to a listed line and price: no browser checks."""
+    import dk
     h, muse, clock = new_hub("Cee", "Nb", "Nh")
     h.seat("ceo", "Cee")
     h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Nh nhl")
     start = clock() + 5 * HOUR
     feed(h, nba=[event("g1", "LAL", "BOS", start, spread=(-3.5, -110, -110), total=(222.5, -110, -110))])
-    ad = "http://core/athletes/6583"
-    pair = lambda ln, o, u, typ="Total Points": [
-        {"athlete": {"$ref": ad + "?lang=en"}, "type": {"name": typ}, "odds": {"american": {"value": x}},
-         "current": {"target": {"value": ln}}} for x in (o, u)]
-    items = pair(22.5, "-105", "-121") + [{"athlete": {"$ref": ad}, "type": {"name": "Points Milestones"},
-                                            "odds": {"american": {"value": "-140"}}, "current": {"target": {"value": 20}}}]
-    plain = h.sports_fetch
-    h.sports_fetch = lambda url: ({"items": items, "pageCount": 1} if "g1/odds/100/propBets" in url else
-                                  {"displayName": "Anthony Davis"} if url.startswith(ad) else plain(url))
-    poll(h, clock)
+    ev = {"id": "e1", "startEventDate": time.strftime("%Y-%m-%dT%H:%M:%S.0000000Z", time.gmtime(start - 600)),
+          "participants": [{"venueRole": "Home", "name": "BOS Celtics", "metadata": {"shortName": "BOS"}},
+                           {"venueRole": "Away", "name": "LA Lakers", "metadata": {"shortName": "LAL"}}]}
+    ad = [{"type": "Player", "name": "Anthony Davis", "seoIdentifier": "Anthony Davis"}]
+    sel = lambda mid, typ, pts, odds, main=True: {"marketId": mid, "outcomeType": typ, "points": pts, "main": main,
+                                                 "displayOdds": {"american": odds}, "participants": ad}
+    pages = {f"leagues/{dk.LEAGUE['nba']}/categories/1215/subcategories/12488": {
+        "events": [ev], "markets": [{"id": "m1", "eventId": "e1", "subcategoryId": 12488}],
+        "selections": [sel("m1", "Over", 22.5, "\u2212105"), sel("m1", "Under", 22.5, "\u2212121"),
+                       sel("m1", "Over", 20.5, "\u2212150", main=False)]}}
+    h.dk_fetch = lambda url: next((v for k, v in pages.items() if url.endswith(k)), {})
+    poll(h, clock); poll(h, clock)                          # a game's props land on the poll after the game itself
     out = h.manage("Nb", "call props g1")
     assert "Anthony Davis" in out and "Over 22.5 (-105)" in out and "Under 22.5 (-121)" in out, f"prop_board: {out}"
-    assert "-140" not in out, f"prop_board: an alternate milestone line was listed as the main line: {out}"
+    assert "-150" not in out, f"prop_board: an alternate line was listed as the main line: {out}"
     for bad, why in (('call prop g1 "Anthony Davis" points over 20.5 -150 -170 1 "x" "y"', "an alt line"),
                      ('call prop g1 "Anthony Davis" points over 22.5 -140 -160 1 "x" "y"', "the wrong price")):
         try:
@@ -950,18 +953,15 @@ def prop_board():
         assert "no DraftKings price" in str(e), e
     said = (h.manage("Nb", "call props g9") + " ".join(muse.sent.get("Nb", []))).lower()
     assert "logged out" not in said and "check draftkings" not in said, "prop_board: something still asks for a DraftKings check"
-    import sports
-    soc = [{"athlete": {"$ref": "r1"}, "type": {"name": "Shots on Target Milestones"},
-            "current": {"over": {"american": "-150"}, "target": {"value": 1.0}}}]
-    soc.append(dict(soc[0], current={"over": {"american": "+250"}, "target": {"value": 2.0}}))
-    rows = sports._parse_props("soccer", soc, {"r1": "Bukayo Saka"})
-    assert rows == [("Bukayo Saka", "sog", "over", 0.5, -150), ("Bukayo Saka", "sog", "over", 1.5, 250)], rows
-    h.db.executemany("insert into props(game, player, stat, side, line, odds, at) values('g1',?,?,?,?,?,0)",
-                     [("Bukayo Saka", "points", "over", 0.5, -150), ("Bukayo Saka", "points", "over", 1.5, 250)])
-    assert "logged" in h.manage("Nb", 'call prop g1 "Bukayo Saka" points over 1.5 250 200 1 "x" "y"'), \
-        "prop_board: a second listed line for the same player and stat was refused"
+    h.dk_fetch = lambda url: (_ for _ in ()).throw(OSError("403"))   # a failed read keeps the last board
+    clock.go(400); h.tick(); h.tick()
+    assert "Over 22.5 (-105)" in h.manage("Nb", "call props g1"), "prop_board: a failed DraftKings read wiped the board"
+    lad = {"events": [], "markets": [{"id": "m2", "eventId": "e2", "subcategoryId": 16477}],
+           "selections": [{"marketId": "m2", "milestoneValue": 15, "displayOdds": {"american": "+120"},
+                           "participants": [{"type": "Player", "name": "Tyrone Riley", "seoIdentifier": "Tyrone Riley IV"}]}]}
+    _, rows = dk.props("cbb", lambda url: lad if url.endswith("/subcategories/16477") else {})
+    assert rows == [("e2", "Tyrone Riley IV", "points", "over", 14.5, 120)], rows
     print("prop_board OK")
-
 
 def confirm(h, by):
     """Another desk confirms every call waiting for review (the tests that aren't about review)."""

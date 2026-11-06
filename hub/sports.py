@@ -13,6 +13,8 @@ import random
 import time
 import urllib.request
 
+import dk
+
 LEAGUES = {"nba": ["basketball/nba"], "nfl": ["football/nfl"], "cfb": ["football/college-football?groups=80"],
            "nhl": ["hockey/nhl"], "cbb": ["basketball/mens-college-basketball?groups=50"],
            "soccer": ["soccer/eng.1", "soccer/uefa.champions"],
@@ -51,11 +53,6 @@ PROP_TYPES = {"basketball": {"points": "Total Points", "rebounds": "Total Reboun
                            "rec_yds": "Total Receiving Yards", "rush_rec_yds": "Total Rushing Plus Receiving Yards"},
               "hockey": {"points": "Total Points", "assists": "Total Assists", "shots": "Total Shots on Goal",
                          "saves": "Total Saves"}}
-# Jack, Nov 6: the hub reads DraftKings' player props off ESPN for these desks (ESPN has none for college), each game
-# inside PROP_AHEAD at most every PROP_EVERY, PROP_BATCH games a tick so one tick never stalls on dozens of fetches
-PROP_DESKS, PROP_AHEAD, PROP_EVERY, PROP_BATCH = ("nba", "nhl", "nfl", "soccer"), 24 * 3600, 15 * 60, 6
-SOCCER_PROPS = {"Shots Milestones": "shots", "Shots on Target Milestones": "sog", "Assists Milestones": "assists",
-                "Anytime Goalscorer": "goals"}   # soccer has only "N+" markets: read as Over N-0.5
 MAX_EDGE = 0.10                        # a claimed edge past 10 points of implied probability is a mistake, not a bet
 MOVE_PTS = {"nhl": 0.5, "soccer": 0.5}  # a spread or total move worth a wake; 1 point everywhere else
 MOVE_PROB = 0.03                        # a moneyline move worth a wake: 3 points of implied probability
@@ -215,19 +212,22 @@ def tick(h):
                  for desk, _ in due if desk != "lab" for r in h.db.execute(
                      "select distinct c.game from calls c join games g on g.id=c.game where c.desk=? and c.market='prop' and "
                      "c.result is null and g.status='STATUS_SCHEDULED' and g.start > ?", (desk, now))]
-        seen_at = h.__dict__.setdefault("_props_at", {})
-        boards = [(r["desk"], r["id"]) for r in h.db.execute(
-            f"select desk, id from games where desk in {PROP_DESKS} and status='STATUS_SCHEDULED' and start > ? and start <= ? "
-            "order by start", (now, now + PROP_AHEAD)) if now - seen_at.get(r["id"], 0) >= PROP_EVERY][:PROP_BATCH]
-        names = dict(h.db.execute("select ref, name from athletes").fetchall()) if props or boards else {}
+        # Jack, Nov 6: DraftKings' player props, every desk, read with the desk's own poll (one league read per stat)
+        boards = {desk: [dict(r) for r in h.db.execute("select id, start, home, away, home_name, away_name from games where "
+                                                      "desk=? and status='STATUS_SCHEDULED' and start > ?", (desk, now))]
+                  for desk, _ in due if desk in dk.LEAGUE}
+        names = dict(h.db.execute("select ref, name from athletes").fetchall()) if props else {}
     boxes = [(desk, gid, _box(h, desk, gid)) for desk, gid in finals]
     closes = [c for desk, gid, cs in props for c in _prop_lines(h, desk, gid, cs, names)]
-    priced = []
-    for desk, gid in boards:
-        seen_at[gid] = now                            # a failed read waits PROP_EVERY too: never hammer ESPN
-        items = _prop_items(h, desk, gid, names)
-        if items is not None:
-            priced.append((gid, _parse_props(desk, items, names)))
+    priced = {}
+    for desk, games in boards.items():
+        try:
+            events, rows = dk.props(desk, h.dk_fetch)
+        except Exception as e:                        # a failed read keeps the last board: never store half of one
+            print(time.strftime("%F %T"), f"sports draftkings {desk}: {e!r}", flush=True)
+            continue
+        ids = dk.match(events, games)
+        priced[desk] = [(ids[r[0]], *r[1:]) for r in rows if r[0] in ids]
     got = {}
     for desk, paths in due:
         events = []
@@ -260,10 +260,10 @@ def tick(h):
             if box:
                 _grade_props(h, desk, gid, box)
         h.db.executemany("insert or ignore into athletes(ref, name) values(?,?)", names.items())
-        for gid, rows in priced:
-            h.db.execute("delete from props where game=?", (gid,))
+        for desk, rows in priced.items():              # a started game keeps its last board: that's its close
+            h.db.executemany("delete from props where game=?", [(g["id"],) for g in boards[desk]])
             h.db.executemany("insert or replace into props(game, player, stat, side, line, odds, at) values(?,?,?,?,?,?,?)",
-                             [(gid, *r, now) for r in rows])
+                             [(*r, now) for r in rows])
         for cid, line in closes:                      # only pre-start reads land here: the last one is the close
             h.db.execute("update calls set close_line=? where id=? and result is null", (line, cid))
         for desk in LEAGUES:
@@ -589,53 +589,6 @@ def _box(h, desk, gid):
         if out:
             return out
     return None
-
-
-def _prop_items(h, desk, gid, names):
-    """Every propBets item ESPN holds for a game, with athlete names resolved into `names`; None if a read failed.
-    Network only, no lock."""
-    sport, _, league = LEAGUES[desk][0].partition("?")[0].partition("/")
-    items, page, pages = [], 1, 1
-    try:
-        while page <= pages and page <= 5:
-            j = h.sports_fetch(f"{CORE}{sport}/leagues/{league}/events/{gid}/competitions/{gid}/odds/100/propBets"
-                               f"?lang=en&region=us&limit=1000&page={page}") or {}
-            pages = j.get("pageCount") or 1
-            items += j.get("items") or []
-            page += 1
-        for ref in {((it.get("athlete") or {}).get("$ref") or "").split("?")[0] for it in items} - set(names) - {""}:
-            names[ref] = (h.sports_fetch(ref) or {}).get("displayName") or ""
-    except Exception as e:
-        print(time.strftime("%F %T"), f"sports prop board {desk} {gid}: {e}", flush=True)
-        return None
-    return items
-
-
-def _parse_props(desk, items, names):
-    """DraftKings' main player props: [(player, stat, side, line, odds or None)]. A "Total <stat>" market comes as two
-    items in feed order, over then under (checked Nov 6 against the matching "N+" milestone: 6 of 6); NBA/NHL milestones
-    are alternate lines and are skipped. Soccer has only "N+" markets, read as Over N-0.5."""
-    totals = {v: k for k, v in PROP_TYPES.get(_family(desk), {}).items()}
-    out, sides = [], {}
-    for it in items:
-        name = names.get(((it.get("athlete") or {}).get("$ref") or "").split("?")[0])
-        typ = ((it.get("type") or {}).get("name") or "").split(" (")[0]
-        cur = it.get("current") or {}
-        if not name:
-            continue
-        if desk == "soccer" and typ in SOCCER_PROPS:
-            o = _odds((cur.get("over") or {}).get("american"))
-            if o:
-                out.append((name, SOCCER_PROPS[typ], "over", (_num((cur.get("target") or {}).get("value")) or 1) - 0.5, o))
-        elif typ in totals:
-            line = _num((cur.get("target") or {}).get("value"))
-            k = (name, totals[typ], line)
-            if line is None or sides.get(k, 0) >= 2:
-                continue
-            sides[k] = sides.get(k, 0) + 1
-            out.append((name, totals[typ], "over" if sides[k] == 1 else "under", line,
-                        _odds(((it.get("odds") or {}).get("american") or {}).get("value")) or None))
-    return out
 
 
 def _prop_lines(h, desk, gid, calls, names):

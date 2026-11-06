@@ -2646,6 +2646,7 @@ class Hub:
 
     _board_at, _board_lock = float("-inf"), threading.Lock()
     sports_fetch = staticmethod(sports.fetch)   # floor 2's line feed; tests hand in their own
+    dk_fetch = staticmethod(sports.dk.fetch)    # DraftKings' own odds JSON (player props); tests hand in their own
 
     def board_changed(self):
         self._board_at = float("-inf")

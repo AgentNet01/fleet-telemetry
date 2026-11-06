@@ -73,7 +73,7 @@
     fleet call prop <game id> "<player>" <stat> over|under <line> <DraftKings odds> <your fair odds>
                      <confidence 0-3> "<why>" "<what would make it wrong>"
                                      propose a player prop; the hub grades it from ESPN's box score
-    fleet call props <game id>       DraftKings' player props with prices, where ESPN carries them (NBA, NHL, soccer; NFL lines)
+    fleet call props <game id>       DraftKings' player props with their prices, every sport
     fleet call list                  your calls: open or settled, units won or lost, and whether each beat the close
     fleet call watch <sport/league>  explorer: add an ESPN league to your board (baseball/mlb, soccer/ger.1, …)
     fleet call note "<finding>"      explorer: write your notebook (Jack reads it)
