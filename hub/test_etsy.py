@@ -63,6 +63,9 @@ class FakeEtsy:
         if method == "PATCH" and url.endswith("/shops/42/listings/9001"):
             self.state = data.get("state", self.state)
             return 200, {"listing_id": 9001, "state": self.state}
+        if method == "GET" and "/listings/batch?listing_ids=" in url:
+            ids = url.split("listing_ids=")[1].split(",")
+            return 200, {"results": [{"listing_id": 9001, "state": self.state}] if "9001" in ids else []}
         if method == "GET" and url.endswith("/listings/9001"):
             return 200, {"listing_id": 9001, "state": self.state}
         if method == "GET" and url.endswith("/listings/9001/images"):
@@ -186,8 +189,11 @@ def main():
     told = [r["text"] for r in h.db.execute("select text from items where too='Pam' and kind='note'")]
     assert len(told) == 1 and "INACTIVE" in told[0], f"etsy: the PM is told the listing went down: {told}"
     assert h.portfolio()[0]["listing_state"] == "inactive", "etsy: the product records it"
+    before = len(fake.calls)
     etsy.sync_listings(h)
     assert h.db.execute("select count(*) from items where too='Pam' and kind='note'").fetchone()[0] == 1, "etsy: told once per change"
+    # Oct 28: a GET per listing every 10 minutes ran the shop past Etsy's daily limit and the sales pull 429'd
+    assert len([c for c in fake.calls[before:] if c[0] == "GET"]) == 1, f"etsy: one read per 100 listings: {fake.calls[before:]}"
     proj = h.add_project(h.portfolio()[0]["id"], "Launch")
     tid = h.add_task(proj, "Redo the photos", "maker", "photos")
     assert "INACTIVE (buyers can't see it)" in h._listing_line(tid), f"etsy: every task on it says so: {h._listing_line(tid)}"

@@ -23,6 +23,7 @@ API = "https://openapi.etsy.com/v3/application"
 SCOPES = "transactions_r shops_r listings_r listings_w"
 APP = "etsy-app"            # vault: {"key": keystring, "secret": shared secret}
 SHOP = "etsy-shop:"         # vault: one per linked shop
+RESALE = re.compile(r"aliexpress|dropship|alibaba|dhgate|\btemu\b|\b1688\b|\bcj\b", re.I)
 
 
 def http(method, url, headers=None, data=None, files=None):
@@ -232,14 +233,19 @@ def sync_listings(h, only=None):
     with h.lock:
         _save(h, name, rec)
         rows = h.db.execute("select name, pm, link, listing_state from products where status='active' and link like '%etsy.com/listing/%'").fetchall()
+    rows = [p for p in rows if not only or _listing_id(p["link"]) == only]
+    # Oct 28: one GET per listing every 10 min was ~25k calls a day against Etsy's 10k limit (429s stopped the
+    # sales pull too); the batch endpoint reads 100 a call. A listing Etsy took down is missing from the answer.
+    ids, states = sorted({_listing_id(p["link"]) for p in rows}), {}
+    try:
+        for i in range(0, len(ids), 100):
+            got = _get(app, rec["access"], f"{API}/listings/batch?listing_ids={','.join(map(str, ids[i:i + 100]))}")
+            states.update({l["listing_id"]: l.get("state") or "unknown" for l in got.get("results", [])})
+    except RuntimeError:
+        return                                      # rate limited or down: try again next round, change nothing
     for p in rows:
         lid = _listing_id(p["link"])
-        if only and lid != only:
-            continue
-        try:
-            state = _get(app, rec["access"], f"{API}/listings/{lid}").get("state") or "unknown"
-        except RuntimeError as e:
-            state = "removed" if "404" in str(e) else None
+        state = states.get(lid, "removed")
         if not state or state == p["listing_state"]:
             continue
         with h.lock:
@@ -339,6 +345,12 @@ def post(h, who, f, image):
         known = f.get("product") and h.db.execute("select 1 from products where name=? and status='active'", (f["product"],)).fetchone()
     if not known:
         raise ValueError('"product" must name the hub product this listing sells (fleet product add it first)')
+    # Oct 28: Etsy removed ~64 resold AliExpress items under its Creativity Standards; Etsy is for what we design
+    with h.lock:
+        brief = h.db.execute("select brief from products where name=?", (f["product"],)).fetchone()["brief"] or ""
+    if RESALE.search(" ".join((brief, f.get("title") or "", f.get("description") or ""))):
+        raise ValueError("Etsy only takes items we design (Printify prints, engraved or personalised, generated art, "
+                         "downloads); a resold supplier item breaks its Creativity Standards. Post this on eBay instead")
     pics = [image(ref) for ref in f.get("images") or []]           # fetch first: a bad picture leaves no half-made draft
     if not pics:
         raise ValueError("a listing needs at least one picture")
