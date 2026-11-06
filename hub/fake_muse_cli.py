@@ -2,7 +2,8 @@
 
 Speaks the subset the hub uses, with the real JSON shapes (checked against Boboe 2, Oct 8):
   threads · session-start --title T · send TEXT --thread S --wait 0 · raw chat.history --body JSON
-Behaviour switches (files in the account folder): `reply` = text the agent answers each send with.
+Behaviour switches (files in the account folder): `reply` = text the agent answers each send with;
+`capped` = Muse's usage-limit notice, sent instead of any answer.
 """
 import json
 import os
@@ -34,8 +35,13 @@ elif a[0] == "send" and a[a.index("--wait") + 1] == "0":
 elif a[0] == "send":
     sid = a[a.index("--thread") + 1]
     ev("message.user", sid, a[1])
+    capped = os.path.join(home, "capped")
     reply = os.path.join(home, "reply")
-    if os.path.exists(reply):
+    if os.path.exists(capped):                  # out of weekly tokens: Muse answers with a button, never a turn (Nov 1)
+        st["seq"] += 1
+        st["events"].append({"seq": st["seq"], "event_name": "delta.presentation", "chat_context": {"chat_id": sid},
+                             "payload": {"kind": "text_with_button", "display_text": open(capped).read()}})
+    elif os.path.exists(reply):
         ev("message.assistant", sid, "(background update)", reply_to="self")   # proactive push: not a reply
         ev("message.assistant", sid, open(reply).read())                        # the genuine reply
         ev("message.assistant", sid, "still typ", ready=False)                 # still streaming: not yet

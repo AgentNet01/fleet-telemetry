@@ -26,6 +26,29 @@ class LoginError(Exception):
     pass
 
 
+class Capped(Exception):
+    """Muse answered a send with its usage-limit notice: the agent can't take a turn until `until` (epoch)."""
+    def __init__(self, name, until):
+        super().__init__(f"{name} is out of Muse usage until {time.strftime('%a %b %d %H:%M', time.localtime(until))}")
+        self.until = until
+
+
+CAPPED_FALLBACK = 6 * 3600      # notice with no readable time: try again after this
+
+
+def _reset_time(text, now):
+    """'...will reset at 10:18 AM on Thursday, November 5.' -> epoch in this machine's local time."""
+    m = re.search(r"reset at\W*(\d{1,2}:\d{2}\s*[AP]M)\W+on\W+\w+,\s*(\w+ \d{1,2})", text)
+    if not m:
+        return now + CAPPED_FALLBACK
+    year = time.localtime(now).tm_year
+    for y in (year, year + 1):                       # a reset in early January seen in late December
+        t = time.mktime(time.strptime(f"{m[2]} {y} {m[1]}", "%B %d %Y %I:%M %p"))
+        if t > now - 86400:
+            return t
+    return now + CAPPED_FALLBACK
+
+
 def _cookie_file(account_dir):
     return os.path.join(account_dir, ".config", "muse-cli", "cookies.txt")
 
@@ -66,13 +89,18 @@ class MuseTransport:
         r = self._run(name, "raw", "chat.history", "--body", json.dumps({"limit": limit, "session_id": self.session(name)}))
         return (r.get("result") or r).get("chat_events", [])
 
-    def deliver(self, name, text):
+    def deliver(self, name, text, now=None):
         evs = self._events(name, 1)
         mark = max((int(e.get("seq") or 0) for e in evs), default=0)
         # --wait 0 hangs up straight after opening the send and muse.ai drops the message (Oct 8);
         # a short wait lets it land, and the reply still arrives after we disconnect. muse-cli
         # raises on a transport failure, so a clean return means the send was accepted.
         self._run(name, "send", text, "--thread", self.session(name), "--wait", "8")
+        # Nov 1: out of weekly tokens, Muse answers every send at once with a notice and never takes the turn
+        for e in self._events(name, 3):
+            p = e.get("payload") if isinstance(e.get("payload"), dict) else {}
+            if int(e.get("seq") or 0) > mark and "usage limit" in (p.get("display_text") or ""):
+                raise Capped(name, _reset_time(p["display_text"], now or time.time()))
         return mark
 
     def replies(self, name, after):

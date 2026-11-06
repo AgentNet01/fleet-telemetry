@@ -4,6 +4,7 @@
     python3 test_muse.py side_chat_only   # every hub message goes to the agent's fleet side chat
     python3 test_muse.py intro            # a new fleet side chat opens with the hub's introduction
     python3 test_muse.py slack            # dot, proxied over Slack until Darragh connects it
+    python3 test_muse.py capped           # Muse's usage-limit notice raises Capped with its reset time
 """
 import json
 import os
@@ -46,6 +47,33 @@ def transport():
     assert len(t.replies("Boboe 3", mark2)) == 1
     assert t.session("Boboe 3") == "sess-1", "one fleet side chat, reused"
     print("transport OK")
+
+
+def capped():
+    """Nov 1: Boboe 18 ran out of weekly Muse tokens; every send got "You've reached your usage limit" and the hub,
+    seeing no error, kept sending 119 a day. A send that only earns that notice must say so, with the reset time."""
+    root = tempfile.mkdtemp()
+    b = account(root, "boboe-18")
+    t = muse.MuseTransport([sys.executable, os.path.join(HERE, "fake_muse_cli.py")], {"Boboe 18": b})
+    t.deliver("Boboe 18", "first")                                  # a working send is untouched
+    with open(os.path.join(b, "capped"), "w", encoding="utf-8") as f:
+        f.write("You've reached your usage limit. Upgrade now or invite friends to get more Muse tokens. Your full "
+                "weekly usage will reset at \u206810:18 AM\u2069 on \u2068Thursday, November 5\u2069.")
+    now = time.mktime((2026, 11, 1, 13, 0, 0, 0, 0, -1))
+    try:
+        t.deliver("Boboe 18", "next games", now=now)
+        raise AssertionError("capped: a usage-limit notice came back as a clean send")
+    except muse.Capped as e:
+        assert time.localtime(e.until)[:5] == (2026, 11, 5, 10, 18), f"capped: wrong reset {time.ctime(e.until)}"
+    # a notice with no readable time still stops sends, for a while
+    with open(os.path.join(b, "capped"), "w") as f:
+        f.write("You've reached your usage limit.")
+    try:
+        t.deliver("Boboe 18", "again", now=now)
+        raise AssertionError("capped: unreadable notice came back clean")
+    except muse.Capped as e:
+        assert now < e.until <= now + 24 * 3600, f"capped: fallback reset {e.until - now}"
+    print("capped OK")
 
 
 def renewal():
@@ -203,5 +231,5 @@ def activity_privacy():
 
 
 if __name__ == "__main__":
-    {"activity_privacy": activity_privacy, "side_chat_only": side_chat_only, "intro": intro, "slack": slack}.get(
+    {"activity_privacy": activity_privacy, "side_chat_only": side_chat_only, "intro": intro, "slack": slack, "capped": capped}.get(
         sys.argv[1] if len(sys.argv) > 1 else "", lambda: (transport(), renewal()))()
