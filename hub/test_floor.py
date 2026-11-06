@@ -280,21 +280,51 @@ def wall():
 
 
 def research():
-    """Jack, Oct 27: "the research pauses absolutely shouldn't be pausing. Also every three hours seems way too
-    infrequently." With nothing moving, a desk still gets a research round every 45 minutes, any hour, naming games."""
+    """Jack, Oct 27: "the research pauses absolutely shouldn't be pausing", and Oct 29: "they should essentially constantly
+    be working". At 3am with nothing moving, an idle desk still gets its games to work, named."""
     h, muse, clock = new_hub("Cee", "Nb")
     h.seat("ceo", "Cee")
     h.manage("Cee", "team Nb nba")
     clock.t = 1_000_000.0 - (1_000_000 % 86400) + 86400 + 3 * HOUR - time.timezone     # 03:00 local: the old pause
     feed(h, nba=[event("g1", "BKN", "BOS", clock() + 10 * HOUR, spread=(-11.5, -110, -110))])
-    poll(h, clock)                                     # the opener wake
-    rounds = lambda: [m for m in muse.sent.get("Nb", []) if "lines moved" not in m]
-    clock.go(30 * 60); poll(h, clock)                  # 36.7 min after the wake
-    assert not rounds(), "research: a round came before 45 minutes passed"
-    clock.go(5 * 60); poll(h, clock)                   # 48 min
-    assert len(rounds()) == 1, f"research: no round after 45 quiet minutes at night: {muse.sent.get('Nb')}"
-    assert "BKN at BOS" in rounds()[0], f"research: the round should name the games to look at: {rounds()[0]}"
+    poll(h, clock)
+    rounds = [m for m in muse.sent.get("Nb", []) if "lines moved" not in m]
+    assert rounds and "BKN at BOS" in rounds[-1], f"research: no named round for an idle desk at night: {muse.sent.get('Nb')}"
     print("research OK")
+
+
+def capped():
+    """Nov 1: Boboe 18 (soccer) was out of weekly Muse tokens since Oct 31 and the hub still sent it a round every 10 min
+    (119 in a day), each answered by Muse's usage-limit notice. A capped agent gets nothing until its reset, then resumes."""
+    import muse
+    h, fake, clock = new_hub("Cee", "Nb")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba")
+    until = clock() + 3 * 86400
+    real = fake.deliver
+    def deliver(agent, text, now=None):
+        if agent == "Nb" and clock() < until:
+            raise muse.Capped(agent, until)
+        return real(agent, text)
+    fake.deliver = deliver
+    feed(h, nba=[event(f"g{i}", "BKN", "BOS", clock() + (10 + i) * HOUR, spread=(-11.5, -110, -110)) for i in range(6)])
+    tries = 0
+    orig = h.transport.deliver
+    def count(agent, text, now=None):
+        nonlocal tries
+        tries += agent == "Nb"
+        return orig(agent, text)
+    h.transport.deliver = count
+    for _ in range(12):                        # two hours of ticks
+        poll(h, clock)
+    assert tries <= 1, f"capped: hub kept sending to a capped agent ({tries} tries in 2 h)"
+    nb = {a["name"]: a for a in h.board()["agents"]}["Nb"]
+    assert nb.get("capped_until") == until, f"capped: board doesn't show the reset: {nb.get('capped_until')}"
+    clock.t = until + 60
+    poll(h, clock)
+    assert fake.sent.get("Nb"), "capped: no send after the reset"
+    assert not {a["name"]: a for a in h.board()["agents"]}["Nb"].get("capped_until"), "capped: flag not cleared"
+    print("capped OK")
 
 
 def office():
@@ -327,32 +357,45 @@ def local(day, hh, mm=0):
 
 
 def slate():
-    """Jack, Oct 27: "I would have liked them to have a bunch of positions on games for today… my friend puts on 15-20
-    a day". A desk is handed tonight's whole slate (not the weekend), each game once, with leans welcome, then a final
-    look shortly before each game; a puck line toggling between its two sides wakes nobody."""
+    """Jack, Oct 29: "this should be running on literally every game… they should essentially constantly be working even
+    if they aren't placing frequent positions". Whenever a desk has nothing in flight it gets its next few games to run
+    through the full method: games it has never worked first, then the ones it worked longest ago, called or not. A
+    desk still working gets nothing more piled on, and a final look still comes before each uncalled game."""
     h, muse, clock = new_hub("Cee", "Nb", "Nh")
     h.seat("ceo", "Cee")
     h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Nh nhl")
     clock.t = local(0, 9)
     feed(h, nba=[event("g1", "BKN", "BOS", local(0, 19), spread=(-11.5, -110, -110)),
-                 event("g2", "POR", "LAL", local(0, 22, 30), spread=(-1.5, -110, -110)),
-                 event("g3", "MIA", "ATL", local(1, 19), spread=(-4, -110, -110))],
+                 event("g2", "POR", "LAL", local(0, 19, 30), spread=(-1.5, -110, -110)),
+                 event("g3", "MIA", "ATL", local(0, 20), spread=(-4, -110, -110)),
+                 event("g4", "DEN", "PHX", local(0, 21), spread=(-2, -110, -110))],
          nhl=[event("h1", "LA", "CHI", local(0, 20), spread=(1.5, -250, 200), ml=(120, -140))])
-    poll(h, clock)
+    clock.go(400); h.tick()
     h.manage("Nb", 'call add g2 spread LAL -1.5 -110 -125 2 "Portland on the road" "LeBron sits"')
-    rounds = lambda n: [m for m in muse.sent.get(n, []) if "lines moved" not in m]
-    clock.go(45 * 60); poll(h, clock)
+    rounds = lambda n: [m for m in muse.sent.get(n, []) if "lines moved" not in m and "Check the" not in m]
+    clock.go(15 * 60); h.tick()
     r = rounds("Nb")
-    assert len(r) == 1 and "BKN at BOS" in r[0], f"slate: tonight's uncalled game wasn't handed to the desk: {r}"
-    assert "MIA at ATL" not in r[0], f"slate: tomorrow's game crowded tonight's slate: {r[0]}"
-    assert "POR at LAL" not in r[0], f"slate: a game the desk already called came back: {r[0]}"
-    assert "one or two" not in r[0].lower(), f"slate: the round still caps the desk at one or two games: {r[0]}"
-    clock.go(50 * 60); poll(h, clock)
-    assert len(rounds("Nb")) == 1, f"slate: the same game was handed over again with nothing new: {rounds('Nb')[1:]}"
-    clock.t = local(0, 17, 30); poll(h, clock)              # 90 minutes before Boston tips
-    last = rounds("Nb")[-1]
-    assert len(rounds("Nb")) == 2 and "BKN at BOS" in last and "POR at LAL" not in last, \
-        f"slate: no final look at the game about to start: {rounds('Nb')[1:]}"
+    assert len(r) == 1, f"slate: an idle desk wasn't handed games to work: {r}"
+    assert all(g in r[0] for g in ("BKN at BOS", "POR at LAL", "MIA at ATL")) and "DEN at PHX" not in r[0], \
+        f"slate: the round isn't the next three games, called ones included: {r[0]}"
+    assert "Defense vs position" in r[0] and "Injury cascade" in r[0], f"slate: the round came without the method: {r[0]}"
+    muse.acts["Nb"] = {"busy": True, "at": clock(), "line": "Pulling Boston's defense vs centers, last 15"}
+    h.observe()                                            # the hub's activity reader (its own thread live)
+    clock.go(15 * 60); h.tick()
+    assert len(rounds("Nb")) == 1, f"slate: a second round landed while the first was in flight: {rounds('Nb')[1:]}"
+    muse.acts["Nb"] = {"busy": False, "at": clock(), "line": "Logged a prop on Davis"}
+    h.observe()
+    clock.go(15 * 60); h.tick()
+    r = rounds("Nb")
+    assert len(r) == 2 and "DEN at PHX" in r[1] and "BKN at BOS" not in r[1], \
+        f"slate: the next round isn't just the unworked game (the rest were worked under 2h ago): {r[1:]}"
+    clock.go(2 * HOUR); h.tick()                           # Jack, Oct 29: a 3-game slate resent every 10 min read "unchanged" 30 times
+    r = rounds("Nb")
+    assert len(r) == 3 and "BKN at BOS" in r[2] and "POR at LAL" in r[2], f"slate: worked games never came back: {r[2:]}"
+    clock.t = local(0, 17, 30); h.tick()                    # 90 minutes before Boston tips
+    looks = [m.split("final look]")[1].split("[fleet")[0] for m in muse.sent["Nb"] if "final look]" in m]
+    assert [m for m in looks if "BKN at BOS" in m and "POR at LAL" not in m], \
+        f"slate: no final look at the uncalled game about to start: {rounds('Nb')[3:]}"
     # Chicago's puck line seen live Oct 27: the feed toggles between CHI +1.5 (-250) and CHI -1.5 (+225) all day
     before = len(muse.sent.get("Nh", []))
     feed(h, nhl=[event("h1", "LA", "CHI", local(0, 20), spread=(-1.5, 225, -278), ml=(120, -140))])
@@ -426,8 +469,8 @@ def review():
     assert [m for m in muse.sent.get("Nb", []) if "not on the road" in m], "review: the desk never heard why its call was pulled"
     h.manage("Nh", f'call review {ny} ok "fair: they meant the Pistons\' road trip before this, which is real"')
     assert calls()[("g2", "spread", "NY")]["result"] is None, "review: the reviewer couldn't reinstate the call after talking"
-    # never confirmed by tip-off: never tracked
-    h.manage("Nb", 'call add g1 total under 222.5 -110 -120 1 "two slow defenses" "pace spikes"')
+    # never confirmed by tip-off: never tracked (Nov 1: a lean counts unchecked, so this is a confidence-2 call)
+    h.manage("Nb", 'call add g1 total under 222.5 -110 -120 2 "two slow defenses" "pace spikes"')
     # confirmed, then flagged in hindsight after tip-off: it stands
     h.manage("Nb", 'call add g1 total over 222.5 -110 -118 1 "the other read" "pace dies"')
     over = calls()[("g1", "total", "over")]["id"]
@@ -465,7 +508,8 @@ def strategy():
     poll(h, clock)
     clock.go(45 * 60); poll(h, clock)
     rounds = lambda n: " ".join(m for m in muse.sent.get(n, []) if "lines moved" not in m)
-    assert "LA at CHI" in rounds("Nh") and "TOR at SEA" in rounds("Nh"), \
+    # Nov 1: an early agent only gets games it may still call, 12 h+ out; LA at CHI (11 h) is its game-day partner's
+    assert "TOR at SEA" in rounds("Nh") and "LA at CHI" not in rounds("Nh"), \
         f"strategy: the early NHL desk wasn't handed the game three days out: {rounds('Nh')}"
     assert "BKN at BOS" in rounds("Nb") and "MIA at ATL" not in rounds("Nb"), \
         f"strategy: the game-day NBA desk got games beyond its next day: {rounds('Nb')}"
@@ -532,6 +576,393 @@ def explore():
     print("explore OK")
 
 
+def props():
+    """Jack, Oct 29: desks log player props; the hub grades a prop from ESPN's box score and a player who didn't play
+    voids it. Jack, Nov 6: no more softening: easier alt lines earned ~+$2.50 on 278 picks vs +$17.58 on main lines,
+    so a game line must be DraftKings' main line at its price."""
+    h, muse, clock = new_hub("Cee", "Nb", "Nh")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Nh nhl")
+    start = clock() + 3 * HOUR
+    feed(h, nba=[event("g1", "LAL", "BOS", start, spread=(-3.5, -110, -110), total=(222.5, -110, -110))])
+    poll(h, clock)
+    h.manage("Nb", 'call add g1 spread BOS -3.5 -110 -130 2 "x" "y"')
+    h.manage("Nb", 'call add g1 total over 222.5 -110 -130 1 "x" "y"')
+    for bad, why in (('call add g1 spread BOS -2.5 -135 -150 2 "x" "y"', "an easier alt line"),
+                     ('call add g1 total over 221 -130 -145 1 "x" "y"', "an easier alt total"),
+                     ('call prop g1 "Anthony Davis" touchdowns over 0.5 -110 -130 1 "x" "y"', "not an NBA stat")):
+        try:
+            h.manage("Nb", bad)
+            raise AssertionError(f"props: accepted a call that is {why}")
+        except ValueError:
+            pass
+    h.db.executemany("insert into props(game, player, stat, side, line, odds, at) values('g1',?,?,?,?,?,0)",
+                     [("Anthony Davis", "pra", "over", 38.5, -125), ("Jayson Tatum", "threes", "under", 3.5, -120),
+                      ("Kristaps Porzingis", "points", "over", 15.5, -115)])
+    h.manage("Nb", 'call prop g1 "Anthony Davis" pra over 38.5 -125 -145 2 "Boston bleeds rebounds to bigs" "foul trouble"')
+    h.manage("Nb", 'call prop g1 "Jayson Tatum" threes under 3.5 -120 -140 1 "x" "y"')
+    h.manage("Nb", 'call prop g1 "Kristaps Porzingis" points over 15.5 -115 -130 1 "x" "y"')    # doesn't play
+    confirm(h, "Nh")
+    box = {"boxscore": {"players": [{"statistics": [{"labels": ["MIN", "PTS", "3PT", "REB", "AST"], "athletes": [
+        {"athlete": {"displayName": "Anthony Davis"}, "stats": ["36", "29", "3-6", "10", "1"]},
+        {"athlete": {"displayName": "Jayson Tatum"}, "stats": ["38", "31", "5-11", "8", "4"]},
+        {"athlete": {"displayName": "Kristaps Porzingis"}, "stats": []}]}]}]}}
+    clock.go(3 * HOUR)
+    fin = [event("g1", "LAL", "BOS", start, status="STATUS_FINAL", score=(110, 106))]
+    feed(h, nba=fin)
+    plain = h.sports_fetch
+    h.sports_fetch = lambda url: box if "/summary?event=g1" in url else plain(url)
+    poll(h, clock)
+    poll(h, clock)                                          # props settle on the poll after the final: box scores lag
+    c = {(x["player"] or x["market"], x["side"]): x for x in h.board()["book"]["calls"]}
+    # worked by hand: BOS won by 4 laying 3.5 → win; total 216 under 222.5 → the over lost; Davis 29+10+1 = 40 > 38.5 → win;
+    # Tatum hit 5 threes over 3.5 → the under lost; Porzingis had no minutes → void
+    assert c[("spread", "BOS")]["result"] == "win" and c[("total", "over")]["result"] == "loss", c
+    assert c[("Anthony Davis", "over")]["result"] == "win" and c[("Anthony Davis", "over")]["pick"] == "Anthony Davis Over 38.5 pra", c
+    assert c[("Jayson Tatum", "under")]["result"] == "loss" and c[("Kristaps Porzingis", "over")]["result"] == "void", c
+    assert c[("spread", "BOS")]["beat_close"] is not None, "props: a main-line call wasn't compared to the close"
+    print("props OK")
+
+
+def pairs():
+    """Jack, Nov 1: early vs game day was compared across different sports, so it proved nothing. Every sport gets one
+    agent of each; both work the same games, the early one >= 12 h before start and the game-day one inside 12 h, and
+    the book scores each strategy per sport."""
+    h, muse, clock = new_hub("Cee", "Ne", "Ng", "Nh")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Ne nba"); h.manage("Cee", "team Ng nba"); h.manage("Cee", "team Nh nhl")
+    h.manage("Cee", "strategy Ne early"); h.manage("Cee", "strategy Ng gameday")
+    clock.t = local(0, 9)
+    soon, later = local(0, 15), local(1, 15)                  # 6 h and 30 h out
+    feed(h, nba=[event("g1", "BKN", "BOS", soon, spread=(-11.5, -110, -110)),
+                 event("g2", "MIA", "ATL", later, spread=(-4, -110, -110))],
+         nhl=[event("h1", "LA", "CHI", local(1, 20), total=(5.5, -110, -110))])
+    poll(h, clock)
+    clock.go(45 * 60); poll(h, clock)
+    rounds = lambda n: " ".join(m for m in muse.sent.get(n, []) if "lines moved" not in m and "Check the" not in m)
+    assert "MIA at ATL" in rounds("Ne") and "BKN at BOS" not in rounds("Ne"), \
+        f"pairs: the early agent should get only games 12 h+ out: {rounds('Ne')[:300]}"
+    assert "BKN at BOS" in rounds("Ng") and "MIA at ATL" not in rounds("Ng"), \
+        f"pairs: the game-day agent should get today's slate only: {rounds('Ng')[:300]}"
+    for who, gid in (("Ne", "g1"), ("Ng", "g2")):
+        try:
+            h.manage(who, f'call add {gid} spread BOS -11.5 -110 -125 1 "x" "y"'.replace("BOS", "BOS" if gid == "g1" else "ATL"))
+            raise AssertionError(f"pairs: {who} logged a call outside its strategy's window on {gid}")
+        except ValueError as e:
+            assert "12 h" in str(e), f"pairs: refused for the wrong reason: {e}"
+    h.manage("Ne", 'call add g2 spread ATL -4 -110 -125 1 "rest edge" "MIA rests nobody"')
+    h.manage("Ng", 'call add g1 spread BOS -11.5 -110 -125 1 "BKN on a back to back" "BOS sits starters"')
+    confirm(h, "Nh")
+    clock.go(2 * HOUR + 30 * 60); poll(h, clock)             # 2.5 h before g1: the final look
+    looks = lambda n: [m for m in muse.sent.get(n, []) if "final look" in m.lower()]
+    assert not looks("Ne"), f"pairs: the early agent got a final look: {looks('Ne')}"
+    clock.t = local(2, 3)
+    feed(h, nba=[event("g1", "BKN", "BOS", soon, status="STATUS_FINAL", score=(120, 100)),
+                 event("g2", "MIA", "ATL", later, status="STATUS_FINAL", score=(100, 110))])
+    poll(h, clock)
+    bss = h.board()["book"]["by_sport_strategy"]
+    assert bss["nba"]["early"]["calls"] == 1 and bss["nba"]["gameday"]["calls"] == 1, bss.get("nba")
+    st = h.board()["book"]["strategies"]
+    assert st["early"]["calls"] == 1 and st["gameday"]["calls"] == 1, st
+    print("pairs OK")
+
+
+def clv_hidden():
+    """Jack, Nov 1: profit is the verdict; closing-line value is an early gauge on the dashboard only. Agents never see
+    it, so they bet to win rather than chase moves. Game-line CLV and prop CLV are kept apart."""
+    h, muse, clock = new_hub("Cee", "Nb", "Nh")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Nh nhl")
+    start = clock() + 5 * HOUR
+    feed(h, nba=[event("g1", "LAL", "BOS", start, spread=(-3.5, -110, -110))])
+    poll(h, clock)
+    h.manage("Nb", 'call add g1 spread BOS -3.5 -110 -125 1 "x" "y"')
+    confirm(h, "Nh")
+    feed(h, nba=[event("g1", "LAL", "BOS", start, spread=(-5.5, -110, -110))])
+    poll(h, clock)
+    clock.go(6 * HOUR)
+    feed(h, nba=[event("g1", "LAL", "BOS", start, status="STATUS_FINAL", score=(110, 100))])     # (home, away): BOS by 10
+    poll(h, clock)
+    out = h.manage("Nb", "call list")
+    assert "win" in out and "close" not in out.lower(), f"clv_hidden: an agent sees CLV: {out}"
+    t = h.board()["book"]["by_sport_strategy"]["nba"]["gameday"]
+    assert round(t["units"], 3) == 0.909 and t["clv_game"] == {"graded": 1, "beat": 1} and t["clv_prop"] == {"graded": 0, "beat": 0}, t
+    print("clv_hidden OK")
+
+
+def prop_close():
+    """Jack, Nov 1: props stay in; ESPN's DraftKings propBets give each player's line (no price), so a prop's close is
+    the last pre-start line, and it beats the close when that line moved its way."""
+    h, muse, clock = new_hub("Cee", "Nf", "Nh")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nf nfl"); h.manage("Cee", "team Nh nhl")
+    start = clock() + 30 * HOUR
+    feed(h, nfl=[event("f1", "KC", "BUF", start, spread=(-2.5, -110, -110))])
+    plain = h.sports_fetch
+    line = {"v": 3.5}
+    hits = []
+    def fetch(url):
+        if "propBets" in url:
+            hits.append(url)
+            assert "/football/leagues/nfl/events/f1/" in url and "/odds/100/" in url, url
+            item = lambda ref, typ, v: {"athlete": {"$ref": f"http://x/athletes/{ref}?lang=en"}, "type": {"name": typ},
+                                        "current": {"target": {"value": v}}, "open": {"target": {"value": 3.5}}}
+            return {"count": 3, "pageCount": 1, "items": [
+                item(77, "Total Receptions (incl. overtime)", line["v"]),
+                item(88, "Total Receptions (incl. overtime)", 9.5),            # another player
+                item(77, "Receptions Milestones", 6.5)]}                        # an alt line, not the main one
+        if "/athletes/77" in url:
+            return {"displayName": "Dalton Kincaid"}
+        if "/athletes/88" in url:
+            return {"displayName": "Travis Kelce"}
+        if "/summary?event=f1" in url:
+            return {"boxscore": {"players": [{"statistics": [{"name": "receiving", "labels": ["REC", "YDS"], "athletes": [
+                {"athlete": {"displayName": "Dalton Kincaid"}, "stats": ["6", "71"]}]}]}]}}
+        return plain(url)
+    h.sports_fetch = fetch
+    poll(h, clock)
+    h.db.execute("insert into props(game, player, stat, side, line, odds, at) values('f1','Dalton Kincaid','receptions','over',3.5,-115,0)")
+    h.manage("Nf", 'call prop f1 "Dalton Kincaid" receptions over 3.5 -115 -135 1 "x" "y"')
+    confirm(h, "Nh")
+    poll(h, clock)
+    line["v"] = 4.5
+    poll(h, clock)
+    clock.t = start + 60                                    # in play: a live prop line is not the close
+    line["v"] = 7.5
+    feed_live = [event("f1", "KC", "BUF", start, status="STATUS_IN_PROGRESS")]
+    feed(h, nfl=feed_live); inner = h.sports_fetch
+    h.sports_fetch = lambda url: fetch(url) if ("propBets" in url or "/athletes/" in url or "summary" in url) else inner(url)
+    poll(h, clock)
+    feed(h, nfl=[event("f1", "KC", "BUF", start, status="STATUS_FINAL", score=(20, 24))]); inner = h.sports_fetch
+    h.sports_fetch = lambda url: fetch(url) if ("propBets" in url or "/athletes/" in url or "summary" in url) else inner(url)
+    poll(h, clock); poll(h, clock)
+    c = next(x for x in h.board()["book"]["calls"] if x["market"] == "prop")
+    assert hits, "prop_close: the hub never read ESPN's propBets"
+    assert c["result"] == "win" and c["close_line"] == 4.5 and c["beat_close"] is True, \
+        {k: c[k] for k in ("result", "close_line", "beat_close")}
+    t = h.board()["book"]["by_sport_strategy"]["nfl"]["early"]
+    assert t["clv_prop"] == {"graded": 1, "beat": 1} and t["clv_game"] == {"graded": 0, "beat": 0}, t
+    print("prop_close OK")
+
+
+def explorers():
+    """Jack, Nov 1: the spare agents all join the explorer desk. Each nudge names the other explorers so they split
+    leagues and questions instead of five agents running the same test."""
+    h, muse, clock = new_hub("Cee", "La", "Lb", "Lc")
+    h.seat("ceo", "Cee")
+    for n in ("La", "Lb", "Lc"):
+        h.manage("Cee", f"team {n} lab")
+    poll(h, clock); clock.go(15 * 60); poll(h, clock)
+    for n, others in (("La", ("Lb", "Lc")), ("Lb", ("La", "Lc")), ("Lc", ("La", "Lb"))):
+        got = [m for m in muse.sent.get(n, []) if "explorer" in m.lower()]
+        assert got and all(o in got[-1] for o in others), f"explorers: {n}'s nudge doesn't name {others}: {got[-1:]}"
+    print("explorers OK")
+
+
+def floor1_quiet():
+    """Jack, Nov 1: everyone but Pericles moves to betting; Pericles keeps floor 1 alive alone and no new products start.
+    No scout ("find a new product") and no planning ask goes out, however long agents sit free."""
+    h, muse, clock = new_hub("Cee", "Ada")
+    h.seat("ceo", "Cee")
+    pid = h.add_product("Cups", brief="cups", pm="Cee")
+    h.add_project(pid, "launch")
+    for _ in range(8):
+        clock.go(hub.PLAN_WAIT); h.tick(); h.tick()
+    sent = [m for n in ("Cee", "Ada") for m in muse.sent.get(n, [])]
+    bad = [m for m in sent if hub.Hub.SCOUT in m or "no work lined up" in m or "planner" in m.lower()]
+    assert not bad, f"floor1_quiet: floor 1 still grows: {bad[:2]}"
+    print("floor1_quiet OK")
+
+
+def desk_move():
+    """Nov 1 live: Boboe 2 and 7 refused the desk because `fleet status` still showed their Etsy product, PM slot and a
+    pinned task. Putting an agent on a desk releases all of that, and its status names the desk and its strategy."""
+    h, muse, clock = new_hub("Cee", "Bo", "Cy")
+    h.seat("ceo", "Cee")
+    pid = h.add_product("Cups", brief="cups", pm="Bo")
+    prj = h.add_project(pid, "launch")
+    h.place("Bo", pid, "marketer")
+    t1 = h.add_task(prj, "copy", "marketer", "posted", owner="Bo")
+    t2 = h.add_task(prj, "later", "marketer", "posted")
+    h.tick()
+    with h.lock:                                # held for Bo until it can move (the hub's own "wait" shape)
+        h.db.execute("update tasks set status='blocked', pin='Bo' where id=?", (t2,))
+    h.manage("Cee", "team Bo nfl"); h.manage("Cee", "strategy Bo gameday")
+    st = h.status("Bo")
+    assert st["product"] == "the NFL desk (floor 2)" and st["role"] == "game-day bettor", f"desk_move: status: {st['product']}, {st['role']}"
+    assert not st["tasks"], f"desk_move: still holds floor-1 tasks: {st['tasks']}"
+    assert h.db.execute("select pm from products where id=?", (pid,)).fetchone()[0] is None, "desk_move: still PM"
+    assert h.task(t1)["owner"] is None and h.task(t1)["status"] == "ready", h.task(t1)
+    assert h.task(t2)["pin"] is None and h.task(t2)["status"] == "blocked", h.task(t2)
+    print("desk_move OK")
+
+
+def lab_steal():
+    """Nov 1 live: explorers ran `call watch basketball/nba` (and nfl, nhl, eng.1); every lab poll relabelled those games
+    as lab's, so the NBA desk's board flickered to 0 games and its calls were refused. A league a sport desk covers is
+    that desk's: the explorer can't watch it."""
+    h, muse, clock = new_hub("Cee", "Nb", "Lx")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Lx lab")
+    for path in ("basketball/nba", "soccer/eng.1"):
+        try:
+            h.manage("Lx", f"call watch {path}")
+            raise AssertionError(f"lab_steal: the explorer took {path}, a sport desk's league")
+        except ValueError as e:
+            assert "desk" in str(e), e
+    h.manage("Lx", "call watch baseball/mlb")
+    print("lab_steal OK")
+
+
+def book_all():
+    """The results board counted only the newest 500 calls, so settled calls dropped off it as new ones were logged and
+    the settled count and profit went down. Old results stay on the book however many calls come after them."""
+    h, muse, clock = new_hub("Cee", "Nb")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba")
+    start = clock() + 5 * HOUR
+    feed(h, nba=[event("g1", "LAL", "BOS", start, spread=(-3.5, -110, -110))])
+    poll(h, clock)
+    h.manage("Nb", 'call add g1 spread BOS -3.5 -110 -115 1 "edge" "risk"')
+    h.db.execute("update calls set result='win', graded_at=? where id=1", (clock(),))
+    cols = ", ".join(r[1] for r in h.db.execute("pragma table_info(calls)") if r[1] not in ("id", "result", "graded_at"))
+    for _ in range(500):
+        h.db.execute(f"insert into calls({cols}) select {cols} from calls where id=1")
+    assert sum(c["result"] == "win" for c in hub.sports.book(h)["calls"]) == 1, "book_all: a settled call fell off the book"
+
+
+def leans():
+    """Jack, Nov 1: "I want to increase volume so yes log leans". Desks log a side on every game they work: a lean
+    (confidence 1) counts at once with no other desk's check, so volume doesn't pile reviews on the desks; 2s and 3s
+    are still checked first. The book splits results by confidence so leans can be judged apart."""
+    h, muse, clock = new_hub("Cee", "Nb", "Nh")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Nh nhl")
+    start = clock() + 5 * HOUR
+    feed(h, nba=[event("g1", "LAL", "BOS", start, spread=(-3.5, -110, -110), total=(222.5, -110, -110))])
+    poll(h, clock)
+    rounds = [m for m in muse.sent.get("Nb", []) if "next games" in m]
+    assert rounds and "every game" in rounds[-1] and "won't have one" not in rounds[-1], \
+        f"leans: the round still tells desks most games have no pick: {rounds[-1][:600] if rounds else rounds}"
+    out = h.manage("Nb", 'call add g1 spread BOS -3.5 -110 -115 1 "slight rest edge" "BOS sits starters"')
+    assert "lean" in out and "counts" in out, f"leans: {out}"
+    h.manage("Nb", 'call add g1 total over 222.5 -110 -130 2 "two fast teams" "pace dies"')       # nobody confirms it
+    clock.go(11 * 60)
+    feed(h, nba=[event("g1", "LAL", "BOS", start, spread=(-3.5, -110, -110), total=(222.5, -110, -110))])
+    poll(h, clock)
+    asked = [m for m in muse.sent.get("Nh", []) if "reasoning" in m]
+    assert asked and "two fast teams" in asked[-1], f"leans: the confidence-2 call wasn't sent for review: {asked}"
+    assert not any("slight rest edge" in m for m in asked), "leans: a lean was still sent to another desk for review"
+    clock.go(6 * HOUR)
+    feed(h, nba=[event("g1", "LAL", "BOS", start, status="STATUS_FINAL", score=(120, 110))])
+    poll(h, clock)
+    c = {(x["market"]): x for x in h.board()["book"]["calls"]}
+    assert c["spread"]["result"] == "win", f"leans: a lean with no review wasn't graded: {c['spread']['result']}"
+    assert c["total"]["result"] == "unreviewed", f"leans: an unchecked confidence-2 call counted: {c['total']['result']}"
+    bc = h.board()["book"]["desks"]["nba"]["by_conf"]
+    assert bc["1"]["settled"] == 1 and round(bc["1"]["units"], 3) == 0.909, bc["1"]
+    print("leans OK")
+
+
+def split():
+    """Jack, Nov 6: a second early agent on a desk works different games from the first, not the same ones twice."""
+    h, muse, clock = new_hub("Cee", "Ea", "Eb", "Nh")
+    h.seat("ceo", "Cee")
+    for n in ("Ea", "Eb"):
+        h.manage("Cee", f"team {n} nba"); h.manage("Cee", f"strategy {n} early")
+    h.manage("Cee", "team Nh nhl")
+    clock.t = local(0, 9)
+    feed(h, nba=[event(f"c{i}", f"A{i}", f"H{i}", local(1, 12 + i), spread=(-5.5, -110, -110)) for i in range(6)])
+    poll(h, clock)
+    clock.go(45 * 60); poll(h, clock)
+    got = {n: {f"A{i} at H{i}" for i in range(6) if f"A{i} at H{i}" in " ".join(
+        m for m in muse.sent.get(n, []) if "next games" in m)} for n in ("Ea", "Eb")}
+    assert got["Ea"] and got["Eb"], f"split: both early agents should get a slate: {got}"
+    assert not got["Ea"] & got["Eb"], f"split: the two early agents got the same games: {got}"
+    print("split OK")
+
+
+def passes():
+    """Jack, Nov 6: "make it give a fair price for everything it passes on". A pass is confidence 0: the desk's fair
+    price on a game or prop it won't bet. It is graded like a call so the hub can score every price the desks set,
+    but it never counts as a bet, and it doesn't stop the game-day final look."""
+    h, muse, clock = new_hub("Cee", "Nb", "Nh")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Nh nhl")
+    start = clock() + 5 * HOUR
+    feed(h, nba=[event("g1", "LAL", "BOS", start, spread=(-3.5, -110, -110), total=(222.5, -110, -110))])
+    poll(h, clock)
+    rounds = [m for m in muse.sent.get("Nb", []) if "next games" in m]
+    assert rounds and "confidence 0" in rounds[-1], f"passes: the round doesn't ask for passes: {rounds[-1][-800:] if rounds else rounds}"
+    out = h.manage("Nb", 'call add g1 spread BOS -3.5 -110 -105 0 "fair is about -105" "-"')     # fair worse than the price
+    assert "pass" in out, f"passes: {out}"
+    h.db.execute("insert into props(game, player, stat, side, line, odds, at) values('g1','Anthony Davis','points','over',24.5,-110,0)")
+    h.manage("Nb", 'call prop g1 "Anthony Davis" points over 24.5 -110 -110 0 "priced right" "-"')
+    clock.go(3 * HOUR); poll(h, clock)                      # 2 h out: final look still comes, a pass isn't a call
+    assert any("final look" in m.lower() for m in muse.sent.get("Nb", [])), "passes: a pass stopped the final look"
+    h.manage("Nb", 'call add g1 total over 222.5 -110 -120 1 "pace" "pace dies"')
+    clock.go(3 * HOUR)
+    feed(h, nba=[event("g1", "LAL", "BOS", start, status="STATUS_FINAL", score=(120, 110))])
+    poll(h, clock)
+    b = h.board()["book"]
+    assert [c["market"] for c in b["calls"]] == ["total"], f"passes: a pass counted as a bet: {[c['market'] for c in b['calls']]}"
+    assert b["desks"]["nba"]["calls"] == 1, b["desks"]["nba"]
+    p = {c["market"]: c for c in b["passes"]}
+    assert p["spread"]["result"] == "win" and p["spread"]["beat_close"] is not None, p
+    assert b["pass_tally"]["nba"]["calls"] == 2, b["pass_tally"]
+    print("passes OK")
+
+
+def prop_board():
+    """Jack, Nov 6: "why would they not have the live feed?" The hub reads DraftKings' player props with prices off ESPN
+    (NBA, NHL and soccer priced, NFL lines only), lists them with `fleet call props`, and holds a prop call to the
+    listed line and price the way it holds game lines, so no browser check is needed for those."""
+    h, muse, clock = new_hub("Cee", "Nb", "Nh")
+    h.seat("ceo", "Cee")
+    h.manage("Cee", "team Nb nba"); h.manage("Cee", "team Nh nhl")
+    start = clock() + 5 * HOUR
+    feed(h, nba=[event("g1", "LAL", "BOS", start, spread=(-3.5, -110, -110), total=(222.5, -110, -110))])
+    ad = "http://core/athletes/6583"
+    pair = lambda ln, o, u, typ="Total Points": [
+        {"athlete": {"$ref": ad + "?lang=en"}, "type": {"name": typ}, "odds": {"american": {"value": x}},
+         "current": {"target": {"value": ln}}} for x in (o, u)]
+    items = pair(22.5, "-105", "-121") + [{"athlete": {"$ref": ad}, "type": {"name": "Points Milestones"},
+                                            "odds": {"american": {"value": "-140"}}, "current": {"target": {"value": 20}}}]
+    plain = h.sports_fetch
+    h.sports_fetch = lambda url: ({"items": items, "pageCount": 1} if "g1/odds/100/propBets" in url else
+                                  {"displayName": "Anthony Davis"} if url.startswith(ad) else plain(url))
+    poll(h, clock)
+    out = h.manage("Nb", "call props g1")
+    assert "Anthony Davis" in out and "Over 22.5 (-105)" in out and "Under 22.5 (-121)" in out, f"prop_board: {out}"
+    assert "-140" not in out, f"prop_board: an alternate milestone line was listed as the main line: {out}"
+    for bad, why in (('call prop g1 "Anthony Davis" points over 20.5 -150 -170 1 "x" "y"', "an alt line"),
+                     ('call prop g1 "Anthony Davis" points over 22.5 -140 -160 1 "x" "y"', "the wrong price")):
+        try:
+            h.manage("Nb", bad)
+            raise AssertionError(f"prop_board: accepted {why}")
+        except ValueError as e:
+            assert "22.5" in str(e), f"prop_board: refused {why} for the wrong reason: {e}"
+    assert "logged" in h.manage("Nb", 'call prop g1 "Anthony Davis" points over 22.5 -105 -125 1 "x" "y"')
+    try:                                                    # Jack, Nov 6: no browser checks: no hub price, no prop call
+        h.manage("Nb", 'call prop g1 "Jayson Tatum" points over 26.5 -110 -130 1 "x" "y"')
+        raise AssertionError("prop_board: accepted a prop the hub has no DraftKings price for")
+    except ValueError as e:
+        assert "no DraftKings price" in str(e), e
+    said = (h.manage("Nb", "call props g9") + " ".join(muse.sent.get("Nb", []))).lower()
+    assert "logged out" not in said and "check draftkings" not in said, "prop_board: something still asks for a DraftKings check"
+    import sports
+    soc = [{"athlete": {"$ref": "r1"}, "type": {"name": "Shots on Target Milestones"},
+            "current": {"over": {"american": "-150"}, "target": {"value": 1.0}}}]
+    soc.append(dict(soc[0], current={"over": {"american": "+250"}, "target": {"value": 2.0}}))
+    rows = sports._parse_props("soccer", soc, {"r1": "Bukayo Saka"})
+    assert rows == [("Bukayo Saka", "sog", "over", 0.5, -150), ("Bukayo Saka", "sog", "over", 1.5, 250)], rows
+    h.db.executemany("insert into props(game, player, stat, side, line, odds, at) values('g1',?,?,?,?,?,0)",
+                     [("Bukayo Saka", "points", "over", 0.5, -150), ("Bukayo Saka", "points", "over", 1.5, 250)])
+    assert "logged" in h.manage("Nb", 'call prop g1 "Bukayo Saka" points over 1.5 250 200 1 "x" "y"'), \
+        "prop_board: a second listed line for the same player and stat was refused"
+    print("prop_board OK")
+
+
 def confirm(h, by):
     """Another desk confirms every call waiting for review (the tests that aren't about review)."""
     for c in h.board()["book"]["calls"]:
@@ -540,4 +971,4 @@ def confirm(h, by):
 
 
 if __name__ == "__main__":
-    {"book": book, "watch": watch, "board_speed": board_speed, "tick_speed": tick_speed, "elevator": elevator, "pages": pages, "wall": wall, "research": research, "slate": slate, "office": office, "strategy": strategy, "explore": explore, "sanity": sanity, "review": review}[sys.argv[1]]()
+    {"book": book, "watch": watch, "board_speed": board_speed, "tick_speed": tick_speed, "elevator": elevator, "pages": pages, "wall": wall, "research": research, "slate": slate, "office": office, "strategy": strategy, "explore": explore, "sanity": sanity, "review": review, "props": props, "capped": capped, "pairs": pairs, "clv_hidden": clv_hidden, "prop_close": prop_close, "explorers": explorers, "floor1_quiet": floor1_quiet, "desk_move": desk_move, "lab_steal": lab_steal, "leans": leans, "book_all": book_all, "split": split, "passes": passes, "prop_board": prop_board}[sys.argv[1]]()
